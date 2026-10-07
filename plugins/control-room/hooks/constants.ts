@@ -44,6 +44,8 @@ export const LIMITS = {
   persistDebounceMs: 1500,
   /** Coalescing window for view-model publication. */
   publishCoalesceMs: 120,
+  /** How often Activity's running times refresh while a tool call runs. */
+  runningTickMs: 5000,
   /** Minimum gap between two resource pressure notices sent to Claude. */
   pressureNoticeGapMs: 45_000,
   /** How long a sample may be stale before monitoring reads as unavailable. */

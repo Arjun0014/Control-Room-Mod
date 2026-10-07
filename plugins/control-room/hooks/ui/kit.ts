@@ -17,7 +17,7 @@ import type {
   TextProps,
 } from 'claude-code'
 
-import type { ControlRoomSettings, TabId } from '../../types'
+import type { ActivitySub, ControlRoomSettings, TabId } from '../../types'
 
 export type Ui = {
   Box: ElementConstructor<BoxProps>
@@ -39,7 +39,10 @@ export type Actions = {
   setTab: (tab: TabId) => void
   /** Opens one in-place picker, or closes it when it is the open one; null closes any. */
   togglePicker: (key: string | null) => void
-  setActivitySub: (sub: 'calls' | 'changes') => void
+  setActivitySub: (sub: ActivitySub) => void
+  toggleGenerated: () => void
+  /** Brings the section bar back into view. */
+  scrollToTop: () => void
   update: (change: (draft: ControlRoomSettings) => void) => void
   applyProfile: (id: string) => void
   saveProfile: (name: string) => void

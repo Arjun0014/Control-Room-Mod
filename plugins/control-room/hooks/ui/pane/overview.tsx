@@ -14,7 +14,7 @@ import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { FIELD_LABEL, callout, card, clip, field, link, listItem, meterBar, picker, row, switchControl, textRuns } from '../primitives'
+import { FIELD_LABEL, callout, card, clip, field, link, listItem, meterBar, picker, row, switchControl, textRuns, workStrip } from '../primitives'
 import { ACCENT, G } from '../theme'
 import type { PaneData } from './frame'
 
@@ -104,6 +104,21 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
 
       <Box key="hero" flexDirection="column" marginTop={1}>
         {field(kit, { key: 'ctx', label: 'Context', content: contextLine, under: contextUnder })}
+        {hud.work === null
+          ? null
+          : field(kit, {
+              key: 'work',
+              label: 'Work',
+              content: workStrip(kit, {
+                key: 'work-strip',
+                done: hud.work.done,
+                total: hud.work.total,
+                hasCurrent: hud.work.current !== null,
+                max: Math.max(4, Math.min(12, kit.columns - FIELD_LABEL - 24)),
+                caption: `${hud.work.done} of ${fmt.plural(hud.work.total, 'milestone')}`,
+              }),
+              under: hud.now !== null ? hud.now.text : (hud.work.current ?? undefined),
+            })}
         {field(kit, {
           key: 'cost',
           label: 'Cost',

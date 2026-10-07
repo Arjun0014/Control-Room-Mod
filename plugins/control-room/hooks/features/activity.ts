@@ -11,6 +11,7 @@ import { LIMITS } from '../constants'
 import { plural } from '../core/format'
 import { clean, shortPath } from '../core/text'
 import { type HeavyKind, heavyKinds, heavyLabel } from './resources/heavy'
+import { type ValidationKind, type ValidationRun, type ValidationStatus, validationKindOf } from './validation'
 
 export type ActivityKind = 'read' | 'search' | 'edit' | 'shell' | 'web' | 'agent' | 'task' | 'mcp' | 'other'
 
@@ -20,7 +21,14 @@ export type ActivityItem = {
   kind: ActivityKind
   /** Compact label: the command, the file, the query. */
   label: string
-  status: 'running' | 'ok' | 'error' | 'denied'
+  /** `denied`: refused by a rule, a policy or the person; `held`: the Resource Governor kept it back. */
+  status: 'running' | 'ok' | 'error' | 'denied' | 'held'
+  /** Why it failed or was refused: the first line of the tool's answer. */
+  reason: string | null
+  /** The check a shell command runs (tests, build, ...), or null. */
+  validation: ValidationKind | null
+  /** A shell command interrupted before it finished (by the person or a timeout). */
+  isInterrupted: boolean
   startedAt: number
   endedAt: number | null
   agentId: string | null
@@ -34,6 +42,8 @@ export type FileChange = {
   path: string
   added: number
   removed: number
+  /** False when no tool reported the lines (a file a shell command created, a diff the engine skipped). */
+  hasDiff: boolean
   edits: number
   isCreated: boolean
   isDeleted: boolean
@@ -44,7 +54,7 @@ export type FileChange = {
   hunks: string
 }
 
-export type TurnStats = { index: number; startedAt: number | null; tools: number; errors: number; files: Set<string> }
+export type TurnStats = { index: number; startedAt: number | null; endedAt: number | null; tools: number; errors: number; files: Set<string> }
 
 type Hunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }
 
@@ -154,45 +164,91 @@ export function capHunks(text: string, max: number): string {
   return kept.join('\n')
 }
 
+/** Lines shown for a new file the diff left empty; its full count is kept apart. */
+const NEW_FILE_LINES = 200
+
+/** A file written whole: its content as one added hunk, since the engine's patch is empty for a create. */
+function createdHunks(content: string): { hunks: Hunk[]; added: number } {
+  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  if (lines.length === 0) return { hunks: [], added: 0 }
+  const shown = lines.slice(0, NEW_FILE_LINES)
+  return { hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: shown.length, lines: shown.map(l => `+${l}`) }], added: lines.length }
+}
+
+export type ReportedChange = { path: string; hunks: Hunk[]; isCreated: boolean; isDeleted: boolean; hasDiff: boolean; added?: number }
+
 /** File changes a finished tool call reports in its structured result. */
-export function changesOf(tool: string, result: unknown): { path: string; hunks: Hunk[]; isCreated: boolean; isDeleted: boolean }[] {
+export function changesOf(tool: string, result: unknown): ReportedChange[] {
   if (!isRecord(result)) return []
   if (tool === 'Edit' || tool === 'Write' || tool === 'MultiEdit') {
     if (result.staged === true) return []
     const path = str(result.filePath)
     if (path === '') return []
-    return [{ path, hunks: hunksOf(result.structuredPatch), isCreated: result.type === 'create', isDeleted: false }]
+    const hunks = hunksOf(result.structuredPatch)
+    const isCreated = result.type === 'create'
+    if (isCreated && hunks.length === 0 && typeof result.content === 'string') {
+      const created = createdHunks(result.content)
+      return [{ path, hunks: created.hunks, isCreated, isDeleted: false, hasDiff: true, added: created.added }]
+    }
+    // An update without hunks changed nothing, or its diff was skipped: no lines to show either way.
+    return [{ path, hunks, isCreated, isDeleted: false, hasDiff: hunks.length > 0 }]
   }
   if (tool === 'NotebookEdit') {
     const path = str(result.notebook_path) || str(result.notebookPath) || str(result.filePath)
-    return path === '' ? [] : [{ path, hunks: [], isCreated: false, isDeleted: false }]
+    return path === '' ? [] : [{ path, hunks: [], isCreated: false, isDeleted: false, hasDiff: false }]
   }
   if (tool === 'Bash' || tool === 'PowerShell') {
     const diff = result.bashEditDiff
     if (!isRecord(diff) || !Array.isArray(diff.files)) return []
+    const isUnavailable = diff.unavailable === true || diff.skipped === true
     return diff.files
       .filter(isRecord)
-      .map(f => ({ path: str(f.filePath), hunks: hunksOf(f.hunks), isCreated: f.created === true, isDeleted: f.deleted === true }))
+      .map(f => {
+        const hunks = hunksOf(f.hunks)
+        return { path: str(f.filePath), hunks, isCreated: f.created === true, isDeleted: f.deleted === true, hasDiff: !isUnavailable && hunks.length > 0 }
+      })
       .filter(f => f.path !== '')
   }
   return []
 }
 
+/** The first meaningful line of a tool's answer: why it failed or was refused. */
+export function reasonOf(text: unknown): string | null {
+  if (typeof text !== 'string') return null
+  const line = text
+    .replace(/<\/?[a-z_-]+>/gi, ' ')
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .find(l => l !== '' && !/^error:?$/i.test(l))
+  return line === undefined ? null : clean(line, 140)
+}
+
+/** How a check ended: a command sent to the background has no outcome Control Room can see. */
+export function validationStatusOf(i: ActivityItem): ValidationStatus {
+  if (i.status === 'running') return 'running'
+  if (i.status === 'denied' || i.status === 'held') return 'blocked'
+  if (i.isInterrupted) return 'stopped'
+  if (i.status === 'error') return 'failed'
+  return i.backgroundTaskId !== null ? 'background' : 'passed'
+}
+
 export class ActivityTracker {
   items: ActivityItem[] = []
   private running = new Map<string, ActivityItem>()
-  turn: TurnStats = { index: 0, startedAt: null, tools: 0, errors: 0, files: new Set() }
+  turn: TurnStats = { index: 0, startedAt: null, endedAt: null, tools: 0, errors: 0, files: new Set() }
   sessionTools = 0
   changes = new Map<string, FileChange>()
   /** Background shell tasks Claude started that have not been seen to end. */
   background = new Map<string, { id: string; label: string; since: number }>()
 
   turnStarted(now: number): void {
-    this.turn = { index: this.turn.index + 1, startedAt: now, tools: 0, errors: 0, files: new Set() }
+    this.turn = { index: this.turn.index + 1, startedAt: now, endedAt: null, tools: 0, errors: 0, files: new Set() }
   }
 
-  turnEnded(): void {
-    this.turn = { ...this.turn, startedAt: null }
+  /** The turn's numbers stay readable (Activity's "this turn") until the next one starts. */
+  turnEnded(now: number = Date.now()): void {
+    this.turn = { ...this.turn, endedAt: now }
     for (const [id, item] of this.running) {
       if (item.kind !== 'shell' || item.backgroundTaskId === null) this.running.delete(id)
     }
@@ -206,6 +262,9 @@ export class ActivityTracker {
       kind: kindOf(input.tool),
       label: labelOf(input.tool, input.input),
       status: 'running',
+      reason: null,
+      validation: command === '' ? null : validationKindOf(command),
+      isInterrupted: false,
       startedAt: input.now,
       endedAt: null,
       agentId: input.agentId ?? null,
@@ -221,12 +280,27 @@ export class ActivityTracker {
     return item
   }
 
-  finished(input: { id: string; status: 'ok' | 'error' | 'denied'; result: unknown; now: number }): FileChange[] {
+  /**
+   * A call refused before it ran: by the Permission Policy (`denied`) or held
+   * back by the Resource Governor (`held`). Kept so Activity can say why.
+   */
+  refused(input: { id: string; tool: string; input: Record<string, unknown>; agentId: string | undefined; now: number; status: 'denied' | 'held'; reason: string }): ActivityItem {
+    const item = this.started(input)
+    this.running.delete(item.id)
+    item.status = input.status
+    item.reason = clean(input.reason, 140)
+    item.endedAt = input.now
+    return item
+  }
+
+  finished(input: { id: string; status: 'ok' | 'error' | 'denied'; result: unknown; text?: string; now: number }): FileChange[] {
     const item = this.running.get(input.id) ?? this.items.find(i => i.id === input.id)
     this.running.delete(input.id)
     if (!item) return []
     item.status = input.status
     item.endedAt = input.now
+    if (input.status !== 'ok') item.reason = reasonOf(input.text)
+    if (isRecord(input.result) && input.result.interrupted === true) item.isInterrupted = true
     if (input.status === 'error') this.turn.errors += 1
     if (isRecord(input.result) && typeof input.result.backgroundTaskId === 'string' && input.status === 'ok') {
       item.backgroundTaskId = input.result.backgroundTaskId
@@ -240,8 +314,9 @@ export class ActivityTracker {
       const text = c.hunks.length > 0 ? hunkText(c.hunks) : ''
       const next: FileChange = {
         path: c.path,
-        added: (prev?.added ?? 0) + counts.added,
+        added: (prev?.added ?? 0) + (c.added ?? counts.added),
         removed: (prev?.removed ?? 0) + counts.removed,
+        hasDiff: (prev?.hasDiff ?? false) || c.hasDiff,
         edits: (prev?.edits ?? 0) + 1,
         isCreated: (prev?.isCreated ?? false) || c.isCreated,
         isDeleted: c.isDeleted,
@@ -266,6 +341,16 @@ export class ActivityTracker {
   /** A background task Claude stopped (TaskStop) or that reported its end. */
   backgroundEnded(taskId: string): void {
     this.background.delete(taskId)
+  }
+
+  /** Every check Claude ran in this context, oldest first. */
+  validationRuns(): ValidationRun[] {
+    const out: ValidationRun[] = []
+    for (const i of this.items) {
+      if (i.validation === null || i.agentId !== null) continue
+      out.push({ kind: i.validation, command: i.label, status: validationStatusOf(i), startedAt: i.startedAt, endedAt: i.endedAt, turn: i.turn })
+    }
+    return out
   }
 
   runningItems(): ActivityItem[] {
@@ -314,7 +399,7 @@ export class ActivityTracker {
   reset(): void {
     this.items = []
     this.running.clear()
-    this.turn = { index: 0, startedAt: null, tools: 0, errors: 0, files: new Set() }
+    this.turn = { index: 0, startedAt: null, endedAt: null, tools: 0, errors: 0, files: new Set() }
     this.sessionTools = 0
   }
 

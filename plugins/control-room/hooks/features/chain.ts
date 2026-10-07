@@ -9,6 +9,7 @@
  */
 
 import { LIMITS } from '../constants'
+import { type Plan, emptyPlan } from './plan'
 
 export type SessionStart = 'startup' | 'resume' | 'clear' | 'handoff'
 
@@ -51,6 +52,10 @@ export type Run = {
   profile: string
   status: 'active' | 'ended'
   sessions: SessionEntry[]
+  /** Claude's milestones for the run (its task list), carried across handoffs. Absent in runs before 1.0.2. */
+  plan?: Plan
+  /** What the person asked for, in their words: the latest substantial request of the run. */
+  objective?: string | null
 }
 
 export function newSession(id: string, index: number, start: SessionStart, now: number): SessionEntry {
@@ -91,6 +96,8 @@ export function newRun(input: {
     profile: input.profile,
     status: 'active',
     sessions: [newSession(input.sessionId, 1, input.start, input.now)],
+    plan: emptyPlan(),
+    objective: null,
   }
 }
 

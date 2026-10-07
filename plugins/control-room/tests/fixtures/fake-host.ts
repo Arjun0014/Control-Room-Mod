@@ -25,6 +25,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     published: {} as Record<string, unknown>,
     spawned: [] as string[][],
     compacted: 0,
+    scrolledToTop: 0,
     /** `$.state`'s autopilot record: kept across a new Runtime (a reload), as the engine keeps it. */
     autopilotRecord: null as import('../../types').AutopilotRecord | null,
   }
@@ -76,6 +77,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     open: async () => ({ isPlaced: true }),
     close: async () => undefined,
     panes: async () => [],
+    scrollPaneToTop: async () => void (kept.scrolledToTop += 1),
     ask: async () => 'Deny',
     copy: async () => true,
     readText: async () => '',

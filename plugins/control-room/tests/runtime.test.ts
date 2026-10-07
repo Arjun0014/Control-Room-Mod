@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import type { ToolCallResult } from 'claude-code'
+
 import type { ResourcesView } from '../types'
 import { Runtime } from '../hooks/app/runtime'
 import * as Views from '../hooks/app/views'
@@ -88,7 +90,7 @@ describe('runtime', () => {
     expect(await rt.beforeTool('Bash', { command: 'git status' }, 'b3', undefined)).toBeNull()
   })
 
-  test('live readings without a limit still reach the panel and the status line', async () => {
+  test('live readings without a limit still reach the panel; the status line names them only when high', async () => {
     const { rt, kept, advance } = await started(
       s => {
         s.resources.level = 'off'
@@ -104,8 +106,23 @@ describe('runtime', () => {
     expect(view.cpu).toBe(42)
     expect(view.ram).toBe(60)
     expect(view.ceilings).toBeNull()
-    expect(Views.statusLineOf(Views.hudOf(rt))).toContain('CPU 42% · RAM 60%')
+    // Calm readings stay in the panel; the status line keeps to the run.
+    expect(Views.statusLineOf(Views.hudOf(rt))).not.toContain('CPU')
+    expect(Views.hudOf(rt).load?.cpu).toBe(42)
     expect(kept.appended.some(t => t.includes('Resource pressure'))).toBe(false)
+  })
+
+  test('a busy machine shows in the status line while it is busy', async () => {
+    const { rt, advance } = await started(
+      s => {
+        s.resources.level = 'off'
+        s.ui.liveLoad = true
+      },
+      { cwd: 'C:\\work', samplerLines: ['P 42 800000000 10000000000'] },
+    )
+    await advance(500)
+    expect(Views.statusLineOf(Views.hudOf(rt))).toContain('RAM 92%')
+    expect(Views.statusLineOf(Views.hudOf(rt))).not.toContain('CPU')
   })
 
   test('a person\'s /clear rolls the chain over and resets the turn state; ours carries the continuation context', async () => {
@@ -240,6 +257,34 @@ describe('runtime', () => {
     await advance(3000)
     expect(kept.submitted.filter(t => t.includes('final handoff')).length).toBe(1)
     expect(kept.commands).toContain('clear')
+  })
+
+  test('across a fresh context the context meter starts over; work progress and the run cost carry on', async () => {
+    const { rt, kept, advance } = await started(() => undefined)
+    rt.onPromptSubmit('Rebuild the renderer and keep the tests green.', { kind: 'composer' })
+    rt.onTurnStart({ turnId: 't1', text: 'Rebuild the renderer and keep the tests green.' })
+    const todos = [
+      { content: 'Profile the renderer', status: 'completed', activeForm: 'Profiling the renderer' },
+      { content: 'Rewrite the hot loop', status: 'in_progress', activeForm: 'Rewriting the hot loop' },
+      { content: 'Run the regression suite', status: 'pending', activeForm: 'Running the regression suite' },
+    ]
+    await rt.beforeTool('TodoWrite', { todos }, 'u1', undefined)
+    rt.afterTool('TodoWrite', { todos }, 'u1', { result: { oldTodos: [], newTodos: todos } } as unknown as ToolCallResult)
+    expect(Views.hudOf(rt).work).toEqual({ done: 1, total: 3, current: 'Rewriting the hot loop' })
+    expect(Views.hudOf(rt).now?.text).toBe('Rewriting the hot loop')
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
+    await advance(2000)
+    const runKey = Object.keys(kept.store).find(k => k.startsWith('run.v1.'))!
+    expect((kept.store[runKey] as { plan: { tasks: unknown[] } }).plan.tasks).toHaveLength(3)
+
+    await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S2' })
+    expect(rt.usage.tokens).toBeUndefined()
+    const hud = Views.hudOf(rt)
+    expect(hud.work).toEqual({ done: 1, total: 3, current: 'Rewriting the hot loop' })
+    // The first session's $0.50 stays in the run's cost while the fresh session starts at nothing.
+    expect(hud.cost.runUsd).toBe(0.5)
+    expect(Views.missionOf(rt).objective).toBe('Rebuild the renderer and keep the tests green.')
+    expect(Views.missionOf(rt).session).toBe(2)
   })
 
   test('views are published for every render site', async () => {

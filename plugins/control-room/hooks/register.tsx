@@ -85,6 +85,7 @@ function hostOf($: EngineInterface): Host {
     open: pane => $.ui.open(pane),
     close: pane => $.ui.close(pane),
     panes: () => $.ui.panes(),
+    scrollPaneToTop: () => $.ui.scroll({ in: PANE_ID, to: 'start' }).then(() => undefined),
     ask: (question, options, header) => $.ui.ask(question, header === undefined ? options : { options, header }),
     copy: (text, surface) => $.ui.copy({ text, surface }).then(r => r.isCopied),
 
@@ -242,7 +243,7 @@ export const register: Register = on => {
       answer = await next(e)
       return answer
     } finally {
-      rt.afterTool(tool, input, e.tool_use_id, answer)
+      rt.afterTool(tool, input, e.tool_use_id, answer, e.agentId)
     }
   }).catch(($, e, next) => {
     // Fail safe: a crash in the full classifier still never lets an obvious catastrophe through.

@@ -15,7 +15,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { ActivityView, ChainView, HudModel, PaneModel, PermissionsView, ResourcesView, TabId } from '../../../types'
 import type { Kit } from '../kit'
-import { navBar } from '../primitives'
+import { clip, navBar } from '../primitives'
 import { ACCENT, G } from '../theme'
 import { activityPage } from './activity'
 import { behaviorPage } from './behavior'
@@ -98,7 +98,7 @@ export function paneView(base: Kit, data: PaneData): RenderElement {
   const inner = Math.max(24, base.columns - 2)
   const columns = Math.min(MAX_COLUMNS, inner)
   const kit: Kit = { ...base, openPicker: data.pane.openPicker, columns }
-  const { Box, Text } = kit.ui
+  const { Box, Text, Button } = kit.ui
   const notes = data.pane.notes
   // A short frame above the prompt: the tabs sit right under the title, so the page starts sooner.
   const isShort = kit.placement === 'inline' && kit.surface === 'terminal'
@@ -116,13 +116,19 @@ export function paneView(base: Kit, data: PaneData): RenderElement {
         </Box>
       )}
       {page(kit, data)}
-      {kit.surface === 'terminal' ? (
-        <Box marginTop={1} key="footer">
-          <Text dimColor wrap="truncate-end">
-            {'Tab to move · Enter to choose · Esc to return'}
-          </Text>
+      <Box marginTop={1} key="footer" flexDirection="row" justifyContent="space-between" columnGap={2}>
+        <Box flexShrink={1} {...clip(kit)}>
+          {kit.surface === 'terminal' ? (
+            <Text dimColor wrap="truncate-end">
+              {'Tab to move · Enter to choose · Esc to return'}
+            </Text>
+          ) : null}
         </Box>
-      ) : null}
+        {/* The section bar does not scroll with the page; this brings it back from the end of any page. */}
+        <Box flexShrink={0}>
+          <Button key="to-top" label={`${G.top} Sections`} plain dimColor onPress={kit.actions.scrollToTop} />
+        </Box>
+      </Box>
     </Box>
   )
   // Capped in a wider frame: centred, so the margins match.

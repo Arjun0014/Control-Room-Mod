@@ -64,10 +64,14 @@ export const G = {
   back: '‹',
   down: '▾',
   up: '▴',
+  top: '↑',
   arrow: '▸',
   lineFull: '━',
   lineEmpty: '─',
   marker: '┃',
+  /** Work: one square per milestone, filled when done. Never a line, so it reads apart from context. */
+  square: '■',
+  squareOpen: '□',
   rule: '─',
   ok: '✓',
   fail: '✗',
@@ -127,6 +131,36 @@ export function svgBar(input: { fraction: number; marker?: number | null; tone: 
     tick +
     `</svg>`
   )
+}
+
+/**
+ * The cells of a milestone strip: one per milestone while they fit in
+ * `max`, else scaled (the "4/31" beside it stays exact). `current` is the
+ * milestone under way, or -1 when scaled or none.
+ */
+export function workCells(done: number, total: number, max: number, hasCurrent: boolean): { done: number; current: number; width: number } {
+  const t = Math.max(0, Math.floor(total))
+  const d = Math.min(t, Math.max(0, Math.floor(done)))
+  if (t <= max) return { done: d, current: hasCurrent && d < t ? d : -1, width: t }
+  const width = Math.max(1, Math.floor(max))
+  const filled = d === t ? width : Math.min(width - 1, Math.round((d / t) * width))
+  return { done: filled, current: -1, width }
+}
+
+/** Separate rounded segments, one per milestone (scaled past `max`), as SVG for the remote surfaces. */
+export function svgSegments(input: { done: number; total: number; hasCurrent: boolean; max: number; width: number; height?: number }): string {
+  const h = input.height ?? 10
+  const c = workCells(input.done, input.total, input.max, input.hasCurrent)
+  const gap = 3
+  const w = Math.max(24, Math.round(input.width))
+  const seg = Math.max(3, (w - gap * (c.width - 1)) / Math.max(1, c.width))
+  const y = Math.max(0, Math.round((h - 6) / 2))
+  const rects = Array.from({ length: c.width }, (_, i) => {
+    const x = (i * (seg + gap)).toFixed(1)
+    const fill = i < c.done ? `fill="${SVG_COLOR.info}"` : i === c.current ? `fill="${SVG_COLOR.info}" fill-opacity="0.45"` : `fill="#8E8E93" fill-opacity="0.3"`
+    return `<rect x="${x}" y="${y}" width="${seg.toFixed(1)}" height="6" rx="2" ${fill}/>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${rects}</svg>`
 }
 
 /** A filled sparkline as SVG (Desktop, mobile): 0–100 values. */

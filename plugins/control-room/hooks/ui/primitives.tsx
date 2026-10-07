@@ -22,7 +22,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { Tone } from '../../types'
 import type { Kit } from './kit'
-import { G, meterCells, sparkline, svgBar, svgSpark, toneProps } from './theme'
+import { G, meterCells, sparkline, svgBar, svgSegments, svgSpark, toneProps, workCells } from './theme'
 
 /** Desktop and VS Code draw native controls; the terminal and mobile get the in-place forms. */
 export const isNative = (kit: Kit): boolean => kit.surface === 'desktop' || kit.surface === 'vscode'
@@ -303,25 +303,80 @@ export function emptyState(kit: Kit, text: string, key = 'empty'): RenderElement
   )
 }
 
-/** A list line: status glyph, text, a right-aligned detail. */
-export function listItem(kit: Kit, input: { key: string; glyph: string; tone: Tone; text: string; right?: string; isDim?: boolean }): RenderElement {
+/**
+ * A list line: status glyph, text, a right-aligned note; `detail` is a dim
+ * second line under the text (why a call failed, which command ran).
+ */
+export function listItem(
+  kit: Kit,
+  input: { key: string; glyph: string; tone: Tone; text: string; right?: string; rightTone?: Tone; detail?: string | null; isDim?: boolean; isBold?: boolean },
+): RenderElement {
   const { Box, Text } = kit.ui
+  const rightTone = input.rightTone ?? 'muted'
   return (
     <Box key={input.key} flexDirection="row" columnGap={1}>
       <Box width={2} flexShrink={0}>
         <Text {...toneProps(input.tone)}>{input.glyph}</Text>
       </Box>
-      <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
-        <Text dimColor={input.isDim === true ? true : undefined} wrap="truncate-end">
+      <Box flexGrow={1} flexShrink={1} flexDirection="column" {...clip(kit)}>
+        <Text dimColor={input.isDim === true ? true : undefined} bold={input.isBold === true ? true : undefined} wrap="truncate-end">
           {input.text}
         </Text>
+        {input.detail === undefined || input.detail === null || input.detail === '' ? null : (
+          <Text key={`${input.key}-detail`} dimColor wrap="truncate-end">
+            {input.detail}
+          </Text>
+        )}
       </Box>
       {input.right === undefined ? null : (
         <Box flexShrink={0}>
-          <Text dimColor>{input.right}</Text>
+          <Text {...toneProps(rightTone)} dimColor={rightTone === 'muted' ? true : undefined}>
+            {input.right}
+          </Text>
         </Box>
       )}
     </Box>
+  )
+}
+
+/**
+ * Milestone progress: one square per milestone in the terminal (■ done,
+ * the current one bright, □ to come), separate rounded segments as SVG
+ * elsewhere, and "4 of 7" beside it. Never a line, so it never reads as
+ * the context meter.
+ */
+export function workStrip(kit: Kit, input: { key: string; done: number; total: number; hasCurrent: boolean; max: number; caption?: string }): RenderElement {
+  const { Box, Text, Svg } = kit.ui
+  const caption = input.caption ?? `${input.done} of ${input.total}`
+  const cells = Math.min(input.total, input.max)
+  if (Svg !== undefined) {
+    return (
+      <Box key={input.key} flexDirection="row" alignItems="center" columnGap={1}>
+        <Svg key={`${input.key}-svg`} source={svgSegments({ done: input.done, total: input.total, hasCurrent: input.hasCurrent, max: input.max, width: cells * 12 + 12, height: 12 })} alt={`${input.done} of ${input.total} milestones done`} height={12} />
+        <Text>{caption}</Text>
+      </Box>
+    )
+  }
+  const c = workCells(input.done, input.total, input.max, input.hasCurrent)
+  return (
+    <Text key={input.key} wrap="truncate-end">
+      {c.done > 0 ? (
+        <Text key={`${input.key}-done`} color="suggestion">
+          {G.square.repeat(c.done)}
+        </Text>
+      ) : null}
+      {c.current >= 0 ? (
+        <Text key={`${input.key}-current`} bold>
+          {G.square}
+        </Text>
+      ) : null}
+      {c.width - c.done - (c.current >= 0 ? 1 : 0) > 0 ? (
+        <Text key={`${input.key}-open`} dimColor>
+          {G.squareOpen.repeat(c.width - c.done - (c.current >= 0 ? 1 : 0))}
+        </Text>
+      ) : null}
+      <Text key={`${input.key}-caption`}>{`  ${caption}`}</Text>
+    </Text>
   )
 }
 

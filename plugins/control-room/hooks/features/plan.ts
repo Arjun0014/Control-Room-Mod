@@ -1,0 +1,234 @@
+/**
+ * The run plan: the milestones Claude tracks with its own task tools
+ * (TodoWrite, or TaskCreate / TaskUpdate / TaskList), kept with the run so
+ * work progress survives a handoff while the context starts over.
+ *
+ * Progress is finished ÷ total of those tasks, never a guess. A list Claude
+ * rewrites is authoritative for open work; a finished task it drops stays
+ * finished, because a fresh context's list rarely repeats what an earlier one
+ * completed. The first plan written in a new session replaces the open work
+ * of earlier sessions, which re-planned from the handoff notes.
+ */
+
+import { clean } from '../core/text'
+
+export type PlanStatus = 'pending' | 'in_progress' | 'completed'
+
+export type PlanTask = {
+  /** Normalised subject: how a rewritten list is matched to what came before. */
+  key: string
+  /** The Task tools' id; null for TodoWrite items. */
+  id: string | null
+  subject: string
+  /** Present-continuous form ("Running regression tests"), when Claude gave one. */
+  activeForm: string | null
+  status: PlanStatus
+  /** The session (1-based, in the run) that last wrote the task. */
+  session: number
+  doneAt: number | null
+}
+
+export type Plan = { tasks: PlanTask[]; session: number; updatedAt: number | null }
+
+export const PLAN_MAX = 60
+
+export const emptyPlan = (): Plan => ({ tasks: [], session: 0, updatedAt: null })
+
+const keyOf = (subject: string): string => subject.toLowerCase().replace(/\s+/g, ' ').trim()
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+const statusOf = (v: unknown): PlanStatus | null => (v === 'pending' || v === 'in_progress' || v === 'completed' ? v : null)
+
+/** Earlier sessions' open work is dropped once a new session plans for itself. */
+function forSession(plan: Plan, session: number): PlanTask[] {
+  return session > plan.session ? plan.tasks.filter(t => t.status === 'completed') : plan.tasks
+}
+
+/** At most PLAN_MAX tasks: the oldest finished ones go first, open work stays. */
+function capped(tasks: PlanTask[]): PlanTask[] {
+  let over = tasks.length - PLAN_MAX
+  if (over <= 0) return tasks
+  return tasks
+    .filter(t => {
+      if (over > 0 && t.status === 'completed') {
+        over -= 1
+        return false
+      }
+      return true
+    })
+    .slice(-PLAN_MAX)
+}
+
+/** TodoWrite: the whole list, rewritten. */
+export function fromTodoWrite(plan: Plan, todos: unknown, session: number, now: number): Plan {
+  if (!Array.isArray(todos)) return plan
+  const before = forSession(plan, session)
+  const previous = new Map(plan.tasks.map(t => [t.key, t]))
+  const next: PlanTask[] = []
+  const seen = new Set<string>()
+  for (const item of todos) {
+    if (!isRecord(item)) continue
+    const subject = clean(str(item.content), 120)
+    const status = statusOf(item.status)
+    const key = keyOf(subject)
+    if (subject === '' || status === null || seen.has(key)) continue
+    seen.add(key)
+    const prev = previous.get(key)
+    next.push({
+      key,
+      id: null,
+      subject,
+      activeForm: clean(str(item.activeForm), 80) || null,
+      status,
+      session,
+      doneAt: status === 'completed' ? (prev?.doneAt ?? now) : null,
+    })
+  }
+  const kept = before.filter(t => t.status === 'completed' && !seen.has(t.key))
+  return { tasks: capped([...kept, ...next]), session: Math.max(plan.session, session), updatedAt: now }
+}
+
+/** TaskCreate: one new task, with the id the tool's result gave it. */
+export function fromTaskCreate(plan: Plan, input: Record<string, unknown>, result: unknown, session: number, now: number): Plan {
+  const task = isRecord(result) && isRecord(result.task) ? result.task : null
+  const id = task === null ? '' : str(task.id)
+  const subject = clean(str(task?.subject) || str(input.subject), 120)
+  if (id === '' || subject === '') return plan
+  const tasks = forSession(plan, session).filter(t => t.id !== id)
+  tasks.push({ key: keyOf(subject), id, subject, activeForm: clean(str(input.activeForm), 80) || null, status: 'pending', session, doneAt: null })
+  return { tasks: capped(tasks), session: Math.max(plan.session, session), updatedAt: now }
+}
+
+/** TaskUpdate: a status, subject or active form changed; `deleted` removes the task. */
+export function fromTaskUpdate(plan: Plan, input: Record<string, unknown>, session: number, now: number): Plan {
+  const id = str(input.taskId)
+  if (id === '' || !plan.tasks.some(t => t.id === id)) return plan
+  if (input.status === 'deleted') return { ...plan, tasks: plan.tasks.filter(t => t.id !== id), updatedAt: now }
+  const status = statusOf(input.status)
+  const subject = clean(str(input.subject), 120)
+  const activeForm = clean(str(input.activeForm), 80)
+  const tasks = plan.tasks.map(t =>
+    t.id !== id
+      ? t
+      : {
+          ...t,
+          subject: subject || t.subject,
+          key: subject === '' ? t.key : keyOf(subject),
+          activeForm: activeForm || t.activeForm,
+          status: status ?? t.status,
+          session,
+          doneAt: (status ?? t.status) === 'completed' ? (t.doneAt ?? now) : null,
+        },
+  )
+  return { tasks, session: Math.max(plan.session, session), updatedAt: now }
+}
+
+/** TaskList: the tool's own list is the truth for the tasks it knows. */
+export function fromTaskList(plan: Plan, result: unknown, session: number, now: number): Plan {
+  if (!isRecord(result) || !Array.isArray(result.tasks)) return plan
+  const listed = new Map<string, { subject: string; status: PlanStatus }>()
+  for (const item of result.tasks) {
+    if (!isRecord(item)) continue
+    const id = str(item.id)
+    const status = statusOf(item.status)
+    if (id !== '' && status !== null) listed.set(id, { subject: clean(str(item.subject), 120), status })
+  }
+  const before = forSession(plan, session)
+  const tasks: PlanTask[] = []
+  for (const t of before) {
+    if (t.id === null) {
+      tasks.push(t)
+      continue
+    }
+    const l = listed.get(t.id)
+    if (l === undefined) {
+      if (t.status === 'completed') tasks.push(t)
+      continue
+    }
+    listed.delete(t.id)
+    tasks.push({ ...t, subject: l.subject || t.subject, status: l.status, doneAt: l.status === 'completed' ? (t.doneAt ?? now) : null })
+  }
+  for (const [id, l] of listed) {
+    if (l.subject === '') continue
+    tasks.push({ key: keyOf(l.subject), id, subject: l.subject, activeForm: null, status: l.status, session, doneAt: l.status === 'completed' ? now : null })
+  }
+  return { tasks: capped(tasks), session: Math.max(plan.session, session), updatedAt: now }
+}
+
+/** Applies one finished task-tool call; any other tool leaves the plan as it is. */
+export function applyTool(plan: Plan, input: { tool: string; input: Record<string, unknown>; result: unknown; session: number; now: number }): Plan {
+  switch (input.tool) {
+    case 'TodoWrite': {
+      const result = isRecord(input.result) ? input.result : {}
+      return fromTodoWrite(plan, Array.isArray(result.newTodos) ? result.newTodos : input.input.todos, input.session, input.now)
+    }
+    case 'TaskCreate':
+      return fromTaskCreate(plan, input.input, input.result, input.session, input.now)
+    case 'TaskUpdate':
+      return fromTaskUpdate(plan, input.input, input.session, input.now)
+    case 'TaskList':
+      return fromTaskList(plan, input.result, input.session, input.now)
+    default:
+      return plan
+  }
+}
+
+export const isPlanTool = (tool: string): boolean => tool === 'TodoWrite' || tool === 'TaskCreate' || tool === 'TaskUpdate' || tool === 'TaskList'
+
+export type Progress = {
+  done: number
+  total: number
+  /** The task under way: the latest one marked in progress. */
+  current: PlanTask | null
+  /** The first open task after it. */
+  next: PlanTask | null
+}
+
+export function progressOf(plan: Plan): Progress {
+  const done = plan.tasks.filter(t => t.status === 'completed').length
+  const current = [...plan.tasks].reverse().find(t => t.status === 'in_progress') ?? null
+  const next = plan.tasks.find(t => t.status === 'pending') ?? null
+  return { done, total: plan.tasks.length, current, next }
+}
+
+/**
+ * The objective a request states: its first line that is not a command,
+ * cut to the first sentence when that says enough. Null for a request too
+ * short to name one ("yes", "go on").
+ */
+export function objectiveOf(text: string): string | null {
+  const first = text
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(l => l.trim())
+    .find(l => l !== '' && !l.startsWith('/') && !/^\[(image|pasted)[^\]]*\]$/i.test(l))
+  if (first === undefined) return null
+  const sentence = /^.+?[.!?](?=\s|$)/.exec(first)?.[0] ?? first
+  const objective = clean(sentence.length >= 24 ? sentence : first, 140)
+  return objective.length < 8 ? null : objective
+}
+
+/** A stored plan, validated: anything malformed reads as no plan. */
+export function planOf(raw: unknown): Plan {
+  if (!isRecord(raw) || !Array.isArray(raw.tasks)) return emptyPlan()
+  const tasks: PlanTask[] = []
+  for (const t of raw.tasks) {
+    if (!isRecord(t)) continue
+    const status = statusOf(t.status)
+    const subject = str(t.subject)
+    if (status === null || subject === '') continue
+    tasks.push({
+      key: str(t.key) || keyOf(subject),
+      id: typeof t.id === 'string' ? t.id : null,
+      subject,
+      activeForm: typeof t.activeForm === 'string' ? t.activeForm : null,
+      status,
+      session: typeof t.session === 'number' ? t.session : 1,
+      doneAt: typeof t.doneAt === 'number' ? t.doneAt : null,
+    })
+  }
+  return { tasks: tasks.slice(-PLAN_MAX), session: typeof raw.session === 'number' ? raw.session : 0, updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : null }
+}

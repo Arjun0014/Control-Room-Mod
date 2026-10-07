@@ -11,6 +11,8 @@
 import type {
   ActivityView,
   ChainRunView,
+  FileChangeView,
+  MissionView,
   ChainView,
   FocusModel,
   HudModel,
@@ -28,8 +30,11 @@ import { findProfile, isModified } from '../core/profiles'
 import { relativeTo, shortPath } from '../core/text'
 import { readingTone } from '../ui/theme'
 import { versionAtLeast } from '../core/version'
+import type { ActivityItem, FileChange } from '../features/activity'
 import { isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
+import { type Attention, GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
+import { type ValidationSummary, summarize } from '../features/validation'
 import type { Runtime } from './runtime'
 
 function contextTone(rt: Runtime): Tone {
@@ -190,6 +195,18 @@ function liveLoadOf(rt: Runtime): HudModel['load'] {
 }
 
 // ---------------------------------------------------------------------------
+// Signal: shared by the status bar and Activity
+
+/** The main conversation's calls in the current (or last) turn, oldest first. */
+const turnItemsOf = (rt: Runtime): ActivityItem[] => rt.activity.items.filter(i => i.turn === rt.activity.turn.index && i.agentId === null)
+
+const attentionNow = (rt: Runtime, now: number): Attention[] => attentionOf(turnItemsOf(rt), now)
+
+const validationNow = (rt: Runtime, now: number): ValidationSummary[] => summarize(rt.activity.validationRuns(), now)
+
+const nowLine = (rt: Runtime) => nowOf({ isTurnRunning: rt.turn.isRunning, running: rt.activity.runningItems(), progress: rt.progress })
+
+// ---------------------------------------------------------------------------
 // Projections
 
 export function hudOf(rt: Runtime): HudModel {
@@ -216,17 +233,36 @@ export function hudOf(rt: Runtime): HudModel {
     guard: { isOn: s.guard.enabled, continued: rt.guard.turnBlocks },
     session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1) },
     alert,
+    work: workOf(rt),
+    now: nowLine(rt),
+    failing: validationNow(rt, Date.now())
+      .filter(v => v.isFailing)
+      .map(v => v.label),
+    attention: attentionNow(rt, Date.now()).filter(isOpen).length,
   }
 }
 
-/** The live status bar for Claude Code's own status line (`/cr hud status`): readings and events only. */
+function workOf(rt: Runtime): HudModel['work'] {
+  const p = rt.progress
+  if (p.total === 0) return null
+  return { done: p.done, total: p.total, current: p.current === null ? null : (p.current.activeForm ?? p.current.subject) }
+}
+
+/** The live status bar for Claude Code's own status line (`/cr hud status`): the run in one line. */
 export function statusLineOf(hud: HudModel): string {
   const pct = (n: number | null) => (n === null ? '—' : `${Math.round(n)}%`)
-  const parts = [`◆ Context ${pct(hud.ctx.pct)}`, fmt.cost(hud.cost.usd)]
-  if (hud.load !== null) parts.push(`CPU ${pct(hud.load.cpu)}`, `RAM ${pct(hud.load.ram)}`)
-  if (hud.agents.running > 0) parts.push(fmt.plural(hud.agents.running, 'agent'))
+  const isHigh = (t: Tone) => t === 'warn' || t === 'bad'
+  const parts = [`◆ Context ${pct(hud.ctx.pct)}`]
+  if (hud.work !== null) parts.push(`Work ${hud.work.done}/${hud.work.total}`)
   if (hud.autopilot.isOn && hud.autopilot.state !== 'off' && hud.autopilot.state !== 'armed') parts.push(hud.autopilot.text)
+  if (hud.now !== null) parts.push(hud.now.text)
+  if (hud.failing.length > 0) parts.push(`${hud.failing.join(', ')} failing`)
+  if (hud.attention > 0) parts.push(`${fmt.plural(hud.attention, 'issue')}`)
+  if (hud.load !== null && isHigh(hud.load.cpuTone)) parts.push(`CPU ${pct(hud.load.cpu)}`)
+  if (hud.load !== null && isHigh(hud.load.ramTone)) parts.push(`RAM ${pct(hud.load.ram)}`)
+  if (hud.agents.running > 0) parts.push(fmt.plural(hud.agents.running, 'agent'))
   if (hud.guard.isOn && hud.guard.continued > 0) parts.push(`Kept going ×${hud.guard.continued}`)
+  parts.push(`Run ${fmt.cost(hud.cost.runUsd ?? hud.cost.usd)}${hud.cost.isRunPartial ? '+' : ''}`)
   return parts.join(' · ')
 }
 
@@ -349,15 +385,86 @@ export function chainOf(rt: Runtime): ChainView {
   }
 }
 
+/** Milestones shown around the work under way: a few done, the current one, a few next. */
+const PLAN_WINDOW = { done: 2, shown: 7 }
+
+export function missionOf(rt: Runtime): MissionView {
+  const p = rt.progress
+  const tasks = rt.plan.tasks
+  let plan: MissionView['plan'] = null
+  if (tasks.length > 0) {
+    const done = tasks.filter(t => t.status === 'completed')
+    const open = tasks.filter(t => t.status !== 'completed')
+    const shownOpen = open.slice(0, Math.max(1, PLAN_WINDOW.shown - Math.min(PLAN_WINDOW.done, done.length)))
+    const shownDone = done.slice(-Math.max(PLAN_WINDOW.done, PLAN_WINDOW.shown - shownOpen.length))
+    plan = {
+      done: p.done,
+      total: p.total,
+      tasks: [...shownDone, ...shownOpen].map(t => ({ subject: t.subject, status: t.status, isCurrent: t === p.current })),
+      earlier: done.length - shownDone.length,
+      later: open.length - shownOpen.length,
+    }
+  }
+  const totals = rt.run === null ? null : Chain.totals(rt.run, Date.now())
+  return {
+    objective: rt.run?.objective ?? null,
+    plan,
+    now: nowLine(rt)?.text ?? null,
+    next: p.next === null ? null : p.next.subject,
+    isWorking: rt.turn.isRunning,
+    session: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1),
+    handoffs: totals?.handoffs ?? 0,
+  }
+}
+
+function fileView(rt: Runtime, f: FileChange): FileChangeView {
+  return {
+    path: f.path,
+    display: shortPath(relativeTo(f.path, rt.root), 56),
+    added: f.added,
+    removed: f.removed,
+    hasDiff: f.hasDiff,
+    edits: f.edits,
+    isCreated: f.isCreated,
+    isDeleted: f.isDeleted,
+    lastAt: f.lastAt,
+  }
+}
+
 export function activityOf(rt: Runtime): ActivityView {
+  const now = Date.now()
   const files = rt.activity.changeList()
   const selected = rt.ui.selectedPath === null ? null : (rt.activity.changes.get(rt.ui.selectedPath) ?? null)
+  const ctx = { root: rt.root, handoffFile: rt.settings.autopilot.handoffFile }
+  const group = (path: string) => groupOf(path, ctx)
+  const turnItems = turnItemsOf(rt)
+  const attention = attentionOf(turnItems, now)
+  const validation = validationNow(rt, now)
+  const turn = rt.activity.turn
   return {
     summary: rt.activity.summaryLine({ subagentsRunning: rt.runningSubagents }),
-    turn: rt.activity.turn.index,
+    turn: turn.index,
     sessionTools: rt.activity.sessionTools,
+    mission: missionOf(rt),
+    turnSummary: {
+      lines: turnSummaryOf({
+        items: turnItems,
+        changed: files.filter(f => turn.files.has(f.path)),
+        groupOf: group,
+        validation,
+        attention,
+        milestonesDone: Math.max(0, rt.progress.done - rt.turnStartDone),
+      }),
+      isRunning: rt.turn.isRunning,
+      durationMs: turn.startedAt === null ? null : (turn.endedAt ?? now) - turn.startedAt,
+      tools: turn.tools,
+    },
+    attention: attention.slice(0, 12).map(a => ({ id: a.id, kind: a.kind, title: a.title, reason: a.reason, state: a.state, attempts: a.attempts, durationMs: a.durationMs, since: a.since })),
+    validation: validation.map(v => ({ kind: v.kind, label: v.label, command: v.command, status: v.status, durationMs: v.durationMs, runs: v.runs, failures: v.failures, isRecovered: v.isRecovered })),
+    groups: GROUP_ORDER.map(id => ({ id, label: GROUP_LABEL[id], files: files.filter(f => group(f.path) === id).slice(0, 40).map(f => fileView(rt, f)) })).filter(g => g.files.length > 0),
+    showGenerated: rt.ui.showGenerated,
     items: rt.activity.items
-      .slice(-60)
+      .slice(-80)
       .reverse()
       .map(i => ({
         id: i.id,
@@ -365,21 +472,12 @@ export function activityOf(rt: Runtime): ActivityView {
         kind: i.kind,
         label: i.label,
         status: i.status,
+        reason: i.reason,
         startedAt: i.startedAt,
         endedAt: i.endedAt,
         isSubagent: i.agentId !== null,
         heavy: i.heavy,
       })),
-    files: files.slice(0, 60).map(f => ({
-      path: f.path,
-      display: shortPath(relativeTo(f.path, rt.root), 56),
-      added: f.added,
-      removed: f.removed,
-      edits: f.edits,
-      isCreated: f.isCreated,
-      isDeleted: f.isDeleted,
-      lastAt: f.lastAt,
-    })),
     totals: rt.activity.totals(),
     selectedPath: selected?.path ?? null,
     selectedHunks: selected?.hunks ?? '',

@@ -20,6 +20,11 @@ export function actionsOf(rt: Runtime): Actions {
       rt.ui.activitySub = sub
       rt.publisher.mark('pane')
     },
+    toggleGenerated: () => {
+      rt.ui.showGenerated = !rt.ui.showGenerated
+      rt.publisher.mark('activity')
+    },
+    scrollToTop: () => void rt.host?.scrollPaneToTop().catch(() => undefined),
     update: change => rt.update(draft => void change(draft)),
     applyProfile: id => void rt.applyProfileById(id),
     saveProfile: name => {

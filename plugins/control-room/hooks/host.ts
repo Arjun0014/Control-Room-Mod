@@ -75,6 +75,8 @@ export type Host = {
   open(pane: PaneOpenArgs): Promise<UiOpenResult>
   close(pane: PaneCloseArgs): Promise<void>
   panes(): Promise<readonly UiPane[]>
+  /** Brings the top of the Control Room pane into view (after a section change, or "Back to top"). */
+  scrollPaneToTop(): Promise<void>
   ask(question: string, options: readonly string[], header?: string): Promise<string>
   copy(text: string, surface?: RenderSurface): Promise<boolean>
 

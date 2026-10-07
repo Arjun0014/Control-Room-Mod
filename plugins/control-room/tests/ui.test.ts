@@ -96,8 +96,11 @@ describe('ui', () => {
     for (const surface of ['terminal', 'desktop'] as const) {
       for (const columns of [44, 80, 120, 200]) {
         const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'AbovePrompt', props: bandProps(columns), viewport: { columns, rows: 40 } })
-        expect(await ui.find({ text: /Context/ }), `${surface} ${columns}`).toBeDefined()
+        expect(await ui.find({ text: /68%/ }), `${surface} ${columns}`).toBeDefined()
+        expect(await ui.find({ text: /Run/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open' }), `${surface} ${columns}`).toBeDefined()
+        // Labels only where there is room for them.
+        expect((await ui.find({ text: /Context/ })) !== undefined, `${surface} ${columns}`).toBe(columns >= (surface === 'terminal' ? 120 : 100))
         await ui.unmount()
       }
     }
@@ -399,6 +402,99 @@ describe('ui', () => {
     expect(await result.find({ text: /ENGINE ROW/ })).toBeDefined()
     const row = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'ToolUse', requestId: 'b1', props: toolRow('b1') })
     expect(await row.find({ text: /ENGINE ROW/ })).toBeDefined()
+  })
+
+  test('Activity leads with the run and what needs a look; every call is the secondary view', async ($, on) => {
+    // Answers beneath the plugin for the calls this turn makes (registered before the world's catch-all).
+    on('tool.call', { tool: 'Write' }, ($, e) => ({ result: { type: 'create', filePath: e.file_path, content: 'export const a = 1\nexport const b = 2\n', structuredPatch: [], originalFile: null } }))
+    on('tool.call', { tool: 'Bash' }, ($, e) =>
+      e.command === 'npm run lint'
+        ? { isError: true as const, result: 'Exit code 1', text: 'Exit code 1\nsrc/a.ts: unused variable' }
+        : e.command === 'touch scripts/gen.sh'
+          ? { result: { stdout: '', stderr: '', interrupted: false, bashEditDiff: { files: [{ filePath: '/work/scripts/gen.sh', hunks: [], created: true as const }], moreFiles: 0 } } }
+          : { result: { stdout: 'ok', stderr: '', interrupted: false } },
+    )
+    const w = world(on, { tokens: 300_000 })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    await boot($, w)
+    await $.prompt.submit({ text: 'Build the parser and cover it with tests.', origin: { kind: 'composer' }, wait: false })
+    await $.turn.start({ text: 'Build the parser and cover it with tests.', turnId: 't1' })
+    await $.tool.call({
+      tool: 'TodoWrite',
+      todos: [
+        { content: 'Sketch the grammar', status: 'completed', activeForm: 'Sketching the grammar' },
+        { content: 'Build the parser', status: 'in_progress', activeForm: 'Building the parser' },
+        { content: 'Write the tests', status: 'pending', activeForm: 'Writing the tests' },
+      ],
+    })
+    await $.tool.call({ tool: 'Write', file_path: '/work/src/parser.ts', content: 'export const a = 1\nexport const b = 2\n' })
+    await $.tool.call({ tool: 'Bash', command: 'touch scripts/gen.sh' })
+    await $.tool.call({ tool: 'Write', file_path: '/work/NEXT_SESSION_PROMPT.md', content: 'notes' })
+    await $.tool.call({ tool: 'Bash', command: 'npm test' })
+    await $.tool.call({ tool: 'Bash', command: 'npm run lint' })
+    await w.clock.advance(300)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      await ui.press({ key: 'tab-activity' })
+      await w.clock.advance(300)
+      const text = textOf(await ui.drawn())
+      for (const expected of ['RUN PROGRESS', 'Build the parser and cover it with tests.', '1 of 3 milestones', 'Building the parser', 'Write the tests', 'THIS TURN', 'ATTENTION', 'unresolved', 'VALIDATION', 'Tests', 'Lint', 'CHANGES', 'CODE', '+2', 'new · diff unavailable']) {
+        expect(text, `${surface}: ${expected}`).toContain(expected)
+      }
+      expect(text, surface).not.toContain('+0 −0')
+      // Files are buttons that open their diff; the handoff notes sit folded under generated files.
+      expect(await ui.find({ key: 'pick-/work/src/parser.ts' }), surface).toBeDefined()
+      expect(await ui.find({ key: 'pick-/work/NEXT_SESSION_PROMPT.md' }), surface).toBeUndefined()
+      expect((await ui.find({ key: 'toggle-generated' }))?.props.label, surface).toContain('Generated and temporary · 1')
+      await ui.press({ key: 'toggle-generated' })
+      await w.clock.advance(300)
+      expect(await ui.find({ key: 'pick-/work/NEXT_SESSION_PROMPT.md' }), surface).toBeDefined()
+      await ui.press({ key: 'toggle-generated' })
+      await w.clock.advance(300)
+      // The full call list is one press away, newest first.
+      await ui.press({ key: 'sub:raw' })
+      await w.clock.advance(300)
+      const raw = textOf(await ui.drawn())
+      expect(raw.indexOf('npm run lint'), surface).toBeLessThan(raw.indexOf('TodoWrite'))
+      await ui.press({ key: 'sub:summary' })
+      await w.clock.advance(300)
+      await ui.unmount()
+    }
+  })
+
+  test('the status bar shows run progress apart from context, what Claude is doing, and the run cost only', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await boot($, w)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.tool.call({
+      tool: 'TodoWrite',
+      todos: [
+        { content: 'A', status: 'completed', activeForm: 'Doing A' },
+        { content: 'B', status: 'completed', activeForm: 'Doing B' },
+        { content: 'C', status: 'in_progress', activeForm: 'Running regression tests' },
+        { content: 'D', status: 'pending', activeForm: 'Doing D' },
+      ],
+    })
+    await w.clock.advance(300)
+    const wide = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const line = textOf(await wide.drawn())
+    expect(line).toContain('Context ━')
+    expect(line).toContain('Work ■■■□ 2/4')
+    expect(line).toContain('▸ Running regression tests')
+    expect(line).toContain('Run $1.25')
+    await wide.unmount()
+    // Narrow: no labels, the meters stay apart by shape, and the work line yields first.
+    const narrow = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(48) })
+    const small = textOf(await narrow.drawn())
+    expect(small).not.toContain('Context')
+    expect(small).toContain('2/4')
+    expect(small).toContain('30%')
+    await narrow.unmount()
+    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    expect(await desktop.find({ type: 'Svg' })).toBeDefined()
+    expect(textOf(await desktop.drawn())).toContain('2/4')
   })
 
   test('the spinner carries the activity summary while a turn runs', async ($, on) => {

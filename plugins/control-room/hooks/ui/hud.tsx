@@ -1,14 +1,19 @@
 /**
- * The status bar: one line above the prompt, live readings only.
+ * The status bar: the run at a glance, one line above the prompt.
  *
- *   ◆   Context ━━━━━━━──── 69%   $78.35   CPU ▂▃▅▃ 23%   RAM ▇▇▇▇ 79%   2 agents        Control Room
+ *   ◆   Context ━━━━━━━┃── 62%   Work ■■■■□□□ 4/7   ▸ Running regression tests       Run $115.93   Control Room
  *
- * What it shows changes while you work: context, cost, the machine's CPU
- * and memory, running agents, and events as they happen (a handoff about to
- * start or under way, the guard keeping Claude going). Settings live in the
- * panel, not here. Labels are dim, values plain, color only where a reading
- * asks for attention. Items drop by priority as the width shrinks; a second
- * line appears only when something needs the person.
+ * Two meters that cannot be confused. Context is a continuous line with the
+ * handoff tick: how much of the reasoning window is used, which starts over
+ * after a handoff. Work is one square per milestone with "done/total": how
+ * much of the run's objective is finished, which carries across handoffs.
+ * Then what Claude is doing right now, which takes the room that is left,
+ * and the whole run's cost. States appear only while they matter: a handoff,
+ * a failing check, calls that need a look, a busy machine, agents, the guard.
+ *
+ * Wide: labelled meters. Medium: the meters alone. Narrow: shorter meters,
+ * then the least important items drop. Desktop draws both meters as SVG.
+ * A second line appears only when something needs the person.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -17,14 +22,43 @@ import type { HudModel, Tone } from '../../types'
 import * as fmt from '../core/format'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
-import { G, meterCells, sparkline, toneProps } from './theme'
+import { G, meterCells, svgBar, svgSegments, toneProps, workCells } from './theme'
 
 type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean }
-export type Segment = { key: string; priority: number; spans: Span[] }
+
+/** A meter drawn as SVG on the remote surfaces, in place of its glyphs: `cells` wide. */
+type Graphic = { source: string; cells: number; alt: string }
+
+export type Segment = {
+  key: string
+  priority: number
+  side: 'left' | 'right'
+  /** Text before the graphic (or the whole segment). */
+  spans: Span[]
+  graphic?: Graphic
+  /** Text after the graphic. */
+  after?: Span[]
+}
 
 const GAP = 3
 
-export const widthOf = (s: Segment): number => s.spans.reduce((n, p) => n + p.text.length, 0)
+/** The pixels a cell of a status-bar meter takes as SVG. */
+const CELL_PX = 8
+
+const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).reduce((n, p) => n + p.text.length, 0)
+
+export const widthOf = (s: Segment): number => spanWidth(s.spans) + (s.graphic?.cells ?? 0) + spanWidth(s.after)
+
+/** How much the bar shows at a width: labels, and the cells of each meter. */
+export type Tier = { labels: boolean; meter: number; squares: number }
+
+export function tierOf(columns: number, surface: Kit['surface'] = 'terminal'): Tier {
+  const wide = surface === 'terminal' ? 120 : 100
+  if (columns >= wide) return { labels: true, meter: 10, squares: 10 }
+  if (columns >= 90) return { labels: false, meter: 8, squares: 8 }
+  if (columns >= 64) return { labels: false, meter: 6, squares: 6 }
+  return { labels: false, meter: 4, squares: 4 }
+}
 
 function meterSpans(fraction: number, marker: number | null, tone: Tone, width: number): Span[] {
   const c = meterCells(fraction, width, marker)
@@ -32,7 +66,19 @@ function meterSpans(fraction: number, marker: number | null, tone: Tone, width: 
   for (let i = 0; i < c.width; i++) {
     const span: Span = i === c.marker ? { text: G.marker, tone: 'accent' } : i < c.filled ? { text: G.lineFull, tone } : { text: G.lineEmpty, isDim: true }
     const last = out[out.length - 1]
-    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim) last.text += span.text
+    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold) last.text += span.text
+    else out.push(span)
+  }
+  return out
+}
+
+function squareSpans(done: number, total: number, max: number, hasCurrent: boolean): Span[] {
+  const c = workCells(done, total, max, hasCurrent)
+  const out: Span[] = []
+  for (let i = 0; i < c.width; i++) {
+    const span: Span = i < c.done ? { text: G.square, tone: 'info' } : i === c.current ? { text: G.square, isBold: true } : { text: G.squareOpen, isDim: true }
+    const last = out[out.length - 1]
+    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold) last.text += span.text
     else out.push(span)
   }
   return out
@@ -40,55 +86,93 @@ function meterSpans(fraction: number, marker: number | null, tone: Tone, width: 
 
 const valueTone = (tone: Tone): Tone | undefined => (tone === 'good' || tone === 'normal' || tone === 'muted' ? undefined : tone)
 
-/** Readings of history a status-bar sparkline waits for, so the bar does not shift with each new sample. */
-export const SPARK_CELLS = 6
-
-function reading(key: string, label: string, value: number | null, tone: Tone, series: readonly number[], hasSpark: boolean, priority: number): Segment {
-  const spark = hasSpark && series.length >= SPARK_CELLS ? [{ text: `${sparkline(series, SPARK_CELLS)} `, isDim: true }] : []
-  return {
-    key,
-    priority,
-    spans: [{ text: `${label} `, isDim: true }, ...spark, { text: value === null ? G.none : `${Math.round(value)}%`, tone: valueTone(tone), isBold: tone === 'bad' }],
-  }
-}
+const isHigh = (tone: Tone): boolean => tone === 'warn' || tone === 'bad'
 
 const EVENT_STATES = new Set(['pending', 'requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming', 'awaiting'])
 
 export function hudSegments(hud: HudModel, columns: number, surface: Kit['surface'] = 'terminal'): Segment[] {
-  const isTerminal = surface === 'terminal'
-  const segments: Segment[] = [{ key: 'brand', priority: 0, spans: [{ text: G.brand, tone: 'accent', isBold: true }] }]
+  const tier = tierOf(columns, surface)
+  const isSvg = surface !== 'terminal'
+  const segments: Segment[] = [{ key: 'brand', priority: 0, side: 'left', spans: [{ text: G.brand, tone: 'accent', isBold: true }] }]
 
+  // Context: a line with the handoff tick.
   const ctx = hud.ctx
-  if (ctx.pct === null) {
-    segments.push({ key: 'ctx', priority: 0, spans: [{ text: 'Context ', isDim: true }, { text: G.none, isDim: true }] })
+  const ctxLabel: Span[] = tier.labels ? [{ text: 'Context ', isDim: true }] : []
+  if (ctx.pct === null || ctx.tokens === null || ctx.window === null || ctx.window <= 0) {
+    segments.push({ key: 'ctx', priority: 0, side: 'left', spans: [{ text: 'Context ', isDim: true }, { text: ctx.pct === null ? G.none : `${ctx.pct}%`, isDim: ctx.pct === null }] })
   } else {
-    const hasMeter = isTerminal && columns >= 76 && ctx.tokens !== null && ctx.window !== null && ctx.window > 0
-    const meter = hasMeter
-      ? [...meterSpans(ctx.tokens! / ctx.window!, ctx.threshold === null ? null : ctx.threshold / ctx.window!, ctx.tone === 'muted' ? 'good' : ctx.tone, 10), { text: ' ' }]
-      : []
-    segments.push({ key: 'ctx', priority: 0, spans: [{ text: 'Context ', isDim: true }, ...meter, { text: `${ctx.pct}%`, tone: valueTone(ctx.tone), isBold: ctx.tone === 'bad' }] })
+    const fraction = ctx.tokens / ctx.window
+    const marker = ctx.threshold === null ? null : ctx.threshold / ctx.window
+    const tone: Tone = ctx.tone === 'muted' ? 'good' : ctx.tone
+    const pct: Span = { text: ` ${ctx.pct}%`, tone: valueTone(ctx.tone), isBold: ctx.tone === 'bad' }
+    segments.push(
+      isSvg
+        ? {
+            key: 'ctx',
+            priority: 0,
+            side: 'left',
+            spans: ctxLabel,
+            graphic: { source: svgBar({ fraction, marker, tone, width: tier.meter * CELL_PX, height: 10 }), cells: tier.meter, alt: `Context ${ctx.pct}% used` },
+            after: [pct],
+          }
+        : { key: 'ctx', priority: 0, side: 'left', spans: [...ctxLabel, ...meterSpans(fraction, marker, tone, tier.meter), pct] },
+    )
+  }
+
+  // Work: one square per milestone, as Claude's own task list counts them.
+  const work = hud.work
+  if (work !== null && work.total > 0) {
+    const label: Span[] = tier.labels ? [{ text: 'Work ', isDim: true }] : []
+    const isDone = work.done === work.total
+    const count: Span = { text: ` ${work.done}/${work.total}`, tone: isDone ? 'good' : undefined }
+    const hasCurrent = work.current !== null
+    segments.push(
+      isSvg
+        ? {
+            key: 'work',
+            priority: 1,
+            side: 'left',
+            spans: label,
+            graphic: {
+              source: svgSegments({ done: work.done, total: work.total, hasCurrent, max: tier.squares, width: Math.min(work.total, tier.squares) * CELL_PX + 8, height: 10 }),
+              cells: Math.min(work.total, tier.squares) + 1,
+              alt: `Work: ${work.done} of ${work.total} milestones done`,
+            },
+            after: [count],
+          }
+        : { key: 'work', priority: 1, side: 'left', spans: [...label, ...squareSpans(work.done, work.total, tier.squares, hasCurrent), count] },
+    )
   }
 
   if (hud.autopilot.isOn && EVENT_STATES.has(hud.autopilot.state)) {
-    segments.push({ key: 'event', priority: 0, spans: [{ text: hud.autopilot.text, tone: hud.autopilot.tone === 'normal' ? 'accent' : hud.autopilot.tone, isBold: true }] })
+    segments.push({ key: 'event', priority: 0, side: 'left', spans: [{ text: hud.autopilot.text, tone: hud.autopilot.tone === 'normal' ? 'accent' : hud.autopilot.tone, isBold: true }] })
   }
 
-  segments.push({ key: 'cost', priority: 1, spans: [{ text: fmt.cost(hud.cost.usd), isDim: hud.cost.usd === null }] })
-  if (hud.cost.runUsd !== null && hud.cost.usd !== null && hud.cost.runUsd - hud.cost.usd > 0.005) {
-    segments.push({ key: 'runcost', priority: 6, spans: [{ text: `run ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''}`, isDim: true }] })
+  // Right: states while they matter, then the run's cost.
+  if (hud.failing.length > 0) {
+    const names = hud.failing.join(', ')
+    segments.push({ key: 'failing', priority: 1, side: 'right', spans: [{ text: `${G.fail} ${tier.labels ? `${names} failing` : names}`, tone: 'bad' }] })
   }
-
-  if (hud.load !== null) {
-    const hasSpark = isTerminal && columns >= 110
-    segments.push(reading('cpu', 'CPU', hud.load.cpu, hud.load.cpuTone, hud.load.cpuSeries, hasSpark, 2))
-    segments.push(reading('ram', 'RAM', hud.load.ram, hud.load.ramTone, hud.load.ramSeries, hasSpark, 2))
+  if (hud.attention > 0) segments.push({ key: 'attention', priority: 2, side: 'right', spans: [{ text: `${G.warn} ${fmt.plural(hud.attention, 'issue')}`, tone: 'warn' }] })
+  if (hud.load !== null && isHigh(hud.load.cpuTone)) {
+    segments.push({ key: 'cpu', priority: 3, side: 'right', spans: [{ text: 'CPU ', isDim: true }, { text: `${Math.round(hud.load.cpu ?? 0)}%`, tone: hud.load.cpuTone, isBold: hud.load.cpuTone === 'bad' }] })
   }
-
+  if (hud.load !== null && isHigh(hud.load.ramTone)) {
+    segments.push({ key: 'ram', priority: 3, side: 'right', spans: [{ text: 'RAM ', isDim: true }, { text: `${Math.round(hud.load.ram ?? 0)}%`, tone: hud.load.ramTone, isBold: hud.load.ramTone === 'bad' }] })
+  }
   if (hud.agents.running > 0) {
     const text = hud.agents.limit === null ? fmt.plural(hud.agents.running, 'agent') : `${hud.agents.running} of ${hud.agents.limit} agents`
-    segments.push({ key: 'agents', priority: 3, spans: [{ text, tone: 'info' }] })
+    segments.push({ key: 'agents', priority: 3, side: 'right', spans: [{ text, tone: 'info' }] })
   }
-  if (hud.guard.isOn && hud.guard.continued > 0) segments.push({ key: 'guard', priority: 3, spans: [{ text: `Kept going ×${hud.guard.continued}`, tone: 'warn' }] })
+  if (hud.guard.isOn && hud.guard.continued > 0) segments.push({ key: 'guard', priority: 4, side: 'right', spans: [{ text: `Kept going ×${hud.guard.continued}`, tone: 'warn' }] })
+
+  const run = hud.cost.runUsd ?? hud.cost.usd
+  segments.push({
+    key: 'cost',
+    priority: 2,
+    side: 'right',
+    spans: [{ text: 'Run ', isDim: true }, { text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null }],
+  })
   return segments
 }
 
@@ -104,6 +188,9 @@ export function fitSegments(segments: readonly Segment[], width: number, gap = G
   return kept
 }
 
+/** The least room the work line needs to be worth drawing. */
+const NOW_MIN = 14
+
 function spanEl(kit: Kit, key: string, span: Span): RenderElement {
   const { Text } = kit.ui
   const props = span.tone === undefined ? {} : toneProps(span.tone)
@@ -114,22 +201,59 @@ function spanEl(kit: Kit, key: string, span: Span): RenderElement {
   )
 }
 
+function segmentEl(kit: Kit, s: Segment): RenderElement {
+  const { Box, Text, Svg } = kit.ui
+  const text = (spans: readonly Span[] | undefined, part: string) =>
+    spans === undefined || spans.length === 0 ? null : <Text key={`seg-${s.key}-${part}`}>{spans.map((p, i) => spanEl(kit, `seg-${s.key}-${part}-${i}`, p))}</Text>
+  if (s.graphic === undefined || Svg === undefined) {
+    return (
+      <Text key={`seg-${s.key}`} wrap="truncate-end">
+        {s.spans.map((p, i) => spanEl(kit, `seg-${s.key}-${i}`, p))}
+      </Text>
+    )
+  }
+  return (
+    <Box key={`seg-${s.key}`} flexDirection="row" alignItems="center" flexShrink={0}>
+      {text(s.spans, 'before')}
+      <Svg key={`seg-${s.key}-svg`} source={s.graphic.source} alt={s.graphic.alt} height={10} />
+      {text(s.after, 'after')}
+    </Box>
+  )
+}
+
 export function hudView(kit: Kit, hud: HudModel): RenderElement {
   const { Box, Text, Button } = kit.ui
   // The button opens and closes the panel: its name when there is room, else what a press does.
   const label = kit.columns >= 70 ? 'Control Room' : hud.isPaneOpen ? 'Close' : 'Open'
-  const room = Math.max(10, kit.columns - label.length - (isNative(kit) ? 6 : 2))
-  const segments = fitSegments(hudSegments(hud, kit.columns, kit.surface), room)
+  const room = Math.max(10, kit.columns - label.length - GAP - (isNative(kit) ? 4 : 0))
+  const all = hudSegments(hud, kit.columns, kit.surface)
+  const now = hud.now
+  // The work line takes what the meters leave; it yields first when room is short.
+  let kept = fitSegments(all, room - (now === null ? 0 : NOW_MIN + GAP))
+  const used = kept.reduce((n, s) => n + widthOf(s), 0) + Math.max(0, kept.length - 1) * GAP
+  const isNowShown = now !== null && room - used - GAP >= NOW_MIN
+  if (now !== null && !isNowShown) kept = fitSegments(all, room)
+  const left = kept.filter(s => s.side === 'left')
+  const right = kept.filter(s => s.side === 'right')
   const line = (
     <Box flexDirection="row" key="hud-line" alignItems="center">
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} columnGap={GAP} {...clip(kit)}>
-        {segments.map(s => (
-          <Text key={`seg-${s.key}`} wrap="truncate-end">
-            {s.spans.map((p, i) => spanEl(kit, `seg-${s.key}-${i}`, p))}
-          </Text>
-        ))}
+      <Box flexDirection="row" columnGap={GAP} flexShrink={0} alignItems="center">
+        {left.map(s => segmentEl(kit, s))}
       </Box>
-      <Button key="open" label={label} plain dimColor onPress={kit.actions.togglePane} />
+      <Box key="hud-now" flexGrow={1} flexShrink={1} marginLeft={GAP} {...clip(kit)}>
+        {isNowShown && now !== null ? (
+          <Text wrap="truncate-end">
+            <Text color="suggestion">{`${G.arrow} `}</Text>
+            <Text dimColor={now.source === 'thinking' ? true : undefined}>{now.text}</Text>
+          </Text>
+        ) : null}
+      </Box>
+      <Box flexDirection="row" columnGap={GAP} flexShrink={0} marginLeft={right.length > 0 ? GAP : 0} alignItems="center">
+        {right.map(s => segmentEl(kit, s))}
+      </Box>
+      <Box marginLeft={GAP} flexShrink={0}>
+        <Button key="open" label={label} plain dimColor onPress={kit.actions.togglePane} />
+      </Box>
     </Box>
   )
   const alert = hud.alert

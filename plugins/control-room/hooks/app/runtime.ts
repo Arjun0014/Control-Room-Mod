@@ -28,12 +28,13 @@ import type { PermissionLogEntry, TabId } from '../../types'
 import { COMMAND, LIMITS, MIN_ENGINE, PANE_ID, PANE_TITLE, SHORT_COMMAND, STORE_KEYS } from '../constants'
 import { type Effective, POLICY_SECTION_ID, effective, policySections, policyText } from '../core/policy'
 import { applyProfile, findProfile, profileLabel } from '../core/profiles'
-import { type Settings, clone, defaultSettings, normalizeSettings } from '../core/settings'
+import { PERMISSION_LABEL, type Settings, clone, defaultSettings, normalizeSettings } from '../core/settings'
 import { clean } from '../core/text'
 import { versionAtLeast } from '../core/version'
 import { ActivityTracker } from '../features/activity'
 import * as Autopilot from '../features/autopilot'
 import * as Chain from '../features/chain'
+import * as Plan from '../features/plan'
 import { type GuardAssessment, assessExit, isRepeat } from '../features/guard'
 import * as Guard from '../features/guard'
 import { adjustVerdict, decisionFor, denyMessage, editPathOf, findingsFor, isEditTool, isShellTool } from '../features/permissions/decide'
@@ -110,7 +111,8 @@ export class Runtime {
 
   ui = {
     tab: 'overview' as TabId,
-    activitySub: 'calls' as 'calls' | 'changes',
+    activitySub: 'summary' as 'summary' | 'raw',
+    showGenerated: false,
     selectedPath: null as string | null,
     expanded: new Set<string>(),
     isPaneOpen: false,
@@ -118,6 +120,9 @@ export class Runtime {
   }
   notes: string[] = []
   savedAt: number | null = null
+
+  /** Milestones finished when the turn began, so the turn's summary can count its own. */
+  turnStartDone = 0
 
   /** What the next plugin-submitted turn is, so turn.start can label it. */
   private expecting: TurnKind | null = null
@@ -264,13 +269,13 @@ export class Runtime {
     const now = await host.now()
     const existing = await findRunBySession(host, this.sessionId)
     if (existing !== null) {
-      this.run = { ...existing, status: 'active' }
+      this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan) }
       return
     }
     const resumedFrom = this.startSource?.source === 'resume' ? this.startSource.sessionId : null
     const previous = resumedFrom === null ? null : await findRunBySession(host, resumedFrom)
     if (previous !== null) {
-      this.run = Chain.rollOver(previous, { end: 'resume', endNote: 'resumed', nextId: this.sessionId, nextStart: 'resume', now })
+      this.run = Chain.rollOver({ ...previous, plan: Plan.planOf(previous.plan) }, { end: 'resume', endNote: 'resumed', nextId: this.sessionId, nextStart: 'resume', now })
     } else {
       this.run = Chain.newRun({
         id: Chain.runIdOf(now, Math.random()),
@@ -618,6 +623,7 @@ export class Runtime {
     if (isOwnPrompt(origin)) return context
     if (isPersonOrigin(origin)) {
       this.turn.request = text
+      this.noteObjective(text)
       if (this.autopilot.state === 'pending') context.push(prompts.pendingPromptReminder())
       this.planRoute(text)
     }
@@ -634,6 +640,30 @@ export class Runtime {
 
   /** True once a request went out, so an unreached compose hook means it is bypassed. */
   composeObserved = false
+
+  /**
+   * The run's objective: the person's latest substantial request (a short
+   * "yes" or "continue" keeps the one before), cut to its first sentence.
+   */
+  private noteObjective(text: string): void {
+    if (this.run === null) return
+    const objective = Plan.objectiveOf(text)
+    if (objective === null) return
+    const isSubstantial = text.trim().length >= 40 || this.run.objective === undefined || this.run.objective === null
+    if (!isSubstantial || this.run.objective === objective) return
+    this.run = { ...this.run, objective }
+    this.persistRun()
+    this.publisher.mark('activity', 'hud')
+  }
+
+  /** Claude's milestones for this run. */
+  get plan(): Plan.Plan {
+    return this.run?.plan ?? Plan.emptyPlan()
+  }
+
+  get progress(): Plan.Progress {
+    return Plan.progressOf(this.plan)
+  }
 
   private planRoute(text: string): void {
     const eff = this.effective
@@ -672,6 +702,7 @@ export class Runtime {
     this.guard.turnBlocks = 0
     this.guard.lastBlockedAnswer = ''
     this.activity.turnStarted(Date.now())
+    this.turnStartDone = this.progress.done
     this.publisher.mark('hud', 'pane', 'activity', 'spinner')
   }
 
@@ -874,6 +905,8 @@ export class Runtime {
     if (decision.state === 'deny' && decision.category !== null) {
       this.permissionCounts.denied += 1
       this.logPermission({ tool, category: decision.category, state: 'deny', evidence: clean(decision.evidence, 120), outcome: 'denied' })
+      this.activity.refused({ id, tool, input, agentId, now: Date.now(), status: 'denied', reason: `Permission Policy: ${PERMISSION_LABEL[decision.category]} is set to Deny` })
+      this.publisher.mark('activity', 'hud')
       return denyMessage(decision)
     }
     if (isShellTool(tool)) {
@@ -882,7 +915,8 @@ export class Runtime {
       if (refusal !== null) {
         this.resourceStats.refused += 1
         this.logPermission({ tool, category: 'resources', state: 'deny', evidence: clean(command, 120), outcome: 'refused-heavy' })
-        this.publisher.mark('resources')
+        this.activity.refused({ id, tool, input, agentId, now: Date.now(), status: 'held', reason: 'Held back: the machine is busy and other heavy jobs are running' })
+        this.publisher.mark('resources', 'activity', 'hud')
         return refusal
       }
     }
@@ -890,7 +924,23 @@ export class Runtime {
     if (isEdit) this.turn.editCount += 1
     this.activity.started({ id, tool, input, agentId, now: Date.now() })
     this.publisher.mark('activity', 'spinner', 'hud')
+    this.tickWhileRunning()
     return null
+  }
+
+  private ticker: { cancel: () => void } | null = null
+
+  /** While a call runs, Activity's elapsed times and long-running notes refresh every few seconds. */
+  private tickWhileRunning(): void {
+    const host = this.host
+    if (host === null || this.ticker !== null) return
+    this.ticker = host.every(LIMITS.runningTickMs, () => {
+      if (this.activity.runningItems().length === 0) {
+        this.ticker?.cancel()
+        this.ticker = null
+      }
+      this.publisher.mark('activity', 'hud')
+    })
   }
 
   private gateHeavy(command: string): string | null {
@@ -908,15 +958,25 @@ export class Runtime {
   }
 
   /** tool.call, after. */
-  afterTool(tool: string, input: Record<string, unknown>, id: string, result: ToolCallResult | undefined): void {
+  afterTool(tool: string, input: Record<string, unknown>, id: string, result: ToolCallResult | undefined, agentId?: string): void {
     const status = result === undefined ? 'error' : result.deny !== undefined ? 'denied' : result.isError === true ? 'error' : 'ok'
-    this.activity.finished({ id, status, result: result?.result, now: Date.now() })
+    const now = Date.now()
+    this.activity.finished({ id, status, result: result?.result, text: result?.deny ?? result?.text, now })
+    // Claude's own task list is the run's plan; a subagent's list is its own business.
+    if (status === 'ok' && agentId === undefined && Plan.isPlanTool(tool) && this.run !== null) {
+      const session = Chain.currentSession(this.run)?.index ?? 1
+      const plan = Plan.applyTool(this.plan, { tool, input, result: result?.result, session, now })
+      if (plan !== this.plan) {
+        this.run = { ...this.run, plan }
+        this.persistRun()
+      }
+    }
     if (tool === 'TaskStop' && status === 'ok') {
       const taskId = typeof input.task_id === 'string' ? input.task_id : typeof input.shell_id === 'string' ? input.shell_id : null
       if (taskId !== null) this.activity.backgroundEnded(taskId)
     }
     if (tool === 'Agent') void this.refreshAgents()
-    this.publisher.mark('activity', 'spinner', 'hud', 'resources')
+    this.publisher.mark('activity', 'spinner', 'hud', 'resources', 'pane')
   }
 
   /** tool.check: the engine's verdict adjusted by the policy (never looser than allowed). */
@@ -1153,9 +1213,12 @@ export class Runtime {
   }
 
   setTab(tab: TabId): void {
+    const isChange = this.ui.tab !== tab
     this.ui.tab = tab
     this.ui.openPicker = null
     this.publisher.mark('pane')
+    // A new section starts at its top, wherever the last one was scrolled to.
+    if (isChange) void this.host?.scrollPaneToTop().catch(() => undefined)
   }
 
   /** Opens one in-place picker (terminal, mobile), or closes it when it is the open one. */

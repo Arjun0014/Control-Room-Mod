@@ -97,9 +97,20 @@ export type HudModel = {
   guard: { isOn: boolean; continued: number }
   session: { run: number | null; index: number }
   alert: { kind: 'pending' | 'awaiting' | 'load'; text: string; tone: Tone } | null
+  /** Run progress from Claude's own task list (milestones done of total); null until it keeps one. */
+  work: { done: number; total: number; current: string | null } | null
+  /** What Claude is doing right now, while a turn runs. */
+  now: { text: string; source: 'plan' | 'tool' | 'thinking' } | null
+  /** Checks whose latest run failed ("Tests"). */
+  failing: string[]
+  /** This turn's calls that still need a look: unresolved failures and refusals. */
+  attention: number
 }
 
 export type TabId = 'overview' | 'context' | 'behavior' | 'guardrails' | 'activity' | 'setup'
+
+/** Activity's two views: the summary (run, turn, attention, checks, changes) and every tool call. */
+export type ActivitySub = 'summary' | 'raw'
 
 export type AutopilotView = {
   state: string
@@ -129,7 +140,7 @@ export type PaneModel = {
   openPicker: string | null
   /** Each system in plain words, as the HUD, the status line and /cr status say it. */
   status: Record<SystemId, StatusView>
-  activitySub: 'calls' | 'changes'
+  activitySub: ActivitySub
   settings: ControlRoomSettings
   profileLabel: string
   runLabel: string
@@ -197,6 +208,7 @@ export type ActivityItemView = {
   kind: string
   label: string
   status: string
+  reason: string | null
   startedAt: number
   endedAt: number | null
   isSubagent: boolean
@@ -208,18 +220,74 @@ export type FileChangeView = {
   display: string
   added: number
   removed: number
+  /** False when no tool reported the lines: drawn "diff unavailable", never "+0 −0". */
+  hasDiff: boolean
   edits: number
   isCreated: boolean
   isDeleted: boolean
   lastAt: number
 }
 
+/** The run at a glance: what it is for, how far it is, what is under way and next. */
+export type MissionView = {
+  objective: string | null
+  /** Claude's milestones (its task list), or null while it keeps none. */
+  plan: {
+    done: number
+    total: number
+    /** A window around the work under way; `earlier` finished and `later` open ones are left out. */
+    tasks: { subject: string; status: string; isCurrent: boolean }[]
+    earlier: number
+    later: number
+  } | null
+  now: string | null
+  next: string | null
+  isWorking: boolean
+  session: number
+  handoffs: number
+}
+
+export type AttentionView = {
+  id: string
+  kind: 'failed' | 'blocked' | 'held' | 'running' | 'slow'
+  title: string
+  reason: string | null
+  state: 'unresolved' | 'recovered' | null
+  attempts: number
+  /** How long it took (slow), or null. */
+  durationMs: number | null
+  /** When it started: a running call's elapsed time is drawn from this. */
+  since: number
+}
+
+export type ValidationView = {
+  kind: string
+  label: string
+  command: string
+  status: 'passed' | 'failed' | 'running' | 'blocked' | 'background' | 'stopped'
+  durationMs: number | null
+  runs: number
+  failures: number
+  isRecovered: boolean
+}
+
+export type ChangeGroupView = { id: string; label: string; files: FileChangeView[] }
+
 export type ActivityView = {
+  /** The spinner's line: `Working · 27 tools · 6 files changed`. */
   summary: string
   turn: number
   sessionTools: number
+  mission: MissionView
+  /** What Claude did in the current (or last) turn, in a few counted lines. */
+  turnSummary: { lines: string[]; isRunning: boolean; durationMs: number | null; tools: number }
+  attention: AttentionView[]
+  validation: ValidationView[]
+  /** Changed files by kind, real project changes first; `generated` last. */
+  groups: ChangeGroupView[]
+  showGenerated: boolean
+  /** Every tool call, newest first (the secondary view). */
   items: ActivityItemView[]
-  files: FileChangeView[]
   totals: { files: number; added: number; removed: number }
   selectedPath: string | null
   selectedHunks: string

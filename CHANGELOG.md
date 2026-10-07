@@ -8,29 +8,70 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
-Planned as 1.2.0. In progress: the prompt-cache model and Cache Guardian are in; their panel
-views, the redesigned status bar and Overview, run-state hardening, the companion, docs and
-screenshots are not.
+Planned as 1.2.0. Built and tested (217 tests); still to do before release: the remaining docs
+(README, DESIGN, ARCHITECTURE, CONFIGURATION, SECURITY, TROUBLESHOOTING, CONTRIBUTING), a
+retaken `cli-cache.png`, the version bump, and this section's final wording.
 
 ### Added
 
-- **Cache Guardian** (work in progress). Reads every main-thread request's cache figures (tokens
-  read from the cache, written to it, sent uncached), learns the cache's lifetime (the engine's
-  own on a model switch, or observed: a request after more than five idle minutes that still
-  read the cache proves the one-hour TTL), and explains misses: the change seen before one (a
-  model or effort switch, Control Room's own policies, the output style, the tools, compaction),
-  idling past the lifetime, or nothing seen. Claude Code reports no expiry, hit ratio or miss
-  cause; these are derived from what it does report.
-- **Keep warm** (off by default): refreshes the cache before it lapses while you are away, by
-  re-sending the last request once (`$.model.fork`, which the transcript never sees), ten minutes
-  ahead of the expiry for the one-hour cache and a minute ahead for the five-minute one, for at
-  most a set idle time. It stands down while a handoff is about to clear the context and keeps
-  the cache through a compact fallback. It checks itself: the first request after the expiry a
-  refresh replaced must still read the cache, and it stops itself if refreshes do not hold it.
+- **Cache Guardian.** Reads every main-thread request's cache figures (tokens read from the
+  cache, written to it, sent uncached), learns the cache's lifetime (the engine's own on a model
+  switch, or observed: a request after more than five idle minutes that still read the cache
+  proves the one-hour TTL), and explains misses: the change seen before one (a model or effort
+  switch, the model router's own switch, Control Room's policies, the output style, the tools,
+  compaction), idling past the lifetime, or nothing seen; a change made after the cache had
+  surely lapsed is not blamed. Claude Code reports no expiry, hit ratio or miss cause; these are
+  derived from what it does report, and the panel says so.
+- **Keep warm** (off by default; Context → Cache, `/cr cache keep on`): refreshes the cache
+  before it lapses while you are away, by re-sending the last request once (`$.model.fork`,
+  which the transcript never sees), ten minutes ahead of the expiry for the one-hour cache and a
+  minute ahead for the five-minute one, for at most a set idle time (the five-minute cache at
+  most 45 minutes: past that, refreshing costs more than one rebuild). With the lifetime
+  unknown, one refresh at six idle minutes learns it. It stands down while a handoff is about to
+  clear the context and keeps the cache through a handoff that compacts. It checks itself: the
+  first request after the expiry a refresh replaced must still read the cache, and it stops
+  itself if refreshes do not hold it; turning it on again lets it try afresh.
 - **Cache-aware changes**: a model switch you make is confirmed first when a large warm cache
   would be lost (with Claude Code's own cost estimate); the model router no longer downgrades the
-  main conversation while its cache is warm; and while the cache is warm, settings changed
-  mid-context reach Claude as a note instead of rewriting the system prompt (Keep policies stable).
+  main conversation while its cache is warm; while the cache is warm, settings changed
+  mid-context reach Claude as a note instead of rewriting the system prompt (Keep policies
+  stable); an effort change on a model where it was seen to rebuild the cache is announced.
+- **The prompt cache in the panel**: Context's Cache card (state, time left, tokens cached, hit
+  ratio, Keep warm with its idle limit, Ask before a model switch, Keep policies stable) and
+  Cache health (the recent rebuilds: what happened, tokens re-cached, preventable, expected or
+  unexplained, and what would avoid it); a toast for a costly preventable rebuild; `/cr cache`.
+- **Handoff Health and Continuity**: when the handoff notes are checked, what the handoff left
+  for the fresh context (run state saved, the milestone under way, the notes, the docs updated,
+  validation recorded, CLAUDE.md); after the fresh context's first turn, what it picked up (notes
+  read, run state restored, milestone picked up, docs read, work resumed), with a toast. Shown in
+  Context → Last handoff, counted from tool calls only.
+- **Milestones may be verifying (with evidence) or blocked (with the blocker)**, in Control
+  Room's milestones tool, Activity and the continuation context.
+- **Kit**, an optional pixel companion (Setup → Companion, `/cr companion on`; off by default):
+  a small fox in Claude orange on a row of its own under the status bar, showing what Claude is
+  doing (working, reading, waiting on a check, celebrating, worried, carrying the handoff notes,
+  tending the cache, asleep). The terminal plays it in a surface module on its own clock; Desktop
+  draws an SVG that animates itself. Reduce motion holds it still; a click opens Control Room.
+- **Git in the terminal**: the branch and the uncommitted files in Overview and `/cr status`
+  (one read-only `git status` after a turn, at most every 15 s). Desktop shows Git itself.
+- Development: `/demo miss` plays a model switch halfway through the scripted turn, with
+  realistic cache figures; `tools/console` takes `-Also <plugin folder>` to load the demo beneath
+  Control Room.
+
+### Changed
+
+- **The status bar.** The top line says what is happening and where in the plan, with the whole
+  run's cost and a Control Room button (bright while the panel is open) on its right. The second
+  line holds the three lifecycles, each its own shape: Context (a line with the handoff tick),
+  Work (a track of milestones, ●─●─◉─○; SVG circles on Desktop, the current one pulsing) and
+  Cache (a clock face emptying as the cache's lifetime runs out). A handoff that needs you takes
+  a line of its own above.
+- **Overview** leads with the run (its number, the session, the run's cost, the objective), then
+  Work, Context and Cache cards, each with how it starts over, then Now.
+- Work progress is drawn as a track of milestones everywhere (it was squares).
+- The handoff prompt names four places, each for what it is for: the run's milestones (the
+  canonical run state), the project's own docs, CLAUDE.md (durable instructions only, never a
+  progress log) and the notes (the prompt Claude would want to receive).
 
 ## [1.1.0] - 2026-10-07
 

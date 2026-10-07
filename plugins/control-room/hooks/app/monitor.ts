@@ -40,6 +40,8 @@ export class ResourceMonitor {
   private lastProc: ProcStat | null = null
   private generation = 0
   private ceilings: Ceilings | null = null
+  /** Sampling for the status bar's live readings, with or without ceilings. */
+  private isWanted = false
   private restarts = 0
 
   constructor(
@@ -56,12 +58,16 @@ export class ResourceMonitor {
     return this.platform
   }
 
-  /** Starts (or restarts) sampling for these ceilings; stops when null. */
-  async configure(host: Host, cwd: string, ceilings: Ceilings | null, intervalSec: number): Promise<void> {
-    const wasRunning = this.ceilings !== null && this.status !== 'off'
+  /**
+   * Starts (or restarts) sampling: for these ceilings, or only for the live
+   * readings when `isWanted`; stops when neither asks for it.
+   */
+  async configure(host: Host, cwd: string, ceilings: Ceilings | null, intervalSec: number, isWanted = false): Promise<void> {
+    const wasRunning = this.status !== 'off'
     const sameInterval = this.interval === intervalSec
     this.ceilings = ceilings
-    if (ceilings === null) {
+    this.isWanted = isWanted
+    if (ceilings === null && !isWanted) {
       this.stop()
       return
     }
@@ -125,7 +131,7 @@ export class ResourceMonitor {
     if (generation === this.generation && this.restarts < 2) {
       this.restarts += 1
       this.timer = host.after(15_000, () => {
-        if (generation === this.generation && this.ceilings !== null) void this.start(host, cwd)
+        if (generation === this.generation && (this.ceilings !== null || this.isWanted)) void this.start(host, cwd)
       })
     }
   }
@@ -156,8 +162,13 @@ export class ResourceMonitor {
   }
 
   reevaluate(now: number): void {
-    if (this.ceilings === null) return
     const previous = this.pressure
+    if (this.ceilings === null) {
+      // Readings only: no ceilings, no pressure; the live values still go out.
+      this.pressure = UNKNOWN
+      this.onSample(this.pressure, previous)
+      return
+    }
     this.pressure = evaluate({
       samples: this.samples,
       ceilings: this.ceilings,
@@ -188,6 +199,12 @@ export class ResourceMonitor {
     this.error = null
     this.lastProc = null
     this.onStatus()
+  }
+
+  /** The newest reading, whether or not ceilings are set. */
+  latest(): { cpu: number | null; ram: number | null; at: number } | null {
+    const s = this.samples[this.samples.length - 1]
+    return s === undefined ? null : { cpu: s.cpu, ram: s.ram, at: s.at }
   }
 
   cpuSeries(n: number): number[] {

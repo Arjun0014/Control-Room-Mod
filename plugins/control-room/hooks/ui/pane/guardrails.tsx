@@ -1,21 +1,19 @@
 /**
  * Guardrails: what Claude may do, how many helpers it may run, and how hard
- * it may push the machine. Every value reads as a word ("Ask", "Deny"); its
- * options open in place with one line on what each means.
+ * it may push the machine. Three cards. Every value reads as a word ("Ask",
+ * "Deny"); its options open in place with one line on what each means.
  */
 
 import type { RenderElement } from 'claude-code'
 
-import type { PaneModel, PermissionCategory, PermissionState, PermissionsView, ResourcesView, Tone } from '../../../types'
+import type { PaneModel, PermissionState, PermissionsView, ResourcesView } from '../../../types'
 import * as fmt from '../../core/format'
 import { DEFAULT_PERMISSIONS, PERMISSION_CATEGORIES, PERMISSION_LABEL } from '../../core/settings'
 import { CATEGORY_INFO } from '../../features/permissions/categories'
 import { statesFor } from '../../features/permissions/decide'
 import type { Kit } from '../kit'
-import { buttons, emptyState, labelWidth, listItem, meterBar, note, picker, row, section, spark, stepper, switchControl } from '../primitives'
-import { G, toneOfLevel, toneProps } from '../theme'
-
-const PERM_LABEL = PERMISSION_LABEL
+import { buttons, card, gauge, listItem, note, picker, row, stepper, switchControl } from '../primitives'
+import { ACCENT, G, readingTone, toneOfLevel } from '../theme'
 
 const STATE: Record<PermissionState, { label: string; hint: string }> = {
   default: { label: 'Default', hint: 'Claude Code decides' },
@@ -25,35 +23,18 @@ const STATE: Record<PermissionState, { label: string; hint: string }> = {
 }
 
 const LEVELS = [
-  { value: 'off', label: 'Off' },
-  { value: 'low', label: 'Low', hint: 'CPU 50% · memory 75%' },
-  { value: 'medium', label: 'Medium', hint: 'CPU 70% · memory 85%' },
-  { value: 'high', label: 'High', hint: 'CPU 90% · memory 92%' },
+  { value: 'off', label: 'Off', hint: 'readings only' },
+  { value: 'low', label: 'Low', hint: 'CPU 50% · RAM 75%' },
+  { value: 'medium', label: 'Medium', hint: 'CPU 70% · RAM 85%' },
+  { value: 'high', label: 'High', hint: 'CPU 90% · RAM 92%' },
   { value: 'custom', label: 'Custom', hint: 'your own ceilings' },
 ]
 
-function loadLine(kit: Kit, input: { key: string; label: string; value: number | null; ceiling: number; series: readonly number[]; lw: number }): RenderElement {
-  const { Box, Text } = kit.ui
-  const value = input.value
-  const tone: Tone = value === null ? 'muted' : value >= input.ceiling ? 'bad' : value >= input.ceiling - 10 ? 'warn' : 'good'
-  const sparkWidth = Math.min(16, Math.max(6, Math.floor(kit.columns * 0.18)))
-  const meterWidth = Math.max(8, kit.columns - input.lw - sparkWidth - 8)
-  return (
-    <Box key={`load-${input.key}`} flexDirection="row" alignItems="center">
-      <Box width={input.lw} flexShrink={0}>
-        <Text>{input.label}</Text>
-      </Box>
-      <Box width={meterWidth} flexShrink={1}>
-        {meterBar(kit, { key: `load-${input.key}-meter`, fraction: (value ?? 0) / 100, marker: input.ceiling / 100, tone, width: meterWidth, alt: `${input.label} ${value === null ? 'unknown' : `${Math.round(value)}%`}, ceiling ${input.ceiling}%` })}
-      </Box>
-      <Box width={6} flexShrink={0} justifyContent="flex-end">
-        <Text {...toneProps(tone === 'good' ? 'normal' : tone)}>{value === null ? G.none : `${Math.round(value)}%`}</Text>
-      </Box>
-      <Box marginLeft={2} flexShrink={0}>
-        {spark(kit, { key: `load-${input.key}-spark`, values: input.series, tone: 'muted', width: sparkWidth, ceiling: input.ceiling, alt: `${input.label} over the last minutes` })}
-      </Box>
-    </Box>
-  )
+const AGENT_HINT: Record<string, string> = {
+  unrestricted: 'Claude may run helpers in parallel',
+  limit: 'At most this many at once',
+  ask: 'You approve each one',
+  block: 'Claude works alone; agent types are hidden from it',
 }
 
 export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: PermissionsView | undefined, resources: ResourcesView | undefined): RenderElement {
@@ -61,124 +42,135 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
   const s = pane.settings
   const u = kit.actions.update
   const p = s.permissions
+  const accent = ACCENT.guardrails
   const isDefault = PERMISSION_CATEGORIES.every(c => p[c] === DEFAULT_PERMISSIONS[c])
-  const lw = labelWidth(kit, Math.max(...Object.values(PERM_LABEL).map(l => l.length)))
   const r = s.resources
   const ceilings = resources?.ceilings ?? null
   const recent = permissions?.recent ?? []
+  const live = resources !== undefined && resources.status === 'live' ? resources : null
+  const activity = permissions === undefined || permissions.asked + permissions.denied === 0 ? undefined : `${permissions.asked} asked · ${permissions.denied} denied`
 
   return (
     <Box flexDirection="column">
-      {section(kit, {
+      {card(kit, {
         key: 'permissions',
         title: 'Permissions',
-        aside: permissions === undefined || permissions.asked + permissions.denied + permissions.allowed === 0 ? undefined : `${permissions.asked} asked · ${permissions.denied} denied`,
-        footer: 'Deny is enforced before any prompt, in every mode. Your organisation’s rules always win. Shell commands are matched by pattern, so this narrows what Claude does; it is not a sandbox.',
-        children: [
+        accent,
+        aside: activity,
+        footer: 'Deny stops an action before any prompt, in every mode. Your organisation’s rules always win. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
+        rows: k => [
           ...PERMISSION_CATEGORIES.map(c =>
-            row(kit, {
+            row(k, {
               key: `perm-${c}`,
-              label: PERM_LABEL[c],
-              labelWidth: lw,
-              control: picker(kit, {
+              label: PERMISSION_LABEL[c],
+              subtitle: kit.openPicker === `perm-${c}` ? `e.g. ${CATEGORY_INFO[c].examples}` : undefined,
+              control: picker(k, {
                 key: `perm-${c}`,
                 value: p[c],
                 options: statesFor(c).map(state => ({ value: state, label: STATE[state].label, hint: STATE[state].hint })),
                 onSelect: v => u(d => void (d.permissions[c] = (statesFor(c).includes(v as PermissionState) ? v : 'ask') as PermissionState)),
               }),
-              detail: kit.openPicker === `perm-${c}` ? `e.g. ${CATEGORY_INFO[c].examples}` : undefined,
             }),
           ),
-          isDefault ? null : buttons(kit, [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }], 'perm-actions'),
+          isDefault ? null : buttons(k, [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }], 'perm-actions'),
         ],
       })}
 
       {recent.length === 0
         ? null
-        : section(kit, {
+        : card(kit, {
             key: 'perm-recent',
             title: 'Recent decisions',
-            children: recent.slice(0, 6).map((e, i) =>
-              listItem(kit, {
-                key: `perm-log-${i}`,
-                glyph: e.outcome === 'denied' || e.outcome === 'refused-heavy' ? G.fail : e.outcome === 'asked' ? '?' : G.ok,
-                tone: e.outcome === 'denied' || e.outcome === 'refused-heavy' ? 'bad' : e.outcome === 'asked' ? 'warn' : 'good',
-                text: `${e.outcome === 'refused-heavy' ? 'held back' : e.outcome}  ${e.evidence}`,
-                right: fmt.clock(e.at),
-              }),
-            ),
+            accent,
+            rows: k =>
+              recent.slice(0, 6).map((e, i) =>
+                listItem(k, {
+                  key: `perm-log-${i}`,
+                  glyph: e.outcome === 'denied' || e.outcome === 'refused-heavy' ? G.fail : e.outcome === 'asked' ? '?' : G.ok,
+                  tone: e.outcome === 'denied' || e.outcome === 'refused-heavy' ? 'bad' : e.outcome === 'asked' ? 'warn' : 'good',
+                  text: `${e.outcome === 'refused-heavy' ? 'held back' : e.outcome}  ${e.evidence}`,
+                  right: fmt.clock(e.at),
+                }),
+              ),
           })}
 
-      {section(kit, {
+      {card(kit, {
         key: 'agents',
         title: 'Subagents',
-        footer: s.subagents.mode === 'block' ? 'Claude does the work itself; agent types are hidden from it.' : undefined,
-        children: [
-          row(kit, {
+        accent,
+        aside: pane.agents.running.length > 0 ? `${pane.agents.running.length} running` : undefined,
+        rows: k => [
+          row(k, {
             key: 'sa-mode',
             label: 'Subagents',
-            labelWidth: lw,
-            control: picker(kit, {
+            subtitle: AGENT_HINT[s.subagents.mode],
+            control: picker(k, {
               key: 'sa-mode',
               value: s.subagents.mode,
               options: [
                 { value: 'unrestricted', label: 'No limit' },
-                { value: 'limit', label: 'Up to a number', hint: 'at once' },
+                { value: 'limit', label: 'Limit', hint: 'at most a number at once' },
                 { value: 'ask', label: 'Ask each time' },
                 { value: 'block', label: 'Off', hint: 'Claude works alone' },
               ],
               onSelect: v => u(d => void (d.subagents.mode = (['unrestricted', 'limit', 'ask', 'block'].includes(v) ? v : 'unrestricted') as typeof d.subagents.mode)),
             }),
-            detail: pane.agents.running.length > 0 ? `${pane.agents.running.length} running` : undefined,
           }),
           s.subagents.mode === 'limit' &&
-            row(kit, {
+            row(k, {
               key: 'sa-limit',
               label: 'At most',
-              labelWidth: lw,
-              control: stepper(kit, {
+              control: stepper(k, {
                 key: 'sa-limit',
                 display: String(s.subagents.limit),
                 onDecrease: s.subagents.limit > 1 ? () => u(d => void (d.subagents.limit -= 1)) : undefined,
                 onIncrease: s.subagents.limit < 16 ? () => u(d => void (d.subagents.limit += 1)) : undefined,
               }),
-              detail: 'at once',
             }),
           s.subagents.mode === 'limit' &&
-            row(kit, {
+            row(k, {
               key: 'sa-team',
               label: 'Count teammates',
-              labelWidth: lw,
-              control: switchControl(kit, { key: 'sa-team', isOn: s.subagents.countTeammates, onPress: () => u(d => void (d.subagents.countTeammates = !d.subagents.countTeammates)) }),
+              subtitle: 'Agent-team teammates count toward the limit',
+              control: switchControl(k, { key: 'sa-team', isOn: s.subagents.countTeammates, onPress: () => u(d => void (d.subagents.countTeammates = !d.subagents.countTeammates)) }),
             }),
-          ...pane.agents.running.map(a => listItem(kit, { key: `agent-${a.id}`, glyph: G.dot, tone: 'info', text: `${a.type}  ${a.description}`, right: a.status })),
+          ...pane.agents.running.map(a => listItem(k, { key: `agent-${a.id}`, glyph: G.dot, tone: 'info', text: `${a.type}  ${a.description}`, right: a.status })),
         ],
       })}
 
-      {section(kit, {
+      {card(kit, {
         key: 'load',
         title: 'Machine load',
+        accent,
+        aside: live === null ? undefined : `every ${r.intervalSec} s`,
         footer:
           r.level === 'off'
-            ? 'Keeps your machine responsive: Claude hears when it is busy and holds back extra heavy jobs.'
-            : 'Advisory and machine-wide. Claude is told about pressure and slows down; it is not an OS limit, and other programs are never touched.',
-        children: [
-          row(kit, {
+            ? 'Readings only. Set a limit to have Claude ease off when your machine is busy.'
+            : 'Advisory and machine-wide: Claude is told about pressure and slows down. Not an OS limit, and other programs are never touched.',
+        rows: k => [
+          live !== null && gauge(k, { key: 'cpu', label: 'CPU', value: live.cpu, ceiling: ceilings?.cpu ?? null, series: live.cpuSeries, tone: readingTone(live.cpu, ceilings?.cpu ?? null, { warn: 75, bad: 90 }) }),
+          live !== null && gauge(k, { key: 'ram', label: 'Memory', value: live.ram, ceiling: ceilings?.ram ?? null, series: live.ramSeries, tone: readingTone(live.ram, ceilings?.ram ?? null, { warn: 80, bad: 92 }) }),
+          live === null &&
+            note(
+              k,
+              resources?.status === 'unavailable'
+                ? `Readings unavailable${resources.error === null ? '' : `: ${resources.error}`}`
+                : resources?.status === 'starting'
+                  ? 'Starting the sampler…'
+                  : 'Turn on live readings in Setup, or set a limit, to see CPU and memory.',
+              'res-status',
+            ),
+          row(k, {
             key: 'res-level',
             label: 'Limit',
-            labelWidth: lw,
-            control: picker(kit, { key: 'res-level', value: r.level, options: LEVELS, onSelect: v => u(d => void (d.resources.level = (['off', 'low', 'medium', 'high', 'custom'].includes(v) ? v : 'off') as typeof d.resources.level)) }),
-            ...(r.level === 'off' || resources?.status === 'live' ? {} : { detail: pane.status.load.text.split(' · ').slice(1).join(' · ') || undefined }),
+            subtitle: r.level === 'off' ? 'No ceilings' : r.level === 'custom' ? 'Your own ceilings' : `Ceilings at CPU ${ceilings?.cpu ?? r.cpu}% · RAM ${ceilings?.ram ?? r.ram}%`,
+            control: picker(k, { key: 'res-level', value: r.level, options: LEVELS, onSelect: v => u(d => void (d.resources.level = (['off', 'low', 'medium', 'high', 'custom'].includes(v) ? v : 'off') as typeof d.resources.level)) }),
           }),
-          r.level !== 'off' && resources !== undefined && resources.status === 'live' && ceilings !== null && loadLine(kit, { key: 'cpu', label: 'CPU', value: resources.cpu, ceiling: ceilings.cpu, series: resources.cpuSeries, lw }),
-          r.level !== 'off' && resources !== undefined && resources.status === 'live' && ceilings !== null && loadLine(kit, { key: 'ram', label: 'Memory', value: resources.ram, ceiling: ceilings.ram, series: resources.ramSeries, lw }),
-          r.level !== 'off' && resources !== undefined && resources.status !== 'live' && note(kit, resources.status === 'unavailable' ? `Readings unavailable${resources.error === null ? '' : `: ${resources.error}`}` : 'Starting the sampler…', 'res-status'),
           r.level === 'custom' &&
-            row(kit, {
+            row(k, {
               key: 'res-cpu',
               label: 'CPU ceiling',
-              labelWidth: lw,
-              control: stepper(kit, {
+              control: stepper(k, {
                 key: 'res-cpu',
                 display: `${r.cpu}%`,
                 onDecrease: r.cpu > 10 ? () => u(d => void (d.resources.cpu = Math.max(10, d.resources.cpu - 5))) : undefined,
@@ -186,11 +178,10 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
               }),
             }),
           r.level === 'custom' &&
-            row(kit, {
+            row(k, {
               key: 'res-ram',
               label: 'Memory ceiling',
-              labelWidth: lw,
-              control: stepper(kit, {
+              control: stepper(k, {
                 key: 'res-ram',
                 display: `${r.ram}%`,
                 onDecrease: r.ram > 10 ? () => u(d => void (d.resources.ram = Math.max(10, d.resources.ram - 5))) : undefined,
@@ -198,11 +189,10 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
               }),
             }),
           r.level !== 'off' &&
-            row(kit, {
+            row(k, {
               key: 'res-enf',
               label: 'When over',
-              labelWidth: lw,
-              control: picker(kit, {
+              control: picker(k, {
                 key: 'res-enf',
                 value: r.enforcement,
                 options: [
@@ -213,17 +203,19 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
                 onSelect: v => u(d => void (d.resources.enforcement = (['inform', 'limit', 'strict'].includes(v) ? v : 'limit') as typeof d.resources.enforcement)),
               }),
             }),
-          r.level !== 'off' && resources !== undefined && (resources.noticesSent > 0 || resources.refused > 0) && note(kit, `${fmt.plural(resources.noticesSent, 'notice')} to Claude · ${fmt.plural(resources.refused, 'heavy job')} held back`, 'res-stats'),
-          ...(resources === undefined || resources.background.length === 0
+          r.level !== 'off' && resources !== undefined && (resources.noticesSent > 0 || resources.refused > 0) && note(k, `${fmt.plural(resources.noticesSent, 'notice')} to Claude · ${fmt.plural(resources.refused, 'heavy job')} held back`, 'res-stats'),
+          ...(resources === undefined
             ? []
-            : resources.background.map(b => (
-                <Box key={`bg-${b.id}`} flexDirection="row">
-                  <Box flexGrow={1} flexShrink={1}>
-                    {listItem(kit, { key: `bg-item-${b.id}`, glyph: G.run, tone: toneOfLevel(resources.level), text: b.label, right: fmt.duration(kit.now - b.since) })}
-                  </Box>
-                  {buttons(kit, [{ key: `stop-${b.id}`, label: 'Stop', onPress: () => kit.actions.stopTask(b.id) }], `stop-wrap-${b.id}`)}
-                </Box>
-              ))),
+            : resources.background.map(b => {
+                const stop = buttons(k, [{ key: `stop-${b.id}`, label: 'Stop', onPress: () => kit.actions.stopTask(b.id) }], `stop-wrap-${b.id}`)
+                return row(k, {
+                  key: `bg-${b.id}`,
+                  label: b.label,
+                  subtitle: `Background job · ${fmt.duration(kit.now - b.since)}`,
+                  subtitleTone: toneOfLevel(resources.level) === 'bad' ? 'bad' : 'muted',
+                  ...(stop === null ? {} : { control: { element: stop, width: 8 } }),
+                })
+              })),
         ],
       })}
     </Box>

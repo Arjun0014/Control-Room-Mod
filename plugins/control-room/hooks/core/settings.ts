@@ -136,7 +136,7 @@ export function defaultSystems(): SystemSettings {
     },
     subagents: { mode: 'unrestricted', limit: 2, countTeammates: true },
     focus: { enabled: true, tools: 'compact', results: false, diffs: false, spinner: true },
-    resources: { level: 'off', cpu: 70, ram: 85, intervalSec: 5, enforcement: 'limit' },
+    resources: { level: 'off', cpu: 70, ram: 85, intervalSec: 3, enforcement: 'limit' },
     permissions: { ...DEFAULT_PERMISSIONS },
   }
 }
@@ -146,7 +146,7 @@ export function defaultSettings(): Settings {
     version: 1,
     profile: 'normal',
     ...defaultSystems(),
-    ui: { hud: 'band', toasts: true, openOnStart: false },
+    ui: { hud: 'band', toasts: true, openOnStart: false, liveLoad: true },
     customProfiles: [],
   }
 }
@@ -304,6 +304,7 @@ export function normalizeSettings(raw: unknown): Settings {
       hud: pick(ui.hud, ['band', 'status', 'both', 'off'] as const, d.ui.hud),
       toasts: bool(ui.toasts, d.ui.toasts),
       openOnStart: bool(ui.openOnStart, d.ui.openOnStart),
+      liveLoad: bool(ui.liveLoad, d.ui.liveLoad),
     },
     customProfiles: normalizeCustomProfiles(raw.customProfiles),
   }

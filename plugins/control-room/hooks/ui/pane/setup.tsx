@@ -1,7 +1,7 @@
 /**
- * Setup: profiles (everything at once), display, and about. A profile is
- * picked like a radio button; when the settings drifted from it, the exact
- * changes are listed and can be saved as a profile of their own.
+ * Setup: profiles (everything at once), display, and about. The profile in
+ * use carries a check; when settings drifted from it, the exact changes are
+ * listed, with a way back and a way to keep them as a profile.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -11,112 +11,121 @@ import { VERSION } from '../../constants'
 import { diffSystems, listProfiles } from '../../core/profiles'
 import { systemsOf } from '../../core/settings'
 import type { Kit } from '../kit'
-import { buttons, labelWidth, note, picker, row, section, switchControl } from '../primitives'
-import { G } from '../theme'
+import { buttons, card, isNative, note, picker, row, switchControl } from '../primitives'
+import { ACCENT, G } from '../theme'
 
 const pretty = (v: string): string => (v === 'on' ? 'On' : v === 'off' ? 'Off' : v.charAt(0).toUpperCase() + v.slice(1))
 
 export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
-  const { Box, Text, Button, Input } = kit.ui
+  const { Box, Button, Input } = kit.ui
   const s = pane.settings
   const u = kit.actions.update
-  const lw = labelWidth(kit, 'Open at session start'.length)
+  const accent = ACCENT.setup
   const profiles = listProfiles(s)
   const active = profiles.find(p => p.id === s.profile)
   const changes = active === undefined ? [] : diffSystems(active.systems, systemsOf(s))
-  const nameWidth = Math.max(...profiles.map(p => p.name.length)) + 2
-  const changeWidth = Math.min(28, Math.max(12, ...changes.slice(0, 6).map(c => c.label.length + 4)))
 
   return (
     <Box flexDirection="column">
-      {section(kit, {
+      {card(kit, {
         key: 'profiles',
         title: 'Profile',
-        footer: 'A profile sets everything at once. Changing a setting afterwards keeps the profile, marked as edited.',
-        children: [
-          ...profiles.map(p => {
+        accent,
+        footer: 'A profile sets everything at once. Change anything afterwards and the profile shows as edited.',
+        rows: k =>
+          profiles.map(p => {
             const isActive = p.id === s.profile
-            return (
-              <Box key={`profile-${p.id}`} flexDirection="row">
-                <Box width={nameWidth + 2} flexShrink={0}>
-                  <Button key={`apply-${p.id}`} label={`${isActive ? G.dot : G.ring} ${p.name}`} plain dimColor={!isActive} onPress={() => kit.actions.applyProfile(p.id)} />
-                </Box>
-                <Box flexGrow={1} flexShrink={1}>
-                  <Text dimColor wrap="truncate-end">
-                    {isActive && changes.length > 0 ? 'edited' : p.tagline}
-                  </Text>
-                </Box>
-                {p.isBuiltin ? null : <Button key={`delete-${p.id}`} label="Delete" plain dimColor onPress={() => kit.actions.deleteProfile(p.id)} />}
-              </Box>
-            )
-          }),
-          changes.length === 0 ? null : (
-            <Box key="profile-changes" flexDirection="column" marginTop={1}>
-              <Text dimColor>{`Changed from ${active?.name ?? 'the profile'}:`}</Text>
-              {changes.slice(0, 6).map(c => (
-                <Box key={`change-${c.path}`} flexDirection="row">
-                  <Box width={changeWidth} flexShrink={0}>
-                    <Text dimColor wrap="truncate-end">{`  ${c.label}`}</Text>
+            const label = isActive ? `${G.ok} In use` : 'Use'
+            return row(k, {
+              key: `profile-${p.id}`,
+              label: p.name,
+              subtitle: isActive && changes.length > 0 ? 'Edited' : p.tagline,
+              isDim: !isActive,
+              control: {
+                element: (
+                  <Box key={`profile-${p.id}-actions`} flexDirection="row" columnGap={2}>
+                    {p.isBuiltin ? null : <Button key={`delete-${p.id}`} label="Delete" plain dimColor onPress={() => kit.actions.deleteProfile(p.id)} />}
+                    <Button key={`apply-${p.id}`} label={label} plain={isNative(k) ? undefined : true} dimColor={!isActive} variant={isActive ? 'primary' : 'secondary'} onPress={() => kit.actions.applyProfile(p.id)} />
                   </Box>
-                  <Text dimColor>{pretty(c.from)}</Text>
-                  <Text dimColor>{` ${G.chevron} `}</Text>
-                  <Text>{pretty(c.to)}</Text>
-                </Box>
-              ))}
-              {changes.length > 6 ? <Text dimColor>{`  and ${changes.length - 6} more`}</Text> : null}
-            </Box>
-          ),
-          changes.length === 0 || Input === undefined ? null : (
-            <Box key="profile-save" flexDirection="row" marginTop={1}>
-              <Box width={lw} flexShrink={0}>
-                <Text>Save as</Text>
-              </Box>
-              <Input key="profile-save" value="" placeholder="a name, e.g. Night shift" submitLabel="save" onSubmit={name => kit.actions.saveProfile(name)} />
-            </Box>
-          ),
-          changes.length === 0 || active === undefined ? null : buttons(kit, [{ key: 'profile-revert', label: `Back to ${active.name}`, onPress: () => kit.actions.applyProfile(active.id) }], 'profile-actions'),
-        ],
+                ),
+                width: label.length + (p.isBuiltin ? 0 : 8) + (isNative(k) ? 4 : 0),
+              },
+            })
+          }),
       })}
 
-      {section(kit, {
+      {changes.length === 0 || active === undefined
+        ? null
+        : card(kit, {
+            key: 'changes',
+            title: `Changed from ${active.name}`,
+            accent,
+            aside: changes.length > 8 ? `${changes.length} changes` : undefined,
+            rows: k => [
+              ...changes.slice(0, 8).map(c => row(k, { key: `change-${c.path}`, label: c.label, value: `${pretty(c.from)} ${G.chevron} ${pretty(c.to)}` })),
+              changes.length > 8 ? note(k, `and ${changes.length - 8} more`, 'changes-more') : null,
+              Input === undefined
+                ? null
+                : row(k, {
+                    key: 'profile-save',
+                    label: 'Keep as a profile',
+                    control: { element: <Input key="profile-save" value="" placeholder="name" submitLabel="save" onSubmit={name => kit.actions.saveProfile(name)} />, width: 18 },
+                  }),
+              buttons(k, [{ key: 'profile-revert', label: `Back to ${active.name}`, onPress: () => kit.actions.applyProfile(active.id) }], 'profile-actions'),
+            ],
+          })}
+
+      {card(kit, {
         key: 'display',
         title: 'Display',
-        children: [
-          row(kit, {
+        accent,
+        rows: k => [
+          row(k, {
             key: 'ui-hud',
             label: 'Status bar',
-            labelWidth: lw,
-            control: picker(kit, {
+            subtitle: s.ui.hud === 'off' ? '/cr still opens Control Room' : 'Live readings while you work',
+            control: picker(k, {
               key: 'ui-hud',
               value: s.ui.hud,
               options: [
-                { value: 'band', label: 'Above the prompt' },
-                { value: 'status', label: 'In the status line' },
+                { value: 'band', label: 'Above prompt' },
+                { value: 'status', label: 'Status line' },
                 { value: 'both', label: 'Both' },
-                { value: 'off', label: 'Hidden', hint: '/cr still opens Control Room' },
+                { value: 'off', label: 'Hidden' },
               ],
               onSelect: v => u(d => void (d.ui.hud = (['band', 'status', 'both', 'off'].includes(v) ? v : 'band') as typeof d.ui.hud)),
             }),
           }),
-          row(kit, { key: 'ui-toasts', label: 'Notifications', labelWidth: lw, control: switchControl(kit, { key: 'ui-toasts', isOn: s.ui.toasts, onPress: () => u(d => void (d.ui.toasts = !d.ui.toasts)) }), detail: 'brief notes when something changes' }),
-          row(kit, {
+          row(k, {
+            key: 'ui-load',
+            label: 'Live CPU and memory',
+            subtitle: `Machine-wide totals every ${s.resources.intervalSec} s`,
+            control: switchControl(k, { key: 'ui-load', isOn: s.ui.liveLoad, onPress: () => u(d => void (d.ui.liveLoad = !d.ui.liveLoad)) }),
+          }),
+          row(k, {
+            key: 'ui-toasts',
+            label: 'Notifications',
+            subtitle: 'Brief notes when something changes',
+            control: switchControl(k, { key: 'ui-toasts', isOn: s.ui.toasts, onPress: () => u(d => void (d.ui.toasts = !d.ui.toasts)) }),
+          }),
+          row(k, {
             key: 'ui-open',
-            label: 'Open at session start',
-            labelWidth: lw,
-            control: switchControl(kit, { key: 'ui-open', isOn: s.ui.openOnStart, onPress: () => u(d => void (d.ui.openOnStart = !d.ui.openOnStart)) }),
-            detail: s.ui.openOnStart && kit.surface === 'terminal' ? 'in terminals 144 columns or wider' : undefined,
+            label: 'Open at start',
+            subtitle: kit.surface === 'terminal' ? 'In terminals 144 columns or wider' : 'Open Control Room with each session',
+            control: switchControl(k, { key: 'ui-open', isOn: s.ui.openOnStart, onPress: () => u(d => void (d.ui.openOnStart = !d.ui.openOnStart)) }),
           }),
         ],
       })}
 
-      {section(kit, {
+      {card(kit, {
         key: 'about',
         title: 'About',
-        children: [
-          row(kit, { key: 'about-version', label: 'Control Room', labelWidth: lw, value: VERSION, valueTone: 'muted' }),
-          row(kit, { key: 'about-engine', label: 'Claude Code', labelWidth: lw, value: pane.engine.version ?? 'unknown', valueTone: pane.engine.isSupported ? 'muted' : 'warn' }),
-          note(kit, 'Runs entirely on your machine. No network requests, no telemetry. It keeps only its settings and run history, in Claude Code’s plugin store.', 'about-privacy'),
-          buttons(kit, [{ key: 'reset', label: 'Reset all settings', onPress: kit.actions.resetSettings }], 'about-actions'),
+        accent,
+        rows: k => [
+          row(k, { key: 'about-version', label: 'Control Room', value: VERSION, valueTone: 'muted' }),
+          row(k, { key: 'about-engine', label: 'Claude Code', value: pane.engine.version ?? 'unknown', valueTone: pane.engine.isSupported ? 'muted' : 'warn' }),
+          note(k, 'Runs on your machine only. No network requests, no telemetry. It keeps its settings and run history in Claude Code’s plugin store.', 'about-privacy'),
+          buttons(k, [{ key: 'reset', label: 'Reset all settings', onPress: kit.actions.resetSettings }], 'about-actions'),
         ],
       })}
     </Box>

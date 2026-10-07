@@ -1,17 +1,21 @@
 /**
- * Control Room's design system: a handful of components every page is made
- * of, each drawn natively per surface.
+ * Control Room's design system: the few components every page is made of,
+ * each drawn natively per surface.
+ *
+ * Layout: a page is a stack of cards. A card is a small-caps title in its
+ * section's accent, a rounded box of rows, and at most a short footnote.
+ * A row reads like a settings list: the label (and a one-line description
+ * under it) on the left, the control on the right edge, at every width.
+ * Controls too wide for the right edge (a segmented choice) sit under the
+ * label instead.
  *
  * Terminal: quiet glyph controls that work with the keyboard (Tab, Enter)
  * and the pointer alike: `● On`, `● Standard  ○ Strict`, `Ask ▾` opening its
  * options in place, `−  70%  +`. No popups: the terminal's own Select cannot
  * be picked or closed with the pointer.
- * Desktop / VS Code: native buttons and popups, SVG meters.
+ * Desktop / VS Code: native buttons and popups, SVG meters, rows spaced so
+ * native buttons never touch.
  * Mobile: native buttons, choices in place, SVG meters.
- *
- * Layout rhythm: a section is a dim small-caps title, its rows, and at most
- * a short dim footnote; one blank line between sections. A row is a label
- * column and a control, with its detail beside it when it fits, else below.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -28,39 +32,57 @@ export type Choice = { value: string; label: string; hint?: string }
 /** A control and the cells it takes; `below` is drawn under its row (an open picker). */
 export type Control = { element: RenderElement; width: number; below?: RenderElement | null }
 
-/** The label column of control rows: a share of the width, never cramped, never more than half. */
-export function labelWidth(kit: Kit, longest?: number): number {
-  const base = Math.min(24, Math.max(14, Math.floor(kit.columns * 0.38)))
-  if (longest === undefined) return base
-  return Math.min(Math.max(base, longest + 2), Math.max(base, Math.floor(kit.columns * 0.5)))
-}
+type Child = RenderElement | null | false | undefined
+
+const present = (list: readonly Child[]): RenderElement[] => list.filter((c): c is RenderElement => c !== null && c !== false && c !== undefined)
 
 // ---------------------------------------------------------------------------
 // Structure
 
-export function section(
+/**
+ * A titled group of rows in a rounded box. `rows` receives the kit for the
+ * box's inside (its width less the border and padding). The title takes the
+ * section's accent; `link` puts a quiet "Open ›" at its right.
+ */
+export function card(
   kit: Kit,
-  input: { key: string; title?: string; aside?: string; footer?: string; children: readonly (RenderElement | null | false)[] },
+  input: {
+    key: string
+    title?: string
+    accent?: string
+    aside?: string
+    link?: { label: string; onPress: () => void }
+    footer?: string
+    rows: (inner: Kit) => readonly Child[]
+  },
 ): RenderElement {
-  const { Box, Text } = kit.ui
-  const children = input.children.filter((c): c is RenderElement => c !== null && c !== false)
+  const { Box, Text, Button } = kit.ui
+  const inner: Kit = { ...kit, columns: Math.max(16, kit.columns - 4) }
+  const rows = present(input.rows(inner))
+  const hasHead = input.title !== undefined || input.aside !== undefined || input.link !== undefined
   return (
-    <Box key={`section-${input.key}`} flexDirection="column" marginTop={1}>
-      {input.title === undefined ? null : (
-        <Box flexDirection="row" justifyContent="space-between" key={`section-${input.key}-head`}>
-          <Text dimColor bold>
-            {input.title.toUpperCase()}
+    <Box key={`card-${input.key}`} flexDirection="column" marginTop={1}>
+      {hasHead ? (
+        <Box key={`card-${input.key}-head`} flexDirection="row" justifyContent="space-between" alignItems="center">
+          <Text bold color={input.accent} dimColor={input.accent === undefined ? true : undefined}>
+            {(input.title ?? '').toUpperCase()}
           </Text>
-          {input.aside === undefined || input.aside === '' ? null : (
+          {input.link !== undefined ? (
+            <Button key={`${input.key}-link`} label={`${input.link.label} ${G.chevron}`} plain dimColor onPress={input.link.onPress} />
+          ) : input.aside === undefined || input.aside === '' ? null : (
             <Text dimColor wrap="truncate-start">
               {input.aside}
             </Text>
           )}
         </Box>
+      ) : null}
+      {rows.length === 0 ? null : (
+        <Box key={`card-${input.key}-box`} flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1} rowGap={isNative(kit) ? 1 : 0}>
+          {rows}
+        </Box>
       )}
-      {children}
       {input.footer === undefined || input.footer === '' ? null : (
-        <Box key={`section-${input.key}-foot`}>
+        <Box key={`card-${input.key}-foot`} paddingX={1}>
           <Text dimColor wrap="wrap">
             {input.footer}
           </Text>
@@ -71,22 +93,25 @@ export function section(
 }
 
 /**
- * A settings row: label, control, detail. The detail sits beside the
- * control when the line holds it, else under it; a control too wide for
- * the line moves under the label.
+ * A settings row: label (and a dim description under it) on the left, the
+ * control or value on the right. A control wider than about half the row
+ * moves under the label. An open picker's options appear under the row.
  */
 export function row(
   kit: Kit,
-  input: { key: string; label: string; control?: Control; value?: string; valueTone?: Tone; detail?: string; detailTone?: Tone; labelWidth?: number; isDim?: boolean },
+  input: { key: string; label: string; subtitle?: string; subtitleTone?: Tone; control?: Control; value?: string; valueTone?: Tone; isDim?: boolean },
 ): RenderElement {
   const { Box, Text } = kit.ui
-  const lw = input.labelWidth ?? labelWidth(kit)
-  const detail = input.detail === undefined || input.detail === '' ? null : input.detail
   const control = input.control
-  const valueWidth = control?.width ?? (input.value?.length ?? 0)
-  const isStacked = control !== undefined && lw + control.width > kit.columns
-  const isDetailInline = detail !== null && !isStacked && lw + valueWidth + 2 + detail.length <= kit.columns
-  const value =
+  const isStacked = control !== undefined && control.width > Math.max(12, Math.floor(kit.columns * 0.55))
+  const subtitle = input.subtitle === undefined || input.subtitle === '' ? null : input.subtitle
+  const subtitleTone = input.subtitleTone ?? 'muted'
+  const subtitleEl = subtitle === null ? null : (
+    <Text key={`${input.key}-sub`} {...toneProps(subtitleTone)} dimColor={subtitleTone === 'muted' ? true : undefined} wrap="wrap">
+      {subtitle}
+    </Text>
+  )
+  const right =
     control !== undefined ? (
       control.element
     ) : input.value === undefined ? null : (
@@ -94,39 +119,29 @@ export function row(
         {input.value}
       </Text>
     )
-  const detailEl = (indent: number) =>
-    detail === null ? null : (
-      <Box key={`${input.key}-detail`} marginLeft={indent} flexShrink={1}>
-        <Text {...toneProps(input.detailTone ?? 'muted')} dimColor={input.detailTone === undefined || input.detailTone === 'muted'} wrap="wrap">
-          {detail}
-        </Text>
-      </Box>
-    )
   return (
     <Box key={`row-${input.key}`} flexDirection="column">
-      <Box flexDirection="row">
-        <Box width={isStacked ? undefined : lw} flexShrink={0} paddingRight={1}>
-          <Text dimColor={input.isDim === true} wrap="truncate-end">
+      <Box flexDirection="row" columnGap={2}>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+          <Text dimColor={input.isDim === true ? true : undefined} wrap="truncate-end">
             {input.label}
           </Text>
+          {isStacked ? null : subtitleEl}
         </Box>
-        {isStacked ? null : value}
-        {isDetailInline ? (
-          <Box marginLeft={2} flexShrink={1}>
-            <Text {...toneProps(input.detailTone ?? 'muted')} dimColor={input.detailTone === undefined || input.detailTone === 'muted'} wrap="truncate-end">
-              {detail}
-            </Text>
+        {isStacked || right === null ? null : (
+          <Box flexShrink={0} key={`${input.key}-right`}>
+            {right}
           </Box>
-        ) : null}
+        )}
       </Box>
+      {isStacked ? subtitleEl : null}
       {isStacked ? (
-        <Box marginLeft={2} key={`${input.key}-stacked`}>
-          {value}
+        <Box key={`${input.key}-stacked`} marginTop={isNative(kit) ? 1 : 0}>
+          {right}
         </Box>
       ) : null}
-      {detail !== null && !isDetailInline ? detailEl(isStacked ? 2 : lw) : null}
       {control?.below === undefined || control.below === null ? null : (
-        <Box marginLeft={isStacked ? 2 : lw} key={`${input.key}-below`}>
+        <Box key={`${input.key}-below`} marginLeft={2}>
           {control.below}
         </Box>
       )}
@@ -145,32 +160,23 @@ export function stat(kit: Kit, input: { key: string; label: string; value: strin
           {input.value}
         </Text>
       </Box>
-      {input.under === undefined && input.underRight === undefined ? null : (
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text dimColor wrap="truncate-end">
-            {input.under ?? ''}
-          </Text>
-          <Text dimColor wrap="truncate-start">
-            {input.underRight ?? ''}
-          </Text>
-        </Box>
-      )}
+      {input.under === undefined && input.underRight === undefined ? null : pair(kit, { key: `${input.key}-under`, left: input.under ?? '', right: input.underRight })}
     </Box>
   )
 }
 
-/** A dim line with text at both ends ("312k of 1M tokens ........ hands off at 700k"). */
+/** A dim line with text at both ends ("694k of 1M ........ hands off at 700k"). */
 export function pair(kit: Kit, input: { key: string; left: string; right?: string; rightTone?: Tone }): RenderElement {
   const { Box, Text } = kit.ui
   return (
-    <Box key={`pair-${input.key}`} flexDirection="row" justifyContent="space-between">
+    <Box key={`pair-${input.key}`} flexDirection="row" justifyContent="space-between" columnGap={2}>
       <Box flexShrink={1}>
         <Text dimColor wrap="truncate-end">
           {input.left}
         </Text>
       </Box>
       {input.right === undefined ? null : (
-        <Box flexShrink={0} marginLeft={2}>
+        <Box flexShrink={0}>
           <Text {...toneProps(input.rightTone ?? 'muted')} dimColor={input.rightTone === undefined || input.rightTone === 'muted' ? true : undefined}>
             {input.right}
           </Text>
@@ -180,7 +186,7 @@ export function pair(kit: Kit, input: { key: string; left: string; right?: strin
   )
 }
 
-/** Something that needs the person: a bordered card with a title, a line and actions. */
+/** Something that needs the person: a bordered card in the status color, a line, actions. */
 export function callout(
   kit: Kit,
   input: { key: string; tone: Tone; title: string; text?: string; actions?: readonly { key: string; label: string; onPress: () => void; isPrimary?: boolean }[] },
@@ -199,24 +205,24 @@ export function callout(
 }
 
 /** Explicit actions: `[ Hand off now ]` in the terminal, native buttons elsewhere. */
-export function buttons(kit: Kit, list: readonly { key: string; label: string; onPress: () => void; isPrimary?: boolean; isHidden?: boolean }[], key = 'actions'): RenderElement {
+export function buttons(kit: Kit, list: readonly { key: string; label: string; onPress: () => void; isPrimary?: boolean; isHidden?: boolean }[], key = 'actions'): RenderElement | null {
   const { Box, Button } = kit.ui
+  const shown = list.filter(b => b.isHidden !== true)
+  if (shown.length === 0) return null
   return (
-    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={1} marginTop={1}>
-      {list
-        .filter(b => b.isHidden !== true)
-        .map(b => (
-          <Button key={b.key} label={b.label} variant={b.isPrimary === true ? 'primary' : 'secondary'} onPress={b.onPress} />
-        ))}
+    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={isNative(kit) ? 1 : 0}>
+      {shown.map(b => (
+        <Button key={b.key} label={b.label} variant={b.isPrimary === true ? 'primary' : 'secondary'} onPress={b.onPress} />
+      ))}
     </Box>
   )
 }
 
-export function note(kit: Kit, text: string, key = 'note'): RenderElement {
+export function note(kit: Kit, text: string, key = 'note', tone: Tone = 'muted'): RenderElement {
   const { Box, Text } = kit.ui
   return (
     <Box key={key}>
-      <Text dimColor wrap="wrap">
+      <Text {...toneProps(tone)} dimColor={tone === 'muted' ? true : undefined} wrap="wrap">
         {text}
       </Text>
     </Box>
@@ -238,20 +244,41 @@ export function emptyState(kit: Kit, text: string, key = 'empty'): RenderElement
 export function listItem(kit: Kit, input: { key: string; glyph: string; tone: Tone; text: string; right?: string; isDim?: boolean }): RenderElement {
   const { Box, Text } = kit.ui
   return (
-    <Box key={input.key} flexDirection="row">
+    <Box key={input.key} flexDirection="row" columnGap={1}>
       <Box width={2} flexShrink={0}>
         <Text {...toneProps(input.tone)}>{input.glyph}</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1}>
-        <Text dimColor={input.isDim === true} wrap="truncate-end">
+        <Text dimColor={input.isDim === true ? true : undefined} wrap="truncate-end">
           {input.text}
         </Text>
       </Box>
       {input.right === undefined ? null : (
-        <Box flexShrink={0} marginLeft={1}>
+        <Box flexShrink={0}>
           <Text dimColor>{input.right}</Text>
         </Box>
       )}
+    </Box>
+  )
+}
+
+/** Numbered steps, for explaining what happens ("1  Claude finishes the step it is on"). */
+export function steps(kit: Kit, key: string, list: readonly string[], accent?: string): RenderElement {
+  const { Box, Text } = kit.ui
+  return (
+    <Box key={key} flexDirection="column">
+      {list.map((text, i) => (
+        <Box key={`${key}-${i}`} flexDirection="row">
+          <Box width={3} flexShrink={0}>
+            <Text color={accent} bold>
+              {String(i + 1)}
+            </Text>
+          </Box>
+          <Box flexShrink={1}>
+            <Text wrap="wrap">{text}</Text>
+          </Box>
+        </Box>
+      ))}
     </Box>
   )
 }
@@ -264,9 +291,9 @@ export function switchControl(kit: Kit, input: { key: string; isOn: boolean; onP
   const { Button } = kit.ui
   if (isNative(kit)) {
     const label = input.isOn ? 'On' : 'Off'
-    return { element: <Button key={input.key} label={label} variant={input.isOn ? 'primary' : 'secondary'} onPress={input.onPress} />, width: label.length + 4 }
+    return { element: <Button key={input.key} label={label} variant={input.isOn ? 'primary' : 'secondary'} onPress={input.onPress} />, width: 6 }
   }
-  const label = input.isOn ? `${G.dot} On` : `${G.ring} Off`
+  const label = input.isOn ? `${G.dot} On ` : `${G.ring} Off`
   return { element: <Button key={input.key} label={label} plain dimColor={!input.isOn} onPress={input.onPress} />, width: label.length }
 }
 
@@ -276,7 +303,7 @@ export function segmented(kit: Kit, input: { key: string; value: string; options
   if (isNative(kit)) {
     return {
       element: (
-        <Box key={input.key} flexDirection="row" columnGap={1}>
+        <Box key={input.key} flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={1}>
           {input.options.map(o => (
             <Button key={`${input.key}:${o.value}`} label={o.label} variant={o.value === input.value ? 'primary' : 'secondary'} onPress={() => input.onSelect(o.value)} />
           ))}
@@ -287,7 +314,7 @@ export function segmented(kit: Kit, input: { key: string; value: string; options
   }
   return {
     element: (
-      <Box key={input.key} flexDirection="row" columnGap={2}>
+      <Box key={input.key} flexDirection="row" flexWrap="wrap" columnGap={2}>
         {input.options.map(o => (
           <Button
             key={`${input.key}:${o.value}`}
@@ -315,7 +342,7 @@ export function picker(kit: Kit, input: { key: string; value: string; options: r
   if (isNative(kit) && Select !== undefined) {
     return {
       element: <Select key={input.key} options={input.options.map(o => ({ value: o.value, label: o.label }))} value={input.value} onSelect={value => input.onSelect(value)} />,
-      width: shown.length + 4,
+      width: Math.min(18, shown.length + 4),
     }
   }
   const isOpen = kit.openPicker === input.key
@@ -326,16 +353,16 @@ export function picker(kit: Kit, input: { key: string; value: string; options: r
       {input.options.map(o => (
         <Box key={`${input.key}-option-${o.value}`} flexDirection="row">
           <Box width={optionWidth} flexShrink={0}>
-          <Button
-            key={`${input.key}:${o.value}`}
-            label={`${o.value === input.value ? G.dot : G.ring} ${o.label}`}
-            plain
-            dimColor={o.value !== input.value}
-            onPress={() => {
-              kit.actions.togglePicker(null)
-              if (o.value !== input.value) input.onSelect(o.value)
-            }}
-          />
+            <Button
+              key={`${input.key}:${o.value}`}
+              label={`${o.value === input.value ? G.dot : G.ring} ${o.label}`}
+              plain
+              dimColor={o.value !== input.value}
+              onPress={() => {
+                kit.actions.togglePicker(null)
+                if (o.value !== input.value) input.onSelect(o.value)
+              }}
+            />
           </Box>
           {o.hint === undefined ? null : (
             <Box flexShrink={1}>
@@ -364,7 +391,9 @@ export function stepper(kit: Kit, input: { key: string; display: string; onDecre
       element: (
         <Box key={input.key} flexDirection="row" columnGap={1} alignItems="center">
           <Button key={`${input.key}-dec`} label={G.minus} onPress={input.onDecrease ?? noop} />
-          <Text>{input.display}</Text>
+          <Box minWidth={input.display.length + 2} justifyContent="center">
+            <Text bold>{input.display}</Text>
+          </Box>
           <Button key={`${input.key}-inc`} label={G.plus} onPress={input.onIncrease ?? noop} />
         </Box>
       ),
@@ -375,7 +404,7 @@ export function stepper(kit: Kit, input: { key: string; display: string; onDecre
     element: (
       <Box key={input.key} flexDirection="row">
         <Button key={`${input.key}-dec`} label={G.minus} plain dimColor={input.onDecrease === undefined} onPress={input.onDecrease ?? noop} />
-        <Text>{`  ${input.display}  `}</Text>
+        <Text bold>{`  ${input.display}  `}</Text>
         <Button key={`${input.key}-inc`} label={G.plus} plain dimColor={input.onIncrease === undefined} onPress={input.onIncrease ?? noop} />
       </Box>
     ),
@@ -383,17 +412,17 @@ export function stepper(kit: Kit, input: { key: string; display: string; onDecre
   }
 }
 
-/** A button that navigates or acts, drawn as a value with a chevron (`No limit ›`). */
+/** A value that navigates to where it is set (`No limit ›`). */
 export function link(kit: Kit, input: { key: string; label: string; onPress: () => void }): Control {
   const { Button } = kit.ui
   const label = `${input.label} ${G.chevron}`
-  return { element: <Button key={input.key} label={label} plain onPress={input.onPress} />, width: label.length + (isNative(kit) ? 4 : 0) }
+  return { element: <Button key={input.key} label={label} plain dimColor onPress={input.onPress} />, width: label.length + (isNative(kit) ? 4 : 0) }
 }
 
 // ---------------------------------------------------------------------------
 // Meters
 
-/** A thin line meter with a threshold marker; an SVG bar where the surface draws SVG. */
+/** A thin line meter with a threshold tick; an SVG bar where the surface draws SVG. */
 export function meterBar(kit: Kit, input: { key: string; fraction: number; marker?: number | null; tone: Tone; width: number; alt: string }): RenderElement {
   const { Text, Svg } = kit.ui
   if (Svg !== undefined) {
@@ -433,7 +462,7 @@ function runs(kit: Kit, key: string, c: { filled: number; marker: number; width:
 export function spark(kit: Kit, input: { key: string; values: readonly number[]; tone: Tone; width: number; ceiling?: number | null; alt: string }): RenderElement {
   const { Text, Svg } = kit.ui
   if (Svg !== undefined) {
-    return <Svg key={input.key} source={svgSpark(input.values, { tone: input.tone, width: Math.max(8, input.width) * 8, height: 18, ceiling: input.ceiling })} alt={input.alt} height={18} />
+    return <Svg key={input.key} source={svgSpark(input.values, { tone: input.tone, width: Math.max(8, input.width) * 8, height: 22, ceiling: input.ceiling })} alt={input.alt} height={22} />
   }
   return (
     <Text key={input.key} {...toneProps(input.tone)}>
@@ -442,30 +471,82 @@ export function spark(kit: Kit, input: { key: string; values: readonly number[];
   )
 }
 
+/**
+ * A live reading: label and value on one line, the meter (and in the
+ * terminal, a sparkline of recent readings) under it.
+ */
+export function gauge(
+  kit: Kit,
+  input: { key: string; label: string; value: number | null; ceiling?: number | null; series?: readonly number[]; tone: Tone; detail?: string },
+): RenderElement {
+  const { Box, Text } = kit.ui
+  const series = input.series ?? []
+  const sparkWidth = kit.surface === 'terminal' && series.length > 1 ? Math.min(12, Math.max(6, Math.floor(kit.columns * 0.2))) : 0
+  const meterWidth = Math.max(8, kit.columns - (sparkWidth > 0 ? sparkWidth + 2 : 0))
+  const valueTone: Tone = input.tone === 'good' ? 'normal' : input.tone
+  return (
+    <Box key={`gauge-${input.key}`} flexDirection="column">
+      <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
+        <Text>{input.label}</Text>
+        <Text>
+          {input.detail === undefined ? null : <Text dimColor>{`${input.detail}   `}</Text>}
+          <Text bold {...toneProps(valueTone)}>
+            {input.value === null ? G.none : `${Math.round(input.value)}%`}
+          </Text>
+        </Text>
+      </Box>
+      <Box flexDirection="row" columnGap={2}>
+        <Box width={meterWidth} flexShrink={1}>
+          {meterBar(kit, { key: `gauge-${input.key}-meter`, fraction: (input.value ?? 0) / 100, marker: input.ceiling === undefined || input.ceiling === null ? null : input.ceiling / 100, tone: input.tone, width: meterWidth, alt: `${input.label} ${input.value === null ? 'unknown' : `${Math.round(input.value)}%`}` })}
+        </Box>
+        {sparkWidth === 0 ? null : (
+          <Text dimColor key={`gauge-${input.key}-spark`}>
+            {sparkline(series, sparkWidth)}
+          </Text>
+        )}
+      </Box>
+    </Box>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Navigation
 
 /**
- * The section bar. Terminal: labels with the chosen one bright and an
- * accent underline beneath it, which doubles as the header's rule; two rows
- * when one will not fit. Native surfaces: buttons, the chosen one primary.
+ * The section bar. Terminal: labels with the chosen one bright and its
+ * section's accent underline beneath it (which doubles as the header's
+ * rule); two rows when one will not fit. Native surfaces: buttons in an
+ * even grid (one row when wide, three per row when narrow), the chosen one
+ * primary, so they never wrap unevenly.
  */
-export function navBar<T extends string>(kit: Kit, input: { tabs: readonly { id: T; label: string }[]; current: T; onSelect: (id: T) => void }): RenderElement {
+export function navBar<T extends string>(
+  kit: Kit,
+  input: { tabs: readonly { id: T; label: string; accent: string }[]; current: T; onSelect: (id: T) => void },
+): RenderElement {
   const { Box, Button, Text } = kit.ui
-  if (isNative(kit)) {
+  if (kit.surface !== 'terminal') {
+    const perRow = kit.columns >= 70 ? input.tabs.length : 3
+    const rows: (typeof input.tabs)[number][][] = []
+    for (let i = 0; i < input.tabs.length; i += perRow) rows.push(input.tabs.slice(i, i + perRow))
+    const cell = `${Math.floor(100 / perRow)}%`
     return (
-      <Box key="nav" flexDirection="row" flexWrap="wrap" columnGap={1}>
-        {input.tabs.map(t => (
-          <Button key={`tab-${t.id}`} label={t.label} variant={t.id === input.current ? 'primary' : 'secondary'} onPress={() => input.onSelect(t.id)} />
+      <Box key="nav" flexDirection="column" rowGap={1}>
+        {rows.map((r, i) => (
+          <Box key={`nav-row-${i}`} flexDirection="row">
+            {r.map(t => (
+              <Box key={`nav-cell-${t.id}`} width={cell}>
+                <Button key={`tab-${t.id}`} label={t.label} variant={t.id === input.current ? 'primary' : 'secondary'} onPress={() => input.onSelect(t.id)} />
+              </Box>
+            ))}
+          </Box>
         ))}
       </Box>
     )
   }
   const widthAt = (gap: number) => input.tabs.reduce((n, t) => n + t.label.length, 0) + gap * (input.tabs.length - 1)
   const gap = widthAt(3) <= kit.columns ? 3 : widthAt(2) <= kit.columns ? 2 : 0
-  const tab = (t: { id: T; label: string }) => (
-    <Button key={`tab-${t.id}`} label={t.label} plain dimColor={t.id !== input.current} onPress={() => input.onSelect(t.id)} />
-  )
+  const tab = (t: { id: T; label: string }) => <Button key={`tab-${t.id}`} label={t.label} plain dimColor={t.id !== input.current} onPress={() => input.onSelect(t.id)} />
+  const currentAccent = input.tabs.find(t => t.id === input.current)?.accent ?? 'claude'
   if (gap === 0) {
     const half = Math.ceil(input.tabs.length / 2)
     return (
@@ -476,7 +557,7 @@ export function navBar<T extends string>(kit: Kit, input: { tabs: readonly { id:
         <Box flexDirection="row" columnGap={2}>
           {input.tabs.slice(half).map(tab)}
         </Box>
-        <Text dimColor>{G.lineEmpty.repeat(Math.max(4, kit.columns))}</Text>
+        <Text color={currentAccent}>{G.lineEmpty.repeat(Math.max(4, kit.columns))}</Text>
       </Box>
     )
   }
@@ -493,7 +574,7 @@ export function navBar<T extends string>(kit: Kit, input: { tabs: readonly { id:
     }
     const isCurrent = t.id === input.current
     underline.push(
-      <Text key={`nav-line-${t.id}`} {...(isCurrent ? { color: 'claude' } : { dimColor: true })}>
+      <Text key={`nav-line-${t.id}`} {...(isCurrent ? { color: t.accent } : { dimColor: true })}>
         {(isCurrent ? G.lineFull : G.lineEmpty).repeat(t.label.length)}
       </Text>,
     )

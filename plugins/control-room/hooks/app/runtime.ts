@@ -1001,7 +1001,8 @@ export class Runtime {
     this.configureAutopilot()
     if (host !== null) {
       const ceilings = this.effective.resources.ceilings
-      void this.monitor.configure(host, this.cwd || this.root, ceilings, this.settings.resources.intervalSec)
+      const isLiveWanted = this.settings.ui.liveLoad && this.settings.ui.hud !== 'off'
+      void this.monitor.configure(host, this.cwd || this.root, ceilings, this.settings.resources.intervalSec, isLiveWanted)
     }
     if (before === undefined || host === null) return
     const changes: string[] = []

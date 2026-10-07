@@ -16,7 +16,7 @@ import type { RenderElement } from 'claude-code'
 import type { ActivityView, ChainView, HudModel, PaneModel, PermissionsView, ResourcesView, TabId } from '../../../types'
 import type { Kit } from '../kit'
 import { navBar } from '../primitives'
-import { G } from '../theme'
+import { ACCENT, G } from '../theme'
 import { activityPage } from './activity'
 import { behaviorPage } from './behavior'
 import { contextPage } from './context'
@@ -24,13 +24,13 @@ import { guardrailsPage } from './guardrails'
 import { overviewPage } from './overview'
 import { setupPage } from './setup'
 
-export const TABS: readonly { id: TabId; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'context', label: 'Context' },
-  { id: 'behavior', label: 'Behavior' },
-  { id: 'guardrails', label: 'Guardrails' },
-  { id: 'activity', label: 'Activity' },
-  { id: 'setup', label: 'Setup' },
+export const TABS: readonly { id: TabId; label: string; accent: string }[] = [
+  { id: 'overview', label: 'Overview', accent: ACCENT.overview },
+  { id: 'context', label: 'Context', accent: ACCENT.context },
+  { id: 'behavior', label: 'Behavior', accent: ACCENT.behavior },
+  { id: 'guardrails', label: 'Guardrails', accent: ACCENT.guardrails },
+  { id: 'activity', label: 'Activity', accent: ACCENT.activity },
+  { id: 'setup', label: 'Setup', accent: ACCENT.setup },
 ]
 
 /** Which extra atoms a page draws from (the render hook reads only these). */

@@ -8,7 +8,7 @@
  * reserved for state that needs a look.
  */
 
-import type { Tone } from '../../types'
+import type { TabId, Tone } from '../../types'
 
 export type ColorProps = { color?: string; dimColor?: boolean; bold?: boolean }
 
@@ -29,6 +29,19 @@ export function toneProps(tone: Tone): ColorProps {
     case 'info':
       return { color: 'suggestion' }
   }
+}
+
+/**
+ * Each section's accent, a theme key: its card titles and its tab indicator,
+ * nothing more. One quiet hue per place, so the eye learns where it is.
+ */
+export const ACCENT: Record<TabId, string> = {
+  overview: 'claude',
+  context: 'ide',
+  behavior: 'autoAccept',
+  guardrails: 'planMode',
+  activity: 'suggestion',
+  setup: 'inactive',
 }
 
 /** The colors drawn into SVG (Desktop, mobile), where theme keys do not reach. */
@@ -126,6 +139,17 @@ export function svgSpark(values: readonly number[], input: { tone: Tone; width: 
     ceiling +
     `</svg>`
   )
+}
+
+/**
+ * How a live reading reads: against the governor's ceilings when it is on
+ * (amber within 10 points, red at or past), else against fixed marks.
+ */
+export function readingTone(value: number | null, ceiling: number | null, marks: { warn: number; bad: number }): Tone {
+  if (value === null) return 'muted'
+  const bad = ceiling ?? marks.bad
+  const warn = ceiling === null ? marks.warn : ceiling - 10
+  return value >= bad ? 'bad' : value >= warn ? 'warn' : 'good'
 }
 
 export const toneOfLevel = (level: string): Tone =>

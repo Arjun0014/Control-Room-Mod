@@ -1,13 +1,14 @@
 /**
- * The HUD: one calm line above the prompt.
+ * The status bar: one line above the prompt, live readings only.
  *
- *   ◆  Context ━━━━━─────── 31%   $4.18   Frontier Max   Hands off at 70%      Control Room
+ *   ◆   Context ━━━━━━━──── 69%   $78.35   CPU ▂▃▅▃ 23%   RAM ▇▇▇▇ 79%   2 agents        Control Room
  *
- * Only what is on or needs a look is shown: an off system takes no room.
- * Labels are dim, values plain, color only where state asks for attention.
- * Segments drop by priority as the width shrinks. A second line appears
- * only when something needs the person (a handoff about to happen, a
- * handoff waiting for them, the machine under heavy load).
+ * What it shows changes while you work: context, cost, the machine's CPU
+ * and memory, running agents, and events as they happen (a handoff about to
+ * start or under way, the guard keeping Claude going). Settings live in the
+ * panel, not here. Labels are dim, values plain, color only where a reading
+ * asks for attention. Items drop by priority as the width shrinks; a second
+ * line appears only when something needs the person.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -16,7 +17,7 @@ import type { HudModel, Tone } from '../../types'
 import * as fmt from '../core/format'
 import type { Kit } from './kit'
 import { isNative } from './primitives'
-import { G, meterCells, toneProps } from './theme'
+import { G, meterCells, sparkline, toneProps } from './theme'
 
 type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean }
 export type Segment = { key: string; priority: number; spans: Span[] }
@@ -37,38 +38,54 @@ function meterSpans(fraction: number, marker: number | null, tone: Tone, width: 
   return out
 }
 
+const valueTone = (tone: Tone): Tone | undefined => (tone === 'good' || tone === 'normal' || tone === 'muted' ? undefined : tone)
+
+function reading(key: string, label: string, value: number | null, tone: Tone, series: readonly number[], hasSpark: boolean, priority: number): Segment {
+  const spark = hasSpark && series.length > 1 ? [{ text: `${sparkline(series, 6)} `, isDim: true }] : []
+  return {
+    key,
+    priority,
+    spans: [{ text: `${label} `, isDim: true }, ...spark, { text: value === null ? G.none : `${Math.round(value)}%`, tone: valueTone(tone), isBold: tone === 'bad' }],
+  }
+}
+
+const EVENT_STATES = new Set(['pending', 'requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming', 'awaiting'])
+
 export function hudSegments(hud: HudModel, columns: number, surface: Kit['surface'] = 'terminal'): Segment[] {
+  const isTerminal = surface === 'terminal'
   const segments: Segment[] = [{ key: 'brand', priority: 0, spans: [{ text: G.brand, tone: 'accent', isBold: true }] }]
+
   const ctx = hud.ctx
-  const ctxTone: Tone = ctx.tone === 'good' || ctx.tone === 'muted' ? 'normal' : ctx.tone
   if (ctx.pct === null) {
     segments.push({ key: 'ctx', priority: 0, spans: [{ text: 'Context ', isDim: true }, { text: G.none, isDim: true }] })
   } else {
-    const hasMeter = surface === 'terminal' && columns >= 76 && ctx.tokens !== null && ctx.window !== null && ctx.window > 0
-    const meter = hasMeter ? [...meterSpans(ctx.tokens! / ctx.window!, ctx.threshold === null ? null : ctx.threshold / ctx.window!, ctx.tone === 'muted' ? 'good' : ctx.tone, 10), { text: ' ' }] : []
-    segments.push({ key: 'ctx', priority: 0, spans: [{ text: 'Context ', isDim: true }, ...meter, { text: `${ctx.pct}%`, tone: ctxTone, isBold: ctx.tone === 'bad' }] })
+    const hasMeter = isTerminal && columns >= 76 && ctx.tokens !== null && ctx.window !== null && ctx.window > 0
+    const meter = hasMeter
+      ? [...meterSpans(ctx.tokens! / ctx.window!, ctx.threshold === null ? null : ctx.threshold / ctx.window!, ctx.tone === 'muted' ? 'good' : ctx.tone, 10), { text: ' ' }]
+      : []
+    segments.push({ key: 'ctx', priority: 0, spans: [{ text: 'Context ', isDim: true }, ...meter, { text: `${ctx.pct}%`, tone: valueTone(ctx.tone), isBold: ctx.tone === 'bad' }] })
   }
+
+  if (hud.autopilot.isOn && EVENT_STATES.has(hud.autopilot.state)) {
+    segments.push({ key: 'event', priority: 0, spans: [{ text: hud.autopilot.text, tone: hud.autopilot.tone === 'normal' ? 'accent' : hud.autopilot.tone, isBold: true }] })
+  }
+
   segments.push({ key: 'cost', priority: 1, spans: [{ text: fmt.cost(hud.cost.usd), isDim: hud.cost.usd === null }] })
   if (hud.cost.runUsd !== null && hud.cost.usd !== null && hud.cost.runUsd - hud.cost.usd > 0.005) {
-    segments.push({ key: 'runcost', priority: 7, spans: [{ text: `run ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''}`, isDim: true }] })
+    segments.push({ key: 'runcost', priority: 6, spans: [{ text: `run ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''}`, isDim: true }] })
   }
-  if (hud.frontier.isOn) segments.push({ key: 'mode', priority: 1, spans: [{ text: 'Frontier Max', tone: 'accent' }] })
-  else if (hud.profile.id !== 'normal') segments.push({ key: 'mode', priority: 1, spans: [{ text: hud.profile.name, tone: 'accent' }] })
-  if (hud.autopilot.isOn) {
-    const isQuiet = hud.autopilot.tone === 'normal'
-    segments.push({
-      key: 'auto',
-      priority: hud.autopilot.state === 'pending' || hud.autopilot.state === 'awaiting' ? 0 : 2,
-      spans: [{ text: hud.autopilot.text, isDim: isQuiet, tone: isQuiet ? undefined : hud.autopilot.tone, isBold: hud.autopilot.tone === 'bad' }],
-    })
+
+  if (hud.load !== null) {
+    const hasSpark = isTerminal && columns >= 110
+    segments.push(reading('cpu', 'CPU', hud.load.cpu, hud.load.cpuTone, hud.load.cpuSeries, hasSpark, 2))
+    segments.push(reading('ram', 'RAM', hud.load.ram, hud.load.ramTone, hud.load.ramSeries, hasSpark, 2))
   }
-  if (hud.resources.text !== null) segments.push({ key: 'load', priority: 2, spans: [{ text: hud.resources.text, tone: hud.resources.tone }] })
+
   if (hud.agents.running > 0) {
     const text = hud.agents.limit === null ? fmt.plural(hud.agents.running, 'agent') : `${hud.agents.running} of ${hud.agents.limit} agents`
     segments.push({ key: 'agents', priority: 3, spans: [{ text, tone: 'info' }] })
   }
-  if (hud.guard.isOn && hud.guard.continued > 0) segments.push({ key: 'guard', priority: 4, spans: [{ text: `Kept going ×${hud.guard.continued}`, tone: 'warn' }] })
-  if (hud.session.index > 1) segments.push({ key: 'session', priority: 6, spans: [{ text: `Session ${hud.session.index}`, isDim: true }] })
+  if (hud.guard.isOn && hud.guard.continued > 0) segments.push({ key: 'guard', priority: 3, spans: [{ text: `Kept going ×${hud.guard.continued}`, tone: 'warn' }] })
   return segments
 }
 

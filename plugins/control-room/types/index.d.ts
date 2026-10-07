@@ -64,7 +64,8 @@ export type ControlRoomSettings = {
   focus: { enabled: boolean; tools: 'compact' | 'hidden'; results: boolean; diffs: boolean; spinner: boolean }
   resources: { level: ResourceLevel; cpu: number; ram: number; intervalSec: number; enforcement: ResourceEnforcement }
   permissions: Record<PermissionCategory, PermissionState>
-  ui: { hud: HudPlacement; toasts: boolean; openOnStart: boolean }
+  /** `liveLoad`: machine-wide CPU and memory in the status bar (runs the sampler). */
+  ui: { hud: HudPlacement; toasts: boolean; openOnStart: boolean; liveLoad: boolean }
   customProfiles: ControlRoomCustomProfile[]
 }
 
@@ -90,8 +91,8 @@ export type HudModel = {
   frontier: { isOn: boolean; effort: string | null }
   /** `text` is the plain-language state ("Hands off at 70%", "Writing the handoff"). */
   autopilot: { isOn: boolean; state: string; text: string; tone: Tone }
-  /** `text` is set only when the machine needs attention ("Memory 91%"). */
-  resources: { isOn: boolean; text: string | null; tone: Tone }
+  /** Live machine-wide readings while the sampler runs (status bar, governor); null otherwise. */
+  load: { cpu: number | null; ram: number | null; cpuTone: Tone; ramTone: Tone; cpuSeries: number[]; ramSeries: number[] } | null
   agents: { running: number; limit: number | null; mode: string }
   guard: { isOn: boolean; continued: number }
   session: { run: number | null; index: number }

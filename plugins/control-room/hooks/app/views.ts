@@ -26,6 +26,7 @@ import { MIN_ENGINE } from '../constants'
 import * as fmt from '../core/format'
 import { findProfile, isModified } from '../core/profiles'
 import { relativeTo, shortPath } from '../core/text'
+import { readingTone } from '../ui/theme'
 import { versionAtLeast } from '../core/version'
 import { isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
@@ -165,6 +166,23 @@ export function runLabelOf(rt: Runtime): string {
   return `Run ${rt.run.number} · Session ${s?.index ?? 1}`
 }
 
+
+function liveLoadOf(rt: Runtime): HudModel['load'] {
+  if (rt.monitor.status === 'off') return null
+  const latest = rt.monitor.status === 'live' ? rt.monitor.latest() : null
+  const ceilings = rt.effective.resources.ceilings
+  const cpu = latest?.cpu ?? null
+  const ram = latest?.ram ?? null
+  return {
+    cpu,
+    ram,
+    cpuTone: readingTone(cpu, ceilings?.cpu ?? null, { warn: 75, bad: 90 }),
+    ramTone: readingTone(ram, ceilings?.ram ?? null, { warn: 80, bad: 92 }),
+    cpuSeries: rt.monitor.cpuSeries(8),
+    ramSeries: rt.monitor.ramSeries(8),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Projections
 
@@ -174,7 +192,6 @@ export function hudOf(rt: Runtime): HudModel {
   const pct = tokens !== null && window !== null && window > 0 ? Math.round((100 * tokens) / window) : (rt.usage.pct ?? null)
   const totals = rt.run === null ? null : Chain.totals(rt.run, Date.now())
   const ap = autopilotStatus(rt)
-  const load = loadStatus(rt)
   const s = rt.settings
   let alert: HudModel['alert'] = null
   if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: 'bad' }
@@ -188,7 +205,7 @@ export function hudOf(rt: Runtime): HudModel {
     profile: profileOf(rt),
     frontier: { isOn: s.frontier.enabled, effort: s.frontier.enabled ? (EFFORT_NAME[s.frontier.effort] ?? null) : null },
     autopilot: { isOn: s.autopilot.enabled, state: rt.autopilot.state, text: ap.text, tone: ap.tone },
-    resources: { isOn: load.isOn, text: load.attention, tone: load.tone },
+    load: liveLoadOf(rt),
     agents: { running: rt.runningSubagents, limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode },
     guard: { isOn: s.guard.enabled, continued: rt.guard.turnBlocks },
     session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1) },
@@ -196,14 +213,14 @@ export function hudOf(rt: Runtime): HudModel {
   }
 }
 
-/** The one-line HUD for Claude Code's status line (`/cr hud status`). */
+/** The live status bar for Claude Code's own status line (`/cr hud status`): readings and events only. */
 export function statusLineOf(hud: HudModel): string {
-  const parts = [`◆ ${hud.ctx.pct === null ? 'Context —' : `Context ${hud.ctx.pct}%`}`, fmt.cost(hud.cost.usd)]
-  if (hud.frontier.isOn) parts.push('Frontier Max')
-  else if (hud.profile.id !== 'normal') parts.push(hud.profile.name)
-  if (hud.autopilot.isOn) parts.push(hud.autopilot.text)
-  if (hud.resources.text !== null) parts.push(hud.resources.text)
+  const pct = (n: number | null) => (n === null ? '—' : `${Math.round(n)}%`)
+  const parts = [`◆ Context ${pct(hud.ctx.pct)}`, fmt.cost(hud.cost.usd)]
+  if (hud.load !== null) parts.push(`CPU ${pct(hud.load.cpu)}`, `RAM ${pct(hud.load.ram)}`)
   if (hud.agents.running > 0) parts.push(fmt.plural(hud.agents.running, 'agent'))
+  if (hud.autopilot.isOn && hud.autopilot.state !== 'off' && hud.autopilot.state !== 'armed') parts.push(hud.autopilot.text)
+  if (hud.guard.isOn && hud.guard.continued > 0) parts.push(`Kept going ×${hud.guard.continued}`)
   return parts.join(' · ')
 }
 

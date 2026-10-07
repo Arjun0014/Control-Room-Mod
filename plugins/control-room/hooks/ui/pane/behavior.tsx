@@ -1,14 +1,16 @@
 /**
- * Behavior: how Claude works. Each system is one switch; its finer settings
- * appear only while it is on, so the page stays short.
+ * Behavior: how Claude works. One card per system, so each reads on its
+ * own: the card title carries the system's live state, the first row is
+ * its switch with a one-line description, and its finer settings follow
+ * only while it is on.
  */
 
 import type { RenderElement } from 'claude-code'
 
 import type { ModelAlias, PaneModel } from '../../../types'
 import type { Kit } from '../kit'
-import { labelWidth, note, picker, row, section, segmented, stepper, switchControl } from '../primitives'
-import { detailOf } from './overview'
+import { card, picker, row, segmented, stepper, switchControl } from '../primitives'
+import { ACCENT } from '../theme'
 
 const MODELS: readonly { value: ModelAlias; label: string; hint: string }[] = [
   { value: 'session', label: 'Session model', hint: "this session's model" },
@@ -18,7 +20,7 @@ const MODELS: readonly { value: ModelAlias; label: string; hint: string }[] = [
   { value: 'fable', label: 'Fable', hint: 'the most capable' },
 ]
 
-const asAlias = (v: string): ModelAlias => (MODELS.find(m => m.value === v)?.value ?? 'session')
+const asAlias = (v: string): ModelAlias => MODELS.find(m => m.value === v)?.value ?? 'session'
 
 const CLASS_LABEL: Record<string, string> = {
   trivial: 'Quick replies',
@@ -30,25 +32,32 @@ const CLASS_LABEL: Record<string, string> = {
   general: 'Other agents',
 }
 
+const STRICTNESS_HINT: Record<string, string> = {
+  lenient: 'Only obvious hand-backs',
+  standard: 'Clear signs the job is unfinished',
+  strict: 'Any unverified or unfinished work',
+}
+
 export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
   const { Box } = kit.ui
   const s = pane.settings
   const st = pane.status
   const u = kit.actions.update
-  const lw = labelWidth(kit, 'Continuations per turn'.length)
+  const accent = ACCENT.behavior
 
   return (
     <Box flexDirection="column">
-      {section(kit, {
+      {card(kit, {
         key: 'frontier',
         title: 'Frontier Max',
-        footer: 'Senior-engineer standards (verify, finish, report honestly) and the strongest reasoning effort the model supports.',
-        children: [
-          row(kit, {
+        accent,
+        aside: s.frontier.enabled ? st.frontier.text : undefined,
+        rows: k => [
+          row(k, {
             key: 'fr-on',
             label: 'Frontier Max',
-            labelWidth: lw,
-            control: switchControl(kit, {
+            subtitle: 'Senior-engineer standards and the strongest reasoning the model offers',
+            control: switchControl(k, {
               key: 'fr-on',
               isOn: s.frontier.enabled,
               onPress: () =>
@@ -57,14 +66,12 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
                   if (d.frontier.enabled) d.guard.enabled = true
                 }),
             }),
-            ...(s.frontier.enabled ? detailOf(st.frontier) : {}),
           }),
           s.frontier.enabled &&
-            row(kit, {
+            row(k, {
               key: 'fr-effort',
               label: 'Effort',
-              labelWidth: lw,
-              control: picker(kit, {
+              control: picker(k, {
                 key: 'fr-effort',
                 value: s.frontier.effort,
                 options: [
@@ -77,41 +84,33 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
               }),
             }),
           s.frontier.enabled &&
-            row(kit, {
+            row(k, {
               key: 'fr-sub',
               label: 'Subagents too',
-              labelWidth: lw,
-              control: switchControl(kit, { key: 'fr-sub', isOn: s.frontier.subagentEffort, onPress: () => u(d => void (d.frontier.subagentEffort = !d.frontier.subagentEffort)) }),
-              detail: s.frontier.subagentEffort ? 'costs more' : undefined,
+              subtitle: 'Raises their effort as well; costs more',
+              control: switchControl(k, { key: 'fr-sub', isOn: s.frontier.subagentEffort, onPress: () => u(d => void (d.frontier.subagentEffort = !d.frontier.subagentEffort)) }),
             }),
         ],
       })}
 
-      {section(kit, {
-        key: 'qa',
-        title: 'Release check',
-        footer: 'Claude verifies before it calls work done, and says plainly what it could not check.',
-        children: [row(kit, { key: 'qa-on', label: 'Verify first', labelWidth: lw, control: switchControl(kit, { key: 'qa-on', isOn: s.qa.enabled, onPress: () => u(d => void (d.qa.enabled = !d.qa.enabled)) }) })],
-      })}
-
-      {section(kit, {
+      {card(kit, {
         key: 'guard',
         title: 'Lazy-exit guard',
-        footer: 'Continues the turn when Claude stops before the job is done. It stays out of the way of a handoff, plan mode and your decisions.',
-        children: [
-          row(kit, {
+        accent,
+        aside: s.guard.enabled ? st.guard.text : undefined,
+        rows: k => [
+          row(k, {
             key: 'gu-on',
-            label: 'Guard',
-            labelWidth: lw,
-            control: switchControl(kit, { key: 'gu-on', isOn: s.guard.enabled, onPress: () => u(d => void (d.guard.enabled = !d.guard.enabled)) }),
-            ...(s.guard.enabled ? detailOf(st.guard) : {}),
+            label: 'Lazy-exit guard',
+            subtitle: 'Keeps Claude going when it stops before the job is done',
+            control: switchControl(k, { key: 'gu-on', isOn: s.guard.enabled, onPress: () => u(d => void (d.guard.enabled = !d.guard.enabled)) }),
           }),
           s.guard.enabled &&
-            row(kit, {
+            row(k, {
               key: 'gu-strict',
               label: 'Strictness',
-              labelWidth: lw,
-              control: segmented(kit, {
+              subtitle: STRICTNESS_HINT[s.guard.strictness],
+              control: segmented(k, {
                 key: 'gu-strict',
                 value: s.guard.strictness,
                 options: [
@@ -123,11 +122,11 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
               }),
             }),
           s.guard.enabled &&
-            row(kit, {
+            row(k, {
               key: 'gu-turn',
-              label: 'Continuations per turn',
-              labelWidth: lw,
-              control: stepper(kit, {
+              label: 'Times per turn',
+              subtitle: 'At most this many nudges in one turn',
+              control: stepper(k, {
                 key: 'gu-turn',
                 display: String(s.guard.maxPerTurn),
                 onDecrease: s.guard.maxPerTurn > 1 ? () => u(d => void (d.guard.maxPerTurn -= 1)) : undefined,
@@ -135,26 +134,41 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
               }),
             }),
           s.guard.enabled &&
-            row(kit, {
+            row(k, {
               key: 'gu-model',
               label: 'Smart check',
-              labelWidth: lw,
-              control: switchControl(kit, { key: 'gu-model', isOn: s.guard.modelCheck, onPress: () => u(d => void (d.guard.modelCheck = !d.guard.modelCheck)) }),
-              detail: 'a small model call when unsure',
+              subtitle: 'A small model call when the signs are unclear',
+              control: switchControl(k, { key: 'gu-model', isOn: s.guard.modelCheck, onPress: () => u(d => void (d.guard.modelCheck = !d.guard.modelCheck)) }),
             }),
         ],
       })}
 
-      {section(kit, {
+      {card(kit, {
+        key: 'qa',
+        title: 'Release check',
+        accent,
+        rows: k => [
+          row(k, {
+            key: 'qa-on',
+            label: 'Verify before done',
+            subtitle: 'Claude tests before it calls work done, and says what it could not check',
+            control: switchControl(k, { key: 'qa-on', isOn: s.qa.enabled, onPress: () => u(d => void (d.qa.enabled = !d.qa.enabled)) }),
+          }),
+        ],
+      })}
+
+      {card(kit, {
         key: 'router',
         title: 'Model router',
-        footer: s.router.strategy === 'off' ? 'Picks a model for each task. Off: every task uses the session model.' : 'Never downgrades while Frontier Max is on. Switches only while the context is small.',
-        children: [
-          row(kit, {
+        accent,
+        aside: s.router.strategy !== 'off' && pane.router.lastDecision !== null ? `Last: ${pane.router.lastDecision}` : undefined,
+        footer: s.router.strategy === 'off' ? undefined : 'Never downgrades while Frontier Max is on. Switches only while the context is small.',
+        rows: k => [
+          row(k, {
             key: 'ro-strategy',
             label: 'Router',
-            labelWidth: lw,
-            control: picker(kit, {
+            subtitle: s.router.strategy === 'off' ? 'Every task uses the session model' : 'Picks a model for each task',
+            control: picker(k, {
               key: 'ro-strategy',
               value: s.router.strategy,
               options: [
@@ -168,30 +182,26 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
             }),
           }),
           s.router.strategy !== 'off' &&
-            row(kit, {
+            row(k, {
               key: 'ro-main',
               label: 'Main conversation',
-              labelWidth: lw,
-              control: switchControl(kit, { key: 'ro-main', isOn: s.router.mainLoop, onPress: () => u(d => void (d.router.mainLoop = !d.router.mainLoop)) }),
+              control: switchControl(k, { key: 'ro-main', isOn: s.router.mainLoop, onPress: () => u(d => void (d.router.mainLoop = !d.router.mainLoop)) }),
             }),
           s.router.strategy !== 'off' &&
-            row(kit, {
+            row(k, {
               key: 'ro-sub',
               label: 'Subagents',
-              labelWidth: lw,
-              control: switchControl(kit, { key: 'ro-sub', isOn: s.router.subagents, onPress: () => u(d => void (d.router.subagents = !d.router.subagents)) }),
+              control: switchControl(k, { key: 'ro-sub', isOn: s.router.subagents, onPress: () => u(d => void (d.router.subagents = !d.router.subagents)) }),
             }),
           ...(s.router.strategy === 'custom'
-            ? (['trivial', 'simple', 'standard', 'hard', 'explore', 'plan', 'general'] as const).map(k =>
-                row(kit, {
-                  key: `ro-c-${k}`,
-                  label: CLASS_LABEL[k] ?? k,
-                  labelWidth: lw,
-                  control: picker(kit, { key: `ro-c-${k}`, value: s.router.custom[k], options: MODELS, onSelect: v => u(d => void (d.router.custom[k] = asAlias(v))) }),
+            ? (['trivial', 'simple', 'standard', 'hard', 'explore', 'plan', 'general'] as const).map(c =>
+                row(k, {
+                  key: `ro-c-${c}`,
+                  label: CLASS_LABEL[c] ?? c,
+                  control: picker(k, { key: `ro-c-${c}`, value: s.router.custom[c], options: MODELS, onSelect: v => u(d => void (d.router.custom[c] = asAlias(v))) }),
                 }),
               )
             : []),
-          s.router.strategy !== 'off' && pane.router.lastDecision !== null && note(kit, `Last choice: ${pane.router.lastDecision}`, 'ro-last'),
         ],
       })}
     </Box>

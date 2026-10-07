@@ -56,7 +56,7 @@ describe('ui', () => {
     }
   })
 
-  test('the HUD shows only what is on: off systems take no room', async ($, on) => {
+  test('the status bar shows live readings only, never settings', async ($, on) => {
     const w = world(on, { tokens: 300_000 })
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await boot($, w)
@@ -67,8 +67,9 @@ describe('ui', () => {
     await $.command.run({ command: 'cr', args: 'profile frontier', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
     const busy = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
-    expect(await busy.find({ text: /Frontier Max/ })).toBeDefined()
-    expect(await busy.find({ text: /Hands off at 70%/ })).toBeDefined()
+    expect(await busy.find({ text: /Context/ })).toBeDefined()
+    expect(await busy.find({ text: /Frontier Max/ })).toBeUndefined()
+    expect(await busy.find({ text: /Hands off/ })).toBeUndefined()
   })
 
   test('the band yields to surveys and to a hidden HUD', async ($, on) => {

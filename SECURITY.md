@@ -26,10 +26,10 @@ own settings and run records in Claude Code's per-plugin store. Run
 | The running subagents list (type, status, description) | Subagent counts and limits | Memory only |
 | The names of registered slash commands | Only so as not to take `/cr` if something else uses it | Nothing |
 | Whether managed (organisation) policy settings exist (only whether any key is set) | Choosing how to deliver policies (system prompt, or prompt context where a managed guard skips user plugins' prompt sections) | Nothing |
-| Machine-wide CPU busy % and memory used % (machine load on only) | Pressure levels, meters, notices | Memory only (a short sliding window) |
+| Machine-wide CPU busy % and memory used % (while *Live CPU and memory* or a machine-load limit is on) | Pressure levels, meters, notices | Memory only (a short sliding window) |
 
 **How the machine metrics are read.** One long-lived sampler process runs only while the
-machine load is on, and stops when it is turned off or the session ends:
+the status bar shows live CPU and memory (Setup → *Live CPU and memory*, on by default) or a machine-load limit is set. It stops when both are off or the session ends:
 
 - **Windows:** `powershell.exe -NoProfile -NonInteractive` running a fixed script that calls
   `GetSystemTimes` and `GlobalMemoryStatusEx`, with a CIM fallback.

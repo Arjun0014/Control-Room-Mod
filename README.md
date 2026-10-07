@@ -15,10 +15,10 @@ Desktop's Code tab. One plugin gives you:
 > Claude Code **2.1.289** (the engine bundled with Claude Desktop) and **2.1.292** (CLI) on
 > Windows 11. See [Compatibility](#compatibility).
 
-The status bar shows only what is on, or what needs a look:
+The status bar shows live readings only (context, cost, CPU, memory, running agents) and events as they happen:
 
 ```
-◆   Context ━━━━━━──── 31%   $4.18   Frontier Max   Hands off at 70%   Memory 79%        Control Room
+◆   Context ━━━━━━──── 69%   $78.35   CPU ▂▃▅▃ 23%   RAM ▇▇▇▇ 79%   2 agents        Control Room
 ```
 
 The panel answers one question per section. This is Overview:
@@ -172,18 +172,16 @@ Use `/cr reset confirm` first if you also want the settings cleared.
 
 ### The status bar
 
-It shows only what is on, or what needs a look. An off system takes no room.
+It shows live readings only. Settings live in the panel.
 
 | Item | Meaning |
 | --- | --- |
 | `Context ━━━━──── 31%` | Live context. The meter turns amber at 85% of the Autopilot threshold and red at it (with Autopilot off: 90% of the window). The orange tick is the threshold. |
 | `$4.18` | This session's cost as Claude Code reports it. `run $9.40` is added when a run spans several sessions; `+` means some session's cost was not reported. |
-| `Frontier Max` / profile | Frontier Max when it is on, otherwise the profile when it is not Normal. |
-| `Hands off at 70%` | Autopilot is on. It reads `Handoff soon`, `Writing the handoff`, `Starting fresh`, `Resuming` or `Waiting for you` as it works. |
-| `Memory 91%` | Machine load is on and a ceiling is near or crossed (amber, then red). |
+| `CPU ▂▃▅ 23%` · `RAM 79%` | Machine-wide CPU and memory, with recent history in wide terminals. Amber near a ceiling, red at it. Turn off in Setup → *Live CPU and memory*. |
+| `Handoff soon` | Autopilot events as they happen: `Handoff soon`, `Writing the handoff`, `Starting fresh`, `Resuming`, `Waiting for you`. |
 | `2 agents` | Subagents are running (`2 of 2 agents` with a limit). |
 | `Kept going ×1` | The lazy-exit guard continued this turn. |
-| `Session 2` | A run that has handed off at least once. |
 | `Control Room` | Opens or closes the panel. |
 
 When a handoff is about to happen, a second line offers **Hand off now** and **Later**. If a

@@ -8,6 +8,22 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+### Changed
+
+- **Status bar: live readings only.** Context, cost, CPU and memory (with recent history in wide
+  terminals), running agents, and events as they happen. Settings such as Frontier Max or the
+  handoff threshold are no longer shown there. CPU and memory are sampled while *Live CPU and
+  memory* (Setup, on by default) or a machine-load limit is on, every 3 s by default.
+- **Panel: settings-list rows and cards.** Each row has its label and a one-line description on the
+  left and its control on the right, at every width. Groups sit in rounded cards with a title in
+  their section's accent (one quiet hue per section).
+- **Overview** is a map of the product: the live readings, then one color-coded card per section
+  with its systems and an *Open ›* link.
+- **Context** explains the handoff in three numbered steps, with the actions beside them.
+- **Behavior** gives each system its own card, with its live state in the title.
+- **Desktop:** the section buttons form an even grid (one row when wide, three per row when narrow),
+  and rows are spaced so native buttons never touch.
+
 ## [0.2.0] - 2026-10-07
 
 A redesign of everything you see, for the terminal and Desktop. The design is recorded in

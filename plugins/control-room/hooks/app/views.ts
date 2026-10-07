@@ -202,7 +202,7 @@ export function hudOf(rt: Runtime): HudModel {
   let alert: HudModel['alert'] = null
   if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: awaitingTone(rt) }
   else if (rt.monitor.pressure.level === 'critical' && s.resources.level !== 'off') alert = { kind: 'load', text: 'Your machine is under heavy load. Claude was asked to ease off.', tone: 'bad' }
-  else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Claude is finishing this step, then hands off to a fresh context.', tone: 'warn' }
+  else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Finishing this step, then handing off', tone: 'warn' }
   return {
     isVisible: s.ui.hud === 'band' || s.ui.hud === 'both',
     isPaneOpen: rt.ui.isPaneOpen,

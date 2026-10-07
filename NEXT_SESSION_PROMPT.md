@@ -8,13 +8,19 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
 
 ## State at handoff
 
-- **1.0.0 is released** (2026-10-07). The version is raised in `plugin.json`, the marketplace
-  entry and `VERSION` in `hooks/constants.ts`. The notes sit under `[1.0.0]` in `CHANGELOG.md`, and
-  `Unreleased` is empty. The tag `control-room--v1.0.0` is pushed.
+- **1.0.1 is released** (2026-10-07), with Desktop fixes made from the user's screenshots: lines
+  that ran past their cards, the profile name field, the section buttons, and a page capped at 80
+  columns on every surface. The version is raised in `plugin.json`, the marketplace entry and
+  `VERSION` in `hooks/constants.ts`. The notes sit under `[1.0.1]` in `CHANGELOG.md`, and
+  `Unreleased` is empty. The tag `control-room--v1.0.1` is pushed, and the user's install was
+  updated to 1.0.1.
+- **The Desktop look of 1.0.1 is not confirmed yet.** Ask the user for screenshots (narrow, and full
+  size via the pane's expand button) of Overview, Activity and Setup. The section-button layout
+  was chosen without seeing Desktop draw it.
 - The manifest and the marketplace entry carry `homepage` and `repository`. The README has the
   one-line install from inside a session and an Update section.
 - `npm run check` passes: `tsc`, `validate --strict` for the plugin and the marketplace, and
-  **127 tests**. The suite also passes on the **2.1.289** engine. To repeat that, copy
+  **130 tests**. The suite also passes on the **2.1.289** engine. To repeat that, copy
   `plugins/control-room` to a scratch folder, run
   `%APPDATA%\Claude\claude-code\2.1.289\<hash>\claude.exe plugin test <copy>`, start one 2.1.289
   session on the copy (it writes the 2.1.289 types), then run `tsc -p <copy>`.
@@ -22,7 +28,7 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
   - **Terminal sessions** read it straight from here and pick up changes with `/reload-plugins`.
   - **The user's Desktop sessions** load the installed copy in
     `~/.claude/plugins/cache/control-room/control-room/<version>`. It was stuck at 0.1.0 until
-    1.0.0, and the user saw the old status bar. It now points at the 1.0.0 copy.
+    1.0.0, and the user saw the old status bar. It now points at the 1.0.1 copy.
   - To show a code change in Desktop, raise the version, then run
     `claude plugin update control-room@control-room`. The user then starts a new session.
 
@@ -124,6 +130,16 @@ $0.60). Keep them few.
 - **`turn.step` model.** It rejects bare aliases. The main conversation routes only to model ids
   seen answering in this session.
 - **Desktop rendering:**
+  - It lays out like a browser: a flex item keeps `min-width: auto`, so a truncating Text in a
+    shrinking Box overflows its card unless the Box has `minWidth={0}` and `overflow="hidden"`
+    (`clip()` in `primitives.tsx`). The terminal's Yoga already shrinks it;
+  - a Box width in cells draws at about 10 px a cell (the field label's 10 cells are about 98 px),
+    and a native button is about its label plus 2 cells;
+  - a native `Input` is about 310 px wide, whatever its placeholder;
+  - Buttons in a row Box are centred vertically. Whether a Button stretches in a column Box is
+    unknown, so the section buttons don't rely on it;
+  - Claude cannot drive or screenshot the Claude app with computer use (its own window is refused),
+    so Desktop looks come only from the user's screenshots;
   - Box `borderStyle`, `rowGap` and percentage widths are drawn;
   - plain Buttons render as native pills;
   - `Select` is a native dropdown;

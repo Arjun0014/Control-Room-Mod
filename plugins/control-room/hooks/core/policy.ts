@@ -77,8 +77,12 @@ export type PolicySection = { name: string; text: string }
  * (never of live figures), so the prompt only changes when the person
  * changes a setting: one prompt-cache miss per change, none per turn.
  */
-export function policySections(settings: Settings, autopilotThreshold: number | null): PolicySection[] {
+export function policySections(settings: Settings, autopilotThreshold: number | null, live: { milestonesTool?: string | null } = {}): PolicySection[] {
   const sections: PolicySection[] = []
+  // Only where Control Room offered its milestones tool (Claude Code has no task list of its own here).
+  if (settings.progress.milestones && live.milestonesTool !== undefined && live.milestonesTool !== null) {
+    sections.push({ name: 'Run progress', text: prompts.milestonesPolicy(live.milestonesTool) })
+  }
   if (settings.frontier.enabled) sections.push({ name: 'Frontier Max', text: prompts.frontierPolicy(settings.frontier.effort) })
   if (settings.qa.enabled) sections.push({ name: 'Release/QA', text: prompts.qaPolicy() })
   const ceilings = ceilingsOf(settings.resources)

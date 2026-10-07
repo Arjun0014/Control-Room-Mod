@@ -287,6 +287,28 @@ describe('runtime', () => {
     expect(Views.missionOf(rt).session).toBe(2)
   })
 
+  test('without a task list in Claude Code, Claude gets the milestones tool and a policy; with one, nothing is added', async () => {
+    const { rt, kept } = await started(() => undefined)
+    expect(kept.registeredTools).toEqual(['milestones'])
+    expect(rt.planSource).toBe('milestones')
+    expect(rt.policies().map(s => s.name)).toContain('Run progress')
+    const answer = rt.recordMilestones({ milestones: [{ title: 'Fix the parser', status: 'completed' }, { title: 'Add tests', status: 'in_progress', doing: 'Adding tests' }] }, undefined)
+    expect(answer).toContain('1 of 2 milestones done')
+    expect(Views.hudOf(rt).work).toEqual({ done: 1, total: 2, current: 'Adding tests' })
+    // A subagent's list is its own.
+    rt.recordMilestones({ milestones: [{ title: 'Other', status: 'pending' }] }, 'agent-1')
+    expect(Views.hudOf(rt).work?.total).toBe(2)
+
+    const f = fakeHost()
+    f.live.tools = ['Bash', 'TodoWrite']
+    const withTasks = new Runtime()
+    withTasks.bind(f.host)
+    await withTasks.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    expect(f.kept.registeredTools).toEqual([])
+    expect(withTasks.planSource).toBe('tasks')
+    expect(withTasks.policies().map(s => s.name)).not.toContain('Run progress')
+  })
+
   test('views are published for every render site', async () => {
     const { kept } = await started(() => undefined)
     for (const key of ['hud', 'pane', 'resources', 'chain', 'activity', 'permissions', 'focus', 'spinner']) {

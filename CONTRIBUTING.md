@@ -60,8 +60,9 @@ This page lists them and how to check your work.
 
 Tests live in `plugins/control-room/tests/` and run with `claude plugin test`:
 
-- **Pure logic:** settings, profiles, permissions classifier, guard heuristics, Autopilot reducer,
-  router, chain, activity, resource parsers.
+- **Pure logic:** settings, profiles, permissions classifier, guard heuristics, Autopilot reducer
+  (and its recovery after a reload), router, chain, run plan, validation and Activity's signal
+  (`signal.test.ts`), activity, resource parsers.
 - **Runtime:** `runtime.test.ts`, with the in-memory host in `tests/fixtures/fake-host.ts` (a manual
   clock and recorded effects).
 - **Engine-driven:** `register.test.ts` and `ui.test.ts`, using the real engine with the world
@@ -70,6 +71,15 @@ Tests live in `plugins/control-room/tests/` and run with `claude plugin test`:
 
 Add a test with every behaviour change. For UI, loop the test over the surfaces rather than
 assuming one.
+
+### Continuous integration
+
+`.github/workflows/check.yml` runs on every push to `main` and every pull request: the type-check,
+strict validation of the plugin and the marketplace, and the tests, on Linux, Windows and macOS
+with the latest Claude Code from npm, and on Linux with the oldest supported engine (2.1.289). The
+engine's type declarations are laid by loading the plugin once in a headless session, which stops
+at "Not logged in" before any model call; no step signs in. CI does not run the live machine-load
+sampler, a real Autopilot handoff, or Desktop's rendering. Those are checked by hand (below).
 
 ## Checking it live
 
@@ -88,6 +98,7 @@ Unit tests don't paint. Before a release:
 
 1. Update `version` in `plugins/control-room/.claude-plugin/plugin.json`, in
    `.claude-plugin/marketplace.json` **and** `VERSION` in `plugins/control-room/hooks/constants.ts`.
+   The workspace `package.json` is private and carries no version of its own.
 2. Move the `Unreleased` notes in `CHANGELOG.md` under the new version.
 3. Run `npm run check`.
 4. Run `claude plugin tag plugins/control-room` to create the `control-room--v<version>` tag after

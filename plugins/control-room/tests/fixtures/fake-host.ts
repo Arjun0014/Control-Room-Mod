@@ -26,12 +26,15 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     spawned: [] as string[][],
     compacted: 0,
     scrolledToTop: 0,
+    registeredTools: [] as string[],
     /** `$.state`'s autopilot record: kept across a new Runtime (a reload), as the engine keeps it. */
     autopilotRecord: null as import('../../types').AutopilotRecord | null,
   }
   const live = {
     usage: { startedAt: 0, context: { tokens: 10_000, window: 1_000_000, percent: 1 }, rateLimits: [], cost: { usd: 0.5 } } as SessionUsage,
     sessionId: 'S1',
+    /** The tools the session offers: no task list tool by default, as in Claude Code 2.1.29x. */
+    tools: ['Bash', 'Read', 'Edit', 'Write'] as string[],
   }
   const schedule = (ms: number, fn: () => void, every: number | null) => {
     const t = { id: ++seq, at: time + ms, every, fn, isCancelled: false }
@@ -70,6 +73,11 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     registerCommand: async () => undefined,
     listCommands: async () => [],
     listAgents: async () => [],
+    listTools: async () => live.tools.map(name => ({ name, description: '', mcp: false })),
+    registerTool: async spec => {
+      kept.registeredTools.push(spec.name)
+      return `mcp__control-room__${spec.name}`
+    },
     stopTask: async () => ({ result: 'stopped' }),
     classify: async () => 'premature',
     toast: text => void kept.toasts.push(text),

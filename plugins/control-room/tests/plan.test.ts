@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { applyTool, emptyPlan, fromTodoWrite, objectiveOf, planOf, progressOf } from '../hooks/features/plan'
+import { continuationContext } from '../hooks/features/prompts'
 
 const todo = (content: string, status: 'pending' | 'in_progress' | 'completed', activeForm = `${content}ing`) => ({ content, status, activeForm })
 
@@ -55,5 +56,25 @@ describe('run plan', () => {
     expect(objectiveOf('/cr status\nFix the flaky login test')).toBe('Fix the flaky login test')
     expect(objectiveOf('yes')).toBeNull()
     expect(objectiveOf('   ')).toBeNull()
+  })
+})
+
+describe('the fresh context after a handoff', () => {
+  test('is told the open milestones, so it rebuilds its task list and progress carries on', () => {
+    const text = continuationContext({
+      runNumber: 3,
+      sessionNumber: 2,
+      handoffPath: '/work/NEXT_SESSION_PROMPT.md',
+      policies: [],
+      milestones: [
+        { subject: 'Profile the renderer', status: 'completed' },
+        { subject: 'Rewrite the hot loop', status: 'in_progress' },
+        { subject: 'Run the regression suite', status: 'pending' },
+      ],
+    })
+    expect(text).toContain('1 of 3 milestones done')
+    expect(text).toContain('[in progress] Rewrite the hot loop; Run the regression suite')
+    expect(text).not.toContain('Profile the renderer')
+    expect(continuationContext({ runNumber: 3, sessionNumber: 2, handoffPath: 'x', policies: [] })).not.toContain('task list')
   })
 })

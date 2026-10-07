@@ -64,6 +64,11 @@ export type ControlRoomSettings = {
   focus: { enabled: boolean; tools: 'compact' | 'hidden'; results: boolean; diffs: boolean; spinner: boolean }
   resources: { level: ResourceLevel; cpu: number; ram: number; intervalSec: number; enforcement: ResourceEnforcement }
   permissions: Record<PermissionCategory, PermissionState>
+  /**
+   * `milestones`: where Claude Code offers no task list of its own, give Claude Control Room's
+   * milestones tool and ask it to keep the run's milestones, so run progress has something to count.
+   */
+  progress: { milestones: boolean }
   /** `liveLoad`: machine-wide CPU and memory in the status bar (runs the sampler). */
   ui: { hud: HudPlacement; toasts: boolean; openOnStart: boolean; liveLoad: boolean }
   customProfiles: ControlRoomCustomProfile[]
@@ -71,7 +76,7 @@ export type ControlRoomSettings = {
 
 export type ControlRoomSystems = Pick<
   ControlRoomSettings,
-  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions'
+  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress'
 >
 
 export type ControlRoomCustomProfile = { id: string; name: string; createdAt: number; systems: ControlRoomSystems }
@@ -153,6 +158,8 @@ export type PaneModel = {
   frontier: { lastEffort: string | null; isEffortSupported: boolean | null; isComposeReached: boolean | null }
   notes: string[]
   savedAt: number | null
+  /** Where run progress comes from: Claude Code's own task list, Control Room's milestones tool, or nothing. */
+  planSource: 'tasks' | 'milestones' | 'none'
 }
 
 export type ResourcesView = {

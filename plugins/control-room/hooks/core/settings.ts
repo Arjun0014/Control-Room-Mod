@@ -70,6 +70,7 @@ export const SYSTEM_KEYS = [
   'focus',
   'resources',
   'permissions',
+  'progress',
 ] as const satisfies readonly (keyof SystemSettings)[]
 
 /** Categories whose loosest state is Ask: Control Room never auto-allows them. */
@@ -138,6 +139,7 @@ export function defaultSystems(): SystemSettings {
     focus: { enabled: true, tools: 'compact', results: false, diffs: false, spinner: true },
     resources: { level: 'off', cpu: 70, ram: 85, intervalSec: 3, enforcement: 'limit' },
     permissions: { ...DEFAULT_PERMISSIONS },
+    progress: { milestones: true },
   }
 }
 
@@ -191,6 +193,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
   const fo = isRecord(r.focus) ? r.focus : {}
   const re = isRecord(r.resources) ? r.resources : {}
   const pe = isRecord(r.permissions) ? r.permissions : {}
+  const pr = isRecord(r.progress) ? r.progress : {}
 
   const permissions = {} as Record<PermissionCategory, PermissionState>
   for (const category of PERMISSION_CATEGORIES) {
@@ -256,6 +259,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
       enforcement: pick(re.enforcement, ['inform', 'limit', 'strict'] as const, base.resources.enforcement),
     },
     permissions,
+    progress: { milestones: bool(pr.milestones, base.progress.milestones) },
   }
 }
 
@@ -321,6 +325,7 @@ export function systemsOf(settings: Settings): SystemSettings {
     focus: settings.focus,
     resources: settings.resources,
     permissions: settings.permissions,
+    progress: settings.progress,
   }
 }
 

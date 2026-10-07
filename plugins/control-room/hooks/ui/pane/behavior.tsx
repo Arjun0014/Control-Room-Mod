@@ -213,6 +213,26 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
             : []),
         ],
       })}
+
+      {card(kit, {
+        key: 'progress',
+        title: 'Run progress',
+        accent,
+        footer:
+          pane.planSource === 'tasks'
+            ? 'Counted from Claude Code’s own task list.'
+            : 'Claude Code offers no task list here, so Control Room gives Claude a small milestones tool. Progress is done of total, never estimated.',
+        rows: k => [
+          pane.planSource === 'tasks'
+            ? row(k, { key: 'pr-source', label: 'Milestones', subtitle: 'From Claude’s task list', value: 'Automatic', valueTone: 'muted' })
+            : row(k, {
+                key: 'pr-milestones',
+                label: 'Keep milestones for the run',
+                subtitle: s.progress.milestones ? 'Claude records its steps; Activity and the status bar count them' : 'No run progress is shown',
+                control: switchControl(k, { key: 'pr-milestones', isOn: s.progress.milestones, onPress: () => u(d => void (d.progress.milestones = !d.progress.milestones)) }),
+              }),
+        ],
+      })}
     </Box>
   )
 }

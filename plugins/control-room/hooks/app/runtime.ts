@@ -219,6 +219,7 @@ export class Runtime {
     }
 
     await this.registerCommands()
+    await this.offerMilestones()
     // Managed settings seat Anthropic's sec-default guard, which continues prompt.compose past
     // user-installed mods; policies then ride the prompt as context instead.
     const policy = await host.settings('policy').catch(() => ({}))
@@ -231,6 +232,60 @@ export class Runtime {
     this.publisher.markAll()
 
     if (this.settings.ui.openOnStart) void host.open({ id: PANE_ID, title: PANE_TITLE }).catch(() => undefined)
+  }
+
+  /** The milestones tool's full name once offered to Claude; null while it is not. */
+  milestonesTool: string | null = null
+  /** Where run progress comes from in this session. */
+  planSource: 'tasks' | 'milestones' | 'none' = 'none'
+
+  /**
+   * Run progress counts Claude's task list. Claude Code builds that offer
+   * none (its task tools are off by default in 2.1.29x) get Control Room's
+   * milestones tool instead, with a short policy, unless the person turned
+   * it off. Where a task list exists it is used, and nothing is added.
+   */
+  async offerMilestones(): Promise<void> {
+    const host = this.host
+    if (host === null) return
+    const tools = await host.listTools().catch(() => [] as readonly { name: string }[])
+    if (tools.some(t => Plan.isPlanTool(t.name))) {
+      this.planSource = 'tasks'
+      this.publisher.mark('pane')
+      return
+    }
+    if (!this.settings.progress.milestones) {
+      this.planSource = this.milestonesTool === null ? 'none' : 'milestones'
+      this.publisher.mark('pane')
+      return
+    }
+    if (this.milestonesTool === null) {
+      this.milestonesTool = await host
+        .registerTool({ name: prompts.MILESTONES_TOOL.name, description: prompts.MILESTONES_TOOL.description, inputSchema: prompts.MILESTONES_TOOL.inputSchema as unknown as Record<string, unknown> })
+        .catch(() => null)
+    }
+    this.planSource = this.milestonesTool === null ? 'none' : 'milestones'
+    this.publisher.mark('pane')
+  }
+
+  /** The milestones tool's answer: the run plan updated from the whole list. A subagent's list is its own. */
+  recordMilestones(input: Record<string, unknown>, agentId: string | undefined): string {
+    if (!this.settings.progress.milestones) return 'Milestone tracking is off in Control Room; there is no need to call this tool.'
+    if (agentId !== undefined || this.run === null) return 'Recorded.'
+    const session = Chain.currentSession(this.run)?.index ?? 1
+    const plan = Plan.fromMilestones(this.plan, input, session, Date.now())
+    if (plan !== this.plan) {
+      this.run = { ...this.run, plan }
+      this.persistRun()
+      this.publisher.mark('activity', 'hud', 'pane')
+    }
+    const p = this.progress
+    return `Recorded: ${p.done} of ${p.total} milestones done${p.current === null ? '' : `, now: ${p.current.subject}`}.`
+  }
+
+  /** The policy sections in force, with what this session offers. */
+  policies(): ReturnType<typeof policySections> {
+    return policySections(this.settings, this.autopilot.threshold, { milestonesTool: this.milestonesTool })
   }
 
   private async registerCommands(): Promise<void> {
@@ -343,7 +398,7 @@ export class Runtime {
       this.stepAutopilot({ kind: 'externalClear' })
       return []
     }
-    const policies = policySections(this.settings, this.autopilot.threshold).map(s => s.name)
+    const policies = this.policies().map(s => s.name)
     const sessionNumber = this.run === null ? 1 : (Chain.currentSession(this.run)?.index ?? 1)
     return [
       prompts.continuationContext({
@@ -351,6 +406,7 @@ export class Runtime {
         sessionNumber,
         handoffPath: this.handoffPath(),
         policies,
+        milestones: this.plan.tasks.map(t => ({ subject: t.subject, status: t.status })).slice(-30),
       }),
     ]
   }
@@ -629,7 +685,7 @@ export class Runtime {
     }
     const isComposeMissing = !this.compose.isReached && (this.composeObserved || this.compose.isLikelyBypassed)
     if (isComposeMissing && !this.compose.deliveredFallback) {
-      const policy = policyText(policySections(this.settings, this.autopilot.threshold))
+      const policy = policyText(this.policies())
       if (policy !== null) {
         context.push(policy)
         this.compose.deliveredFallback = true
@@ -806,7 +862,7 @@ export class Runtime {
 
   composeSection(): { id: string; text: string; scope: 'session' } | null {
     this.compose.isReached = true
-    const text = policyText(policySections(this.settings, this.autopilot.threshold))
+    const text = policyText(this.policies())
     return text === null ? null : { id: POLICY_SECTION_ID, text, scope: 'session' }
   }
 
@@ -1155,8 +1211,12 @@ export class Runtime {
       before.resources.ram !== this.settings.resources.ram ||
       before.resources.enforcement !== this.settings.resources.enforcement
     if (resourceChanged) {
-      const section = policySections(this.settings, this.autopilot.threshold).find(s => s.name.startsWith('Resource Governor'))
+      const section = this.policies().find(s => s.name.startsWith('Resource Governor'))
       void host.appendForModel(prompts.resourceLevelChangedNotice(section?.text ?? null))
+    }
+    if (before.progress.milestones !== this.settings.progress.milestones) {
+      void this.offerMilestones()
+      if (this.milestonesTool !== null) changes.push(`milestone tracking is now ${this.settings.progress.milestones ? 'on' : 'off'}`)
     }
     if (changes.length > 0) {
       void host.appendForModel(`Control Room · The user changed session settings: ${changes.join('; ')}. The updated policy is in your system prompt from your next request.`)

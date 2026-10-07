@@ -19,9 +19,10 @@ own settings and run records in Claude Code's per-plugin store. Run
 | Data | Used for | Kept |
 | --- | --- | --- |
 | Session figures: context tokens, window and percent, cost in USD *as Claude Code reports it*, the model id, the session id, the Claude Code version, the attached surfaces | HUD, Context Autopilot threshold, Session Chain | Run records (see [Data at rest](#data-at-rest)) |
-| The prompts you submit, and Claude's final message when a turn stops | Model Router task class (keyword match). No-Lazy-Exit Guard comparison of the request with the final answer. | Memory only, for the current turn |
-| Tool calls as they happen: tool name, and input such as a shell command or file path | Permission Policy classification, the heavy-command check, the Activity tab, Focus View rows | Memory only (last 300 calls) |
-| Edit/Write results (the structured patch Claude Code returns) | The Changes view's per-file diffs | Memory only (200 files, hunks capped) |
+| The prompts you submit, and Claude's final message when a turn stops | Model Router task class (keyword match). No-Lazy-Exit Guard comparison of the request with the final answer. The first sentence of your latest substantial request is the run's *objective* in Activity. | The objective: in the run record. The rest: memory only, for the current turn |
+| Tool calls as they happen: tool name, and input such as a shell command or file path; whether each succeeded, and for a failed or refused call the first line of its answer | Permission Policy classification, the heavy-command check, Activity (Attention, Validation), Focus View rows | Memory only (last 300 calls) |
+| Edit/Write results (the structured patch Claude Code returns; for a file written whole, its content as the added lines) | The Changes view's per-file diffs | Memory only (200 files, hunks capped) |
+| Claude's own task list: the inputs and results of TodoWrite, TaskCreate, TaskUpdate and TaskList (subjects, statuses, the "doing" form) | Run progress in Activity and the status bar; after a handoff, the open milestones are named in the fresh context so its task list carries on | In the run record (at most 60 tasks) |
 | File *metadata* only (`stat`): the handoff file's modification time; the real path of a file Claude is about to edit | Verifying that the handoff was written; detecting edits outside the project, including through links | Nothing |
 | The running subagents list (type, status, description) | Subagent counts and limits | Memory only |
 | The names of registered slash commands | Only so as not to take `/cr` if something else uses it | Nothing |
@@ -51,7 +52,8 @@ It reads totals only: no per-process data, no process names, nothing about other
 | Hide, refuse or ask about a subagent | Subagent Control |
 | Continue a turn that stopped early, with a short message | No-Lazy-Exit Guard (capped per turn and per session) |
 | Stop a background job that Claude started | Only when you press Stop in Guardrails → Machine load |
-| Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts | Always (Focus view and the status bar can be turned off) |
+| Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts; scroll its own pane back to the top | Always (Focus view and the status bar can be turned off) |
+| Keep the Autopilot step under way in `$.state` | While a handoff is under way or waiting, so a reload of the plugin carries it on instead of starting a second one |
 | Write its own store | Settings changes, run records |
 
 **Permission rules that always hold:**
@@ -60,8 +62,9 @@ It reads totals only: no per-process data, no process names, nothing about other
   settings or Claude Code.
 - Plan mode is never overridden.
 - *Allow* only answers a prompt Claude Code would otherwise show. It is not offered for edits
-  outside the project, push, force push or destructive Git, deploys, or dangerous commands. A
-  hand-edited store that sets one of those to *allow* is repaired to *ask*.
+  outside the project, deleting files, push, force push or destructive Git, deploys, or dangerous
+  commands. A saved *allow* for one of those (deleting files allowed it before 1.0.2, and a
+  hand-edited store may) reads as *ask*, and the panel names it once.
 - *Ask* forces an approval even where a rule or the permission mode would allow.
 - Shell commands are tokenised and each segment is classified. The strictest finding wins. This
   is pattern-based and narrows what Claude may do. It is not a sandbox.
@@ -99,11 +102,13 @@ Claude Code keeps each plugin's store as JSON under `~/.claude/plugins/store/`. 
 - `settings.v1`: your settings and custom profiles.
 - `run.v1.<id>`, `runs.index.v1`, `runs.counter.v1`: run records. Each holds the project root
   path, session ids, start and end times, peak and last context, reported cost, turn counts, model
-  ids, end reasons and transitions. At most 30 runs and 60 sessions per run are kept; older ones
-  are pruned.
+  ids, end reasons and transitions, and for run progress the run's objective (the first sentence
+  of your latest substantial request, at most 140 characters) and Claude's task list (subjects and
+  statuses, at most 60). At most 30 runs and 60 sessions per run are kept; older ones are pruned.
 
-No prompt text, answer text, tool input, diff or file content is persisted. `/cr reset confirm`
-clears the settings; uninstalling the plugin removes the plugin itself.
+Beyond that objective and the task subjects, no prompt text, answer text, tool input, diff or file
+content is persisted. `/cr reset confirm` clears the settings; uninstalling the plugin removes the
+plugin itself.
 
 ## Reporting a vulnerability
 

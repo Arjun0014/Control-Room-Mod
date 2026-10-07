@@ -77,6 +77,8 @@ function hostOf($: EngineInterface): Host {
     listCommands: () => $.command.list(),
 
     listAgents: () => $.agent.list(),
+    listTools: () => $.tool.list(),
+    registerTool: spec => $.tool.register(spec).then(r => r.tool),
     stopTask: taskId => $.tool.call({ tool: 'TaskStop', task_id: taskId }),
     classify: (text, labels, model) => $.model.classify(text, labels, model === undefined ? undefined : { model }),
 
@@ -231,6 +233,14 @@ export const register: Register = on => {
 
   // -------------------------------------------------------------------------
   // Tools: permissions, resources, activity
+
+  // Control Room's own milestones tool, offered only where Claude Code has no task list.
+  // Registered before the general hook, so it answers the call itself.
+  on('tool.call', { tool: /^mcp__control-room__milestones$/ }, async ($, e) => {
+    if (rt.host === null) rt.bind(hostOf($))
+    await rt.ensureLoaded()
+    return { result: rt.recordMilestones(isRecord(e) ? { ...e } : {}, e.agentId) }
+  })
 
   on('tool.call', async ($, e, next) => {
     if (rt.host === null) rt.bind(hostOf($))

@@ -62,7 +62,7 @@ Platform constraints discovered and designed around:
 
 | Surface element | Mechanism | Terminal | Desktop |
 | --- | --- | --- | --- |
-| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status` | ✅ | ✅ |
+| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status`. Context and work meters as glyphs, SVG on Desktop | ✅ | ✅ |
 | **Launcher / sidebar** | `Pane` `control-room`: docked beside the transcript in the fullscreen TUI, inline otherwise; placed by Desktop | ✅ | ✅ |
 | **Control Room panel** | the same pane: six sections drawn by the design system (`ui/primitives.tsx`) | ✅ | ✅ (native controls, SVG meters) |
 | Activity line | `Spinner` `message` rewrite while a turn runs | ✅ | ✅ |
@@ -101,7 +101,10 @@ plugins/control-room/
     guard.ts                      premature-exit heuristics, thresholds, repeat detection
     router.ts                     task classes, tables, main/subagent routing, model families
     subagents.ts                  spawn decisions, live counts
-    activity.ts                   tool-call tracker, changed files and hunks, summary line
+    activity.ts                   tool-call tracker, changed files and hunks, refusals and reasons, summary line
+    plan.ts                       the run plan from Claude's task tools (TodoWrite, TaskCreate/Update/List), progress
+    validation.ts                 checks recognised by their runner (tests, build, type-check, lint, checks, simulation)
+    digest.ts                     signal: change groups, Attention, the turn in counted lines, what Claude is doing now
     prompts.ts                    every text Control Room gives Claude
     permissions/                  shell tokenizer, category classifier, decisions + invariants
     resources/                    samplers + parsers (Windows/macOS/Linux), pressure, heavy commands
@@ -123,6 +126,8 @@ sites redraw. No feature module touches `$`.
 | --- | --- | --- | --- |
 | Settings | `$.store` `settings.v1` (normalised on load) + module memory | everything | active profile, per-system settings, custom profiles |
 | Run / chain | `$.store` `run.v1.<id>` + `runs.index.v1` + `runs.counter.v1` | `/clear`, reload, restart | run id, sessions (ids, times, peak context, cost, turns, model, end reason, transitions); 30 runs × 60 sessions kept |
+| Run plan and objective | inside the run record (`plan`, `objective`) | `/clear`, reload, restart | Claude's milestones as its task tools left them, the person's latest substantial request |
+| Handoff in flight | `$.state` `autopilot` (`{ record }`) | hot reload only (gone after restart or `/clear`) | the Autopilot step under way, when it began, retries, a snooze: what a reload needs to carry the handoff on instead of starting a second one |
 | Live session | module memory (`Runtime`) | `/clear` (module stays loaded) | context, cost, autopilot machine, guard counters, activity, changes, resources, agents, learned model ids |
 | View models | `$.state` atoms `hud`, `pane`, `resources`, `chain`, `activity`, `permissions`, `focus`, `spinner` | hot reload (re-published after `/clear`) | render-ready projections only |
 
@@ -178,6 +183,17 @@ The reducer (`features/autopilot.ts`) is pure: `step(model, event, cfg)`
 returns the next model and a list of effects (append a notice, submit a
 prompt, verify the file, clear, compact, notify), which the Runtime performs.
 
+**A reload mid-handoff.** A hot reload or `/reload-plugins` starts a fresh
+Runtime, whose module memory is empty. Every step of the machine is
+therefore mirrored into `$.state` (`recordOf`), which outlives a reload but
+not a restart or `/clear`, so a record can only ever apply to the context it
+was written in. At session start a fresh Runtime replays it (`recover`):
+`pending`, `handoff` and `awaiting` resume as they were and the turn under
+way moves them on; an owed check or `/clear` is carried out; a step that may
+or may not have happened (`requested`: the handoff prompt about to go out;
+`compacting`) waits for the person instead of being repeated. The context
+crossing the threshold again never starts a second handoff.
+
 * Threshold: exact tokens or % of the live window; clamped below Claude
   Code's own auto-compact threshold (warned in the UI).
 * Pending notice is injected mid-turn with `$.session.append` (finish the
@@ -187,7 +203,9 @@ prompt, verify the file, clear, compact, notify), which the Runtime performs.
   create/update `NEXT_SESSION_PROMPT.md` — **without prescribing its
   contents**.
 * After `/clear`: `classic.SessionStart{clear}` injects the continuation
-  context (run/session numbers, active policies, where the handoff file is);
+  context (run/session numbers, active policies, where the handoff file is,
+  and the run plan's open milestones so the fresh context rebuilds its task
+  list and work progress carries on);
   the continuation prompt asks Claude to read project docs +
   `NEXT_SESSION_PROMPT.md` and continue; ask the person only for decisions
   the handoff marks as theirs.
@@ -251,7 +269,8 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (127 tests, run on both 2.1.292 and 2.1.289):
+* `claude plugin test` (155 tests, run on 2.1.292, and in CI on the latest Claude Code for Linux,
+  Windows and macOS and on 2.1.289 for Linux):
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity),
   a Runtime suite over an in-memory host with a manual clock, and

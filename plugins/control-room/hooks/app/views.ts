@@ -322,6 +322,7 @@ export function paneOf(rt: Runtime): PaneModel {
     },
     notes: rt.notes,
     savedAt: rt.savedAt,
+    planSource: rt.planSource,
   }
 }
 

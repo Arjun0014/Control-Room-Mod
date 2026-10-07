@@ -41,6 +41,19 @@ anything the engine refused, and why.
   surveys there, and comes back afterwards.
 - With `/cr hud status`, it is on Claude Code's status line instead.
 
+## Work progress is missing, or reads oddly
+
+- **No Work meter:** progress comes from Claude's own task list (TodoWrite or the Task tools).
+  Until Claude keeps one for the run, there is nothing to count, so nothing is shown. Asking for a
+  task list ("plan this as a checklist first") gives it one.
+- **The total changed after a handoff:** the fresh context rebuilds its task list from the notes
+  (Control Room names the open milestones for it). Its list replaces the earlier context's open
+  work; finished milestones always stay counted.
+- **CPU and RAM left the status bar:** calm readings stay in the panel (Overview, Guardrails).
+  The status bar names them only near a ceiling.
+- **The cost in the status bar is higher than this session's:** it is the whole run's total, which a
+  handoff never resets. Each session's own cost is in Context → Run.
+
 ## Context Autopilot
 
 | Symptom | Cause and fix |
@@ -50,6 +63,7 @@ anything the engine refused, and why.
 | Waiting for you | `/clear` was refused and compaction was not allowed or also failed, or the continuation is `manual`. Press **Start fresh context** (or `/cr fresh`). |
 | The threshold is lower than I set | It is kept below Claude Code's own auto-compact point, so the handoff runs first. The Context section shows the clamp. |
 | The fresh context didn't continue by itself | *Auto-continue* is off, or the session was waiting on an approval. Ask Claude to continue from `NEXT_SESSION_PROMPT.md`. Your policies and profile are already active. |
+| "Control Room reloaded in the middle of a handoff" | The plugin was reloaded (`/reload-plugins`, an update) while a handoff was under way. Autopilot picks up where it was; only when it cannot tell whether a step already happened (the handoff prompt was about to go out, or a compaction) does it wait for you, so nothing runs twice. Press **Hand off now** or **Start fresh**. |
 
 ## Permission Policy
 
@@ -62,6 +76,9 @@ anything the engine refused, and why.
   answer, Claude Code refuses an Ask. Set those categories to *Default* for headless use.
 - **Allow had no effect:** Allow only answers a prompt Claude Code would show. It never lifts a
   deny rule, never acts in plan mode, and is not available for high-risk categories.
+- **"Deleting files no longer offers Allow"**: since 1.0.2, deleting files is high-risk like push
+  and deploys. A saved Allow now reads as Ask, so Claude Code asks before a delete. *Default*
+  leaves it to Claude Code's own rules and permission mode; *Deny* refuses deletes outright.
 
 ## Machine load
 
@@ -94,7 +111,19 @@ anything the engine refused, and why.
 ## Focus view
 
 It changes presentation only. Press `▸` on a row to expand it, or see everything in Activity
-(Tool calls / Changes). `/cr focus off` restores Claude Code's own rows.
+(the summary, or *All tool calls*). `/cr focus off` restores Claude Code's own rows.
+
+## Activity
+
+- **A check is not under Validation:** checks are recognised by their runner (`npm test`, `pytest`,
+  `cargo build`, `tsc`, `eslint`, `npm run check`, a script named for a simulation, …). A custom
+  script with another name shows under *All tool calls* only.
+- **"in the background"**: a check sent to the background has no outcome Control Room can see.
+- **"diff unavailable"**: no tool reported the lines (a file a shell command created, or a diff
+  Claude Code skipped). Control Room never shows `+0 −0` for an unknown change.
+- **A file I care about is under "Generated and temporary"**: files in temp, cache and build
+  folders (`dist`, `target`, `coverage`, …), in `.claude`, outside the project, and the handoff
+  notes are grouped there. Press the row to open it.
 
 ## Cost shows "—"
 

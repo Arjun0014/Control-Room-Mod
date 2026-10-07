@@ -67,6 +67,42 @@ export function resourcePolicy(input: {
   ].join('\n')
 }
 
+/** The tool Control Room offers for milestones where Claude Code has no task list of its own. */
+export const MILESTONES_TOOL = {
+  name: 'milestones',
+  description: [
+    'Record the milestones of the work in progress, so the person sees how far the run is (Control Room shows done of total).',
+    'Send the whole list each time: when multi-step work starts, and whenever a milestone starts or finishes. Keep it to the real steps of the objective, usually 3 to 10; a quick one-step request needs none.',
+    'Mark exactly one milestone in_progress while you work on it, with `doing` in the present tense ("Running regression tests").',
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      milestones: {
+        type: 'array',
+        description: 'Every milestone of the work, in order.',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'The milestone, in a few words ("Fix the renderer").' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+            doing: { type: 'string', description: 'While in progress, what you are doing, in the present tense.' },
+          },
+          required: ['title', 'status'],
+        },
+      },
+    },
+    required: ['milestones'],
+  },
+} as const
+
+export function milestonesPolicy(tool: string): string {
+  return [
+    '## Run progress',
+    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin (the whole list, 3 to 10 real steps), and send the list again each time a milestone starts or finishes. Give the one in progress a short present-tense \`doing\` line. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
+  ].join('\n')
+}
+
 export function subagentPolicy(mode: SubagentMode, limit: number): string | null {
   switch (mode) {
     case 'unrestricted':
@@ -137,6 +173,8 @@ export function continuationContext(input: {
   sessionNumber: number
   handoffPath: string
   policies: string[]
+  /** The run's milestones as the previous context left its task list. */
+  milestones?: readonly { subject: string; status: string }[]
 }): string {
   const run = input.runNumber === null ? '' : ` (Control Room run #${input.runNumber}, session ${input.sessionNumber})`
   const lines = [
@@ -144,6 +182,15 @@ export function continuationContext(input: {
     `The handoff notes are in ${input.handoffPath}. Read them and the project documentation they point to before acting.`,
   ]
   if (input.policies.length > 0) lines.push(`Active Control Room policies remain in force: ${input.policies.join(', ')}.`)
+  const milestones = input.milestones ?? []
+  const open = milestones.filter(m => m.status !== 'completed')
+  if (open.length > 0) {
+    const done = milestones.length - open.length
+    const list = open.map(m => `${m.status === 'in_progress' ? '[in progress] ' : ''}${m.subject}`).join('; ')
+    lines.push(
+      `The run's task list (${done} of ${milestones.length} milestones done) left these open: ${list}. Recreate your task list (or your milestones) from them, checked against the handoff notes, so the run's progress carries on.`,
+    )
+  }
   return lines.join(' ')
 }
 

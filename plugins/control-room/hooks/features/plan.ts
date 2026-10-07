@@ -178,6 +178,16 @@ export function applyTool(plan: Plan, input: { tool: string; input: Record<strin
 
 export const isPlanTool = (tool: string): boolean => tool === 'TodoWrite' || tool === 'TaskCreate' || tool === 'TaskUpdate' || tool === 'TaskList'
 
+/**
+ * Control Room's own milestones tool, where Claude Code offers no task list:
+ * the whole list each time, as TodoWrite sends it.
+ */
+export function fromMilestones(plan: Plan, input: Record<string, unknown>, session: number, now: number): Plan {
+  if (!Array.isArray(input.milestones)) return plan
+  const todos = input.milestones.filter(isRecord).map(m => ({ content: str(m.title), status: m.status, activeForm: str(m.doing) }))
+  return fromTodoWrite(plan, todos, session, now)
+}
+
 export type Progress = {
   done: number
   total: number

@@ -48,6 +48,47 @@ public static class ConDrive
         if (!AttachConsole(pid)) throw new Exception("AttachConsole failed: " + Marshal.GetLastWin32Error());
     }
 
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out RECT r);
+    [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+
+    /// Saves the console window as a PNG, as drawn (even when other windows cover it).
+    /// `cells` crops to "col,row,width,height" in 1-based character cells; empty keeps it whole.
+    public static void Capture(uint pid, string path, string cells)
+    {
+        Attach(pid);
+        IntPtr hwnd = GetConsoleWindow();
+        if (hwnd == IntPtr.Zero) throw new Exception("no console window");
+        RECT rc;
+        GetClientRect(hwnd, out rc);
+        int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
+        IntPtr outh = CreateFileW("CONOUT$", GENERIC_READ | GENERIC_WRITE, SHARE_RW, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        CSBI info;
+        GetConsoleScreenBufferInfo(outh, out info);
+        CloseHandle(outh);
+        int cols = info.Window.Right - info.Window.Left + 1, rows = info.Window.Bottom - info.Window.Top + 1;
+        using (var shot = new System.Drawing.Bitmap(w, h))
+        {
+            using (var g = System.Drawing.Graphics.FromImage(shot))
+            {
+                IntPtr hdc = g.GetHdc();
+                // PW_CLIENTONLY | PW_RENDERFULLCONTENT
+                PrintWindow(hwnd, hdc, 3);
+                g.ReleaseHdc(hdc);
+            }
+            System.Drawing.Rectangle area = new System.Drawing.Rectangle(0, 0, w, h);
+            if (!string.IsNullOrEmpty(cells))
+            {
+                string[] p = cells.Split(',');
+                double cw = (double)w / cols, ch = (double)h / rows;
+                int x = (int)Math.Round((int.Parse(p[0]) - 1) * cw), y = (int)Math.Round((int.Parse(p[1]) - 1) * ch);
+                area = new System.Drawing.Rectangle(x, y, Math.Min(w - x, (int)Math.Round(int.Parse(p[2]) * cw)), Math.Min(h - y, (int)Math.Round(int.Parse(p[3]) * ch)));
+            }
+            using (var crop = shot.Clone(area, shot.PixelFormat)) crop.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+    }
+
     /// Returns the visible window as text; with attrs, a second grid follows:
     /// fg colour as a hex digit, '#' where reverse video (0x4000), '_' underline (0x8000).
     public static string Read(uint pid, bool attrs, bool wholeBuffer)

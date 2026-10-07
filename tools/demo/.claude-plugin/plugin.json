@@ -1,0 +1,6 @@
+{
+  "name": "control-room-demo",
+  "version": "0.0.0",
+  "description": "Development only: replays a short scripted piece of work through real tools, for Control Room screenshots.",
+  "license": "MIT"
+}

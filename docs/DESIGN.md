@@ -5,15 +5,15 @@ This page records the decisions behind the UI, so later changes keep it that way
 
 ## Principles
 
-1. **Calm by default.** Show what is happening, not every switch. The status bar carries live
-   readings and events only; settings live in the panel. Color appears only when something needs a
-   look.
+1. **Calm by default.** Show what is happening, not every switch. The status bar carries the run
+   at a glance and states only while they matter; settings live in the panel. Color appears only
+   when something needs a look.
 2. **Plain words.** "Hands off at 70%", "Watching for early stops", "Memory 91%". No internal
    names, codes or all-caps labels in the UI. The same helpers (`app/views.ts`) give the status
    bar, the panel, the status line and `/cr status` one voice.
 3. **One question per section.** Overview: how is this session doing? Context: when does Claude
-   hand off? Behavior: how does Claude work? Guardrails: what may it do? Activity: what did it just
-   do? Setup: profiles, display, about.
+   hand off? Behavior: how does Claude work? Guardrails: what may it do? Activity: how far is the
+   run, and what needs a look? Setup: profiles, display, about.
 4. **Progressive disclosure.** A system is one switch; its finer settings appear only while it is
    on. A choice shows its value, and its options open in place, each with one line on what it means.
 5. **Direct manipulation.** Every control takes one click or one Enter. There are no popups in the
@@ -21,6 +21,9 @@ This page records the decisions behind the UI, so later changes keep it that way
    open in place instead.
 6. **Same tree, native look.** One element tree per view. The design system draws it natively on
    each surface.
+7. **Counted, never guessed.** Progress is milestones done of the total Claude listed, cost is
+   what Claude Code reports, a check passed when its command did. A fact that cannot be known (a
+   background command's outcome, a diff no tool reported) says so in words.
 
 ## Hierarchy and rhythm
 
@@ -75,11 +78,13 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | `meterBar` | thin line `━━━━──┃──` with the threshold tick | SVG bar | SVG bar |
 | `spark` | `▁▂▄▆█` | SVG area chart with a dashed ceiling | SVG |
 | `navBar` | labels with the section's accent underline under the current one | native buttons in one row with an even gap when all fit; otherwise three equal cells per row, each button centred | same as Desktop |
+| `workStrip` | one square per milestone: `■` done (blue), the current one bright, `□` to come; scaled past its width, with `4 of 7` beside it | rounded SVG segments | SVG segments |
 | `callout` | rounded border in the status color, title, line, actions | same, drawn natively | same |
 | `gauge` | label and %, line meter with ceiling tick, sparkline | label and %, SVG bar | SVG bar |
 | `steps` | numbered lines in the accent | same | same |
 | `field` | dim label in a 10-cell column, the reading after it | same | same |
-| `card`, `row`, `pair`, `listItem`, `note`, `textRuns` | layout | layout | layout |
+| `listItem` | glyph, text, a note at the right edge, and an optional dim second line (why it failed, which command ran) | same | same |
+| `card`, `row`, `pair`, `note`, `textRuns` | layout | layout | layout |
 
 Every control has a stable `key`. A picker's options are keyed `<picker>:<value>`, a stepper's
 buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every surface.
@@ -87,23 +92,58 @@ buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every sur
 ## The status bar
 
 ```
-◆   Context ━━━━━━──── 69%   $78.35   CPU ▂▃▅▃ 23%   RAM ▇▇▇▇ 79%   2 agents        Control Room
+◆   Context ━━━━━━━┃── 62%   Work ■■■■□□□ 4/7   ▸ Running regression tests        Run $115.93   Control Room
 ```
 
-Live readings and events only, from most to least important:
+The run at a glance. Two meters that cannot be confused, by shape, color and number:
 
-1. The brand mark.
-2. Context, with a meter from 76 columns.
-3. Events as they happen: an Autopilot handoff in progress, or waiting for you.
-4. Cost.
-5. CPU and RAM. From 110 columns they show their last six readings once there are six (so the bar
-   never shifts sample by sample), are amber near a ceiling and red at it.
-6. Running agents, and the guard keeping Claude going.
-7. The run total once a run spans sessions.
+- **Context** is a continuous line with the orange handoff tick and a percentage: how much of the
+  reasoning window is used. It starts over after a handoff.
+- **Work** is one square per milestone with `done/total`: how much of the run's objective is
+  finished, from Claude's own task list. It carries across handoffs, so it keeps climbing while the
+  context meter saws up and down.
 
-Settings (Frontier Max, a profile, the handoff threshold) are never shown here. Items drop from
-the least important end as the width shrinks. A second line appears only for a handoff about to
+After them, what Claude is doing right now (`▸ Running regression tests`), in Claude's own words
+when the milestone under way has them, else from the running call; it takes whatever room is
+left and is the first thing to go when the bar is short. Then the **run's** total cost, which a
+fresh context never resets. A session's own cost stays in the panel.
+
+States appear only while they matter: a handoff under way or waiting, a check failing
+(`✗ Tests failing`), calls that need a look (`▲ 2 issues`), a busy machine (`RAM 92%`, amber near
+a ceiling and red at it; calm readings stay in the panel), running agents, the guard keeping
+Claude going. Settings (a profile, the threshold) are never shown.
+
+Width decides the detail. From 120 columns (100 on Desktop) the meters carry their labels; from 90
+they stand alone with eight cells; from 64 six; below that four, and then the least important
+items drop. Desktop draws both meters as SVG. A second line appears only for a handoff about to
 happen, a handoff waiting for you, or a machine under heavy load.
+
+## Activity
+
+Activity is the run in detail, signal before noise. Its summary reads top to bottom:
+
+1. **Run progress**: the objective (the person's latest substantial request), the milestone strip
+   and a window of milestones around the one under way, then *Now*, *Next* and *Checks*.
+2. **This turn**: a few counted lines ("Changed 4 files · 3 in code, 1 in tests", "Ran tests twice,
+   passing after a fix"). No model writes them.
+3. **Attention**, only when something needs a look: failures nothing has fixed (with the first
+   line of the error and how many tries), refusals, calls the Resource Governor held back,
+   long-running and unusually slow calls, then failures a later attempt recovered from, dimmed.
+4. **Validation**: one row per kind of check (tests, build, type-check, lint, checks, simulation),
+   the latest run deciding its state, with its command and duration.
+5. **Changes**: code, tests, docs, config and other, each a short list of files that open their
+   diff in place. Generated and temporary files (temp and build folders, `.claude`, the handoff
+   notes, anything outside the project) fold into one row. A file with no reported diff says
+   `diff unavailable`, never `+0 −0`.
+
+Every tool call, newest first, is the secondary view (*All tool calls*).
+
+## Moving around
+
+The section bar sits at the top of the pane, which scrolls as one. Choosing a section starts the
+new page at its top, and every page ends with a quiet `↑ Sections` that brings the bar back. The
+mod API has no pinned region inside a pane; drawing one over the scroll position would fight the
+engine's own scrolling and keyboard focus, so it is not done.
 
 ## Copy
 

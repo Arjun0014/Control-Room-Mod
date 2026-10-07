@@ -5,14 +5,17 @@
     console.ps1 launch -Dir C:\some\trusted\folder [-Cols 150] [-Lines 48]
     console.ps1 read [-Attrs]
     console.ps1 send -Spec 'text:/cr|enter'
+    console.ps1 capture -Out shot.png [-Cells 'col,row,width,height']
     console.ps1 kill
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('launch', 'read', 'send', 'kill')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('launch', 'read', 'send', 'capture', 'kill')][string]$Action,
   [string]$Dir = '',
   [int]$Cols = 150,
   [int]$Lines = 48,
   [string]$Spec = '',
+  [string]$Out = '',
+  [string]$Cells = '',
   [switch]$Attrs,
   [switch]$Whole,
   [int]$TargetPid = 0,
@@ -24,7 +27,7 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pidFile = Join-Path $env:TEMP 'control-room-console.pid'
 $screenFile = Join-Path $env:TEMP 'control-room-screen.txt'
-Add-Type -Path (Join-Path $here 'ConDrive.cs')
+Add-Type -Path (Join-Path $here 'ConDrive.cs') -ReferencedAssemblies System.Drawing
 
 if ($Action -eq 'launch') {
   if ($Dir -eq '' -or -not (Test-Path $Dir)) { throw 'launch needs -Dir: an existing folder Claude Code already trusts (a trust dialog would wait for you).' }
@@ -53,6 +56,10 @@ switch ($Action) {
     Get-Content -Path $screenFile -Encoding UTF8
   }
   'send' { [ConDrive]::Send([uint32]$TargetPid, $Spec) }
+  'capture' {
+    if ($Out -eq '') { throw 'capture needs -Out: the PNG to write' }
+    [ConDrive]::Capture([uint32]$TargetPid, [System.IO.Path]::GetFullPath($Out), $Cells)
+  }
   'kill' {
     Get-CimInstance Win32_Process -Filter "ParentProcessId=$TargetPid" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Stop-Process -Id $TargetPid -Force -ErrorAction SilentlyContinue

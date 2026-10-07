@@ -173,6 +173,7 @@ const LABELS: Record<string, string> = {
   'resources.ram': 'Memory ceiling',
   'resources.intervalSec': 'Sample every',
   'resources.enforcement': 'When over',
+  'progress.milestones': 'Milestones',
 }
 
 for (const category of PERMISSION_CATEGORIES) {

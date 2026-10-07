@@ -107,6 +107,8 @@ export class Runtime {
     known: new Map<Family, string>(),
     /** Families whose routed model the engine refused this session. */
     unavailable: new Set<string>(),
+    /** True when the router sent the last turn to another model than the session's. */
+    wasRouted: false,
   }
   agents = { list: [] as AgentInfo[], spawned: 0, denied: 0, asked: 0, allowAll: false, poll: null as { cancel: () => void } | null }
   permissionLog: PermissionLogEntry[] = []
@@ -167,7 +169,7 @@ export class Runtime {
     )
     this.cache = new CacheGuardian({
       host: () => this.host,
-      now: () => this.host?.time?.() ?? Date.now(),
+      now: () => this.clock(),
       settings: () => this.settings,
       isTurnRunning: () => this.turn.isRunning,
       contextTokens: () => this.usage.tokens ?? 0,
@@ -181,22 +183,31 @@ export class Runtime {
   // -------------------------------------------------------------------------
   // The prompt cache
 
+  /** Milliseconds since the epoch: the system clock, or a test's manual one. Every cache figure is timed by it. */
+  clock(): number {
+    return this.host?.time?.() ?? Date.now()
+  }
+
   /**
    * Keep warm stands down while the context is about to be cleared: a
-   * handoff under way or due, whose /clear throws the cache away. A compact
-   * fallback keeps it (compaction re-reads the whole conversation).
+   * handoff under way or due, whose /clear throws the cache away. A handoff
+   * that compacts keeps it (compaction re-reads the whole conversation), and
+   * so does the compact fallback while it runs. A handoff waiting for the
+   * person ends in a fresh context, so it stands down then too.
    */
   keepWarmStandDown(): string | null {
     const a = this.settings.autopilot
     if (!a.enabled) return null
-    const state = this.autopilot.state
-    if (state === 'compacting' || a.continuation === 'compact') return null
-    if (['pending', 'requested', 'handoff', 'verifying', 'clearing', 'resuming', 'awaiting'].includes(state)) {
-      return 'A handoff will start a fresh context, so this cache is about to be discarded'
+    const ap = this.autopilot
+    if (ap.state === 'compacting') return null
+    if (ap.state === 'awaiting' || ap.state === 'clearing' || ap.state === 'resuming') {
+      return 'A handoff is starting a fresh context, so this cache is about to be discarded'
     }
-    const threshold = this.autopilot.threshold
-    if (threshold !== null && (this.usage.tokens ?? 0) >= threshold) return 'Past the handoff point: the next turn hands off'
-    return null
+    const tokens = this.usage.tokens ?? 0
+    const isPastThreshold = ap.state === 'armed' && ap.threshold !== null && tokens >= ap.threshold && (ap.snoozeUntil === null || tokens >= ap.snoozeUntil)
+    const isComing = ap.state === 'pending' || ap.state === 'requested' || ap.state === 'handoff' || ap.state === 'verifying' || isPastThreshold
+    if (!isComing || a.continuation === 'compact') return null
+    return isPastThreshold ? 'Past the handoff point: the next turn hands off to a fresh context' : 'A handoff will start a fresh context, so this cache is about to be discarded'
   }
 
   private onCacheMiss(miss: CacheModel.CacheMiss): void {
@@ -227,8 +238,9 @@ export class Runtime {
     return `Control Room: the prompt cache holds ${fmt.tokens(e.context_tokens)} tokens of this conversation for ${CacheModel.shortModel(e.from_model)}. Switching to ${CacheModel.shortModel(e.to_model)} sends them again uncached${cost}. Switching at the start of a fresh context avoids that.`
   }
 
-  onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h' }): void {
-    this.cache.noteModelSwitch({ from: e.from_model, to: e.to_model, ttl: e.cache_ttl, now: Date.now() })
+  onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h'; source: string }): void {
+    const by = e.source === 'auto' || e.source === 'resume' ? 'engine' : 'person'
+    this.cache.noteModelSwitch({ from: e.from_model, to: e.to_model, ttl: e.cache_ttl, now: this.clock(), by })
     if (e.to_model !== '') this.sessionModel = e.to_model
   }
 
@@ -562,6 +574,7 @@ export class Runtime {
     }
     this.monitor.stop()
     this.agents.poll?.cancel()
+    this.cache.cancel()
     if (this.run !== null) {
       const now = Date.now()
       const end: Chain.SessionEnd = e.reason === 'resume' ? 'resume' : e.reason === 'logout' ? 'logout' : e.reason === 'prompt_input_exit' ? 'exit' : 'other'
@@ -884,7 +897,7 @@ export class Runtime {
       isFrontier: eff.frontier.isActive,
       unavailable: this.router.unavailable,
       known: this.router.known,
-      cache: { isWarm: CacheModel.warmthOf(this.cache.state, Date.now()) === 'warm', cachedTokens: this.cache.state.lastPrefix },
+      cache: { isWarm: CacheModel.warmthOf(this.cache.state, this.clock()) === 'warm', cachedTokens: this.cache.state.lastPrefix },
     })
     this.router.turnModel = decision.model
     this.router.lastDecision = decision.why
@@ -923,6 +936,15 @@ export class Runtime {
     const isMain = e.agentId === undefined
     if (isMain && this.router.turnModel !== null && eff.router.isMainLoop && this.router.turnModel !== e.model) {
       out.model = this.router.turnModel
+    }
+    if (isMain && e.index === 0) {
+      // A turn the router sends to another model than the last one (or back from one) rebuilds the cache: the router's doing.
+      const sending = out.model ?? e.model
+      const last = this.cache.state.model
+      if (last !== null && sending !== last && (out.model !== undefined || this.router.wasRouted)) {
+        this.cache.noteRouted(last, sending, out.model !== undefined ? (this.router.lastDecision ?? 'routed') : 'back to the session model')
+      }
+      this.router.wasRouted = out.model !== undefined
     }
     const wantsEffort = eff.frontier.effort !== null && (isMain || this.settings.frontier.subagentEffort)
     if (wantsEffort) {
@@ -1013,7 +1035,7 @@ export class Runtime {
     }
     this.compose.deliveredFallback = false
     this.usage = { ...this.usage, tokens: result.tokensAfter ?? undefined }
-    this.cache.noteCompact(Date.now())
+    this.cache.noteCompact(this.clock())
     this.publisher.mark('hud', 'chain')
   }
 
@@ -1412,8 +1434,23 @@ export class Runtime {
     if (this.cache.isHoldingPolicies() && this.cache.isPolicyHeld(policy)) {
       // The system prompt keeps its cached section: the policies now in force come as a note.
       void host.appendForModel(prompts.heldPoliciesNotice(changes, policy))
+      this.cache.isHeldNoteSent = true
+    } else if (this.cache.isHeldNoteSent && !this.cache.isPolicyHeld(policy)) {
+      // Back to what the system prompt says: the earlier note no longer applies.
+      void host.appendForModel(prompts.policiesRestoredNotice(changes))
+      this.cache.isHeldNoteSent = false
     } else if (changes.length > 0) {
       void host.appendForModel(`Control Room · The user changed session settings: ${changes.join('; ')}. The updated policy is in your system prompt from your next request.`)
+    }
+    // Keep warm turned on again tries afresh, whatever it concluded about itself before.
+    if (!before.cache.keepWarm && this.settings.cache.keepWarm) this.cache.resetVerdict()
+    // A change of effort where it is known to rebuild the cache: say so while there is a large warm cache to lose.
+    const effortOf = (s: Settings) => (s.frontier.enabled && s.frontier.effort !== 'keep' ? s.frontier.effort : null)
+    if (effortOf(before) !== effortOf(this.settings) && this.settings.ui.toasts && this.cache.isEffortRebuilding(null)) {
+      const cached = this.cache.state.lastPrefix
+      if (CacheModel.warmthOf(this.cache.state, this.clock()) === 'warm' && cached >= this.settings.cache.minTokens) {
+        host.toast(`Effort changes rebuild the prompt cache on ${CacheModel.shortModel(this.cache.state.model ?? '')}: the next request re-sends ${fmt.tokens(cached)} tokens`, 6000)
+      }
     }
   }
 

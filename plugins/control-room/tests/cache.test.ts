@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   type CacheState,
+  adviceFor,
   emptyCache,
   expiresAt,
   hitRatio,
@@ -12,6 +13,7 @@ import {
   observeRequest,
   warmthOf,
   withTtl,
+  withVerdictReset,
 } from '../hooks/features/cache'
 
 const MIN = 60_000
@@ -117,7 +119,7 @@ describe('prompt cache', () => {
     expect(reasonOf(nextRefresh(one, { ...keep, now: T0 + MIN, contextTokens: 8_000 }))).toContain('small')
     expect(reasonOf(nextRefresh(one, { ...keep, now: T0 + 130 * MIN }))).toContain('idle')
     // The idle limit falls before the refresh would: none is scheduled.
-    expect(reasonOf(nextRefresh(one, { ...keep, now: T0 + MIN, maxIdleMs: 30 * MIN }))).toContain('idle limit')
+    expect(reasonOf(nextRefresh(one, { ...keep, now: T0 + MIN, maxIdleMs: 30 * MIN }))).toBe('Paused at the 30 min idle limit')
     // The TTL unknown: one probe at six idle minutes.
     const unknown = req(emptyCache(), T0, 300_000, 0).state
     expect(nextRefresh(unknown, { ...keep, now: T0 + MIN })).toEqual({ at: T0 + 6 * MIN, isProbe: true })
@@ -152,8 +154,42 @@ describe('prompt cache', () => {
     expect(nextRefresh(bad2.state, { ...keep, now: T0 + 101 * MIN })).toEqual({ at: null, reason: 'It did not keep the cache warm here, so it stopped' })
   })
 
+  test('the five-minute cache is kept warm for 45 idle minutes at most: past that a refresh costs more than a rebuild', () => {
+    const five = withTtl(req(emptyCache(), T0, 300_000, 0).state, '5m', 'engine')
+    const reasonOf = (plan: ReturnType<typeof nextRefresh>) => (plan.at === null ? plan.reason : 'scheduled')
+    expect(reasonOf(nextRefresh(five, { ...keep, now: T0 + MIN }))).toBe('scheduled')
+    const late = withTtl(req(emptyCache(), T0 + 44 * MIN, 300_000, 0).state, '5m', 'engine')
+    expect(reasonOf(nextRefresh(late, { ...keep, now: T0 + 44 * MIN + 1000 }))).toContain('costs more than rebuilding it')
+    expect(reasonOf(nextRefresh(late, { ...keep, now: T0 + 46 * MIN }))).toContain('Paused after 45 min idle')
+    // A shorter limit of the person's own holds as it is, with no word on cost.
+    expect(reasonOf(nextRefresh(late, { ...keep, now: T0 + 46 * MIN, maxIdleMs: 30 * MIN }))).toBe('Paused after 30 min idle')
+  })
+
+  test('a change seen after the cache had surely lapsed is not blamed for the miss; the router owns its own switches', () => {
+    let s = withTtl(req(emptyCache(), T0, 200_000, 0).state, '1h', 'engine')
+    s = noteChange(s, { cause: 'model', at: T0 + 70 * MIN, detail: 'Model changed: opus-5-5 → sonnet-5-5', by: 'person' })
+    expect(req(s, T0 + 71 * MIN, 201_000, 0, { model: 'claude-sonnet-5-5' }).miss?.cause).toBe('expired')
+    s = withTtl(req(emptyCache(), T0, 200_000, 0).state, '1h', 'engine')
+    s = noteChange(s, { cause: 'model', at: T0 + MIN, detail: 'Model router: opus-5-5 → haiku-4-5 (simple task → haiku)', by: 'router' })
+    const routed = req(s, T0 + 2 * MIN, 201_000, 0, { model: 'claude-haiku-4-5' })
+    expect(routed.miss?.cause).toBe('model')
+    expect(routed.miss?.by).toBe('router')
+    // The router's own words are kept, not replaced by the plain model change it caused.
+    expect(routed.miss?.detail).toContain('Model router')
+    expect(adviceFor(routed.miss!, { keepWarm: false, stablePolicies: true })).toContain('model router')
+  })
+
+  test('turning Keep warm on again forgets a verdict against it', () => {
+    let s = withTtl(req(emptyCache(), T0, 300_000, 0).state, '1h', 'engine')
+    s = req(s, T0 + 50 * MIN, 300_100, 0, { isRefresh: true }).state
+    s = req(s, T0 + 100 * MIN, 300_100, 0, { isRefresh: true }).state
+    expect(s.keepWarm.verified).toBe('no')
+    const again = withVerdictReset(s)
+    expect(again.keepWarm).toMatchObject({ verified: 'unknown', failures: 0, provingAfter: null })
+  })
+
   test('what is remembered across sessions is validated', () => {
-    expect(memoryOf({ ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5 })).toEqual({ v: 1, ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5 })
-    expect(memoryOf('garbage')).toEqual({ v: 1, ttl: null, ttlSource: null, verified: 'unknown', verifiedAt: null })
+    expect(memoryOf({ ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5', 7] })).toEqual({ v: 1, ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5'] })
+    expect(memoryOf('garbage')).toEqual({ v: 1, ttl: null, ttlSource: null, verified: 'unknown', verifiedAt: null, effortRebuilds: [] })
   })
 })

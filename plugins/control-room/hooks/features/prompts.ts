@@ -202,6 +202,12 @@ ${policy}`
   return `Control Room · ${what}. To keep the prompt cache, your system prompt keeps its earlier Control Room sections until the next fresh context. ${body}`
 }
 
+/** Settings changed back to what the (held) system prompt already says: the earlier note no longer applies. */
+export function policiesRestoredNotice(changes: readonly string[]): string {
+  const what = changes.length === 0 ? 'Control Room settings changed back' : `The user changed session settings: ${changes.join('; ')}`
+  return `Control Room · ${what}. The Control Room sections of your system prompt apply again as written; disregard the earlier Control Room note about changed policies.`
+}
+
 // ---------------------------------------------------------------------------
 // Context Autopilot: mid-turn notice, handoff, continuation.
 

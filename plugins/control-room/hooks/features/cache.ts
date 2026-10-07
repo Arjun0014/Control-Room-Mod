@@ -30,8 +30,19 @@ export const MIN_PREFIX = 4096
 /** A request that reads less than this share of the prompt the last one sent missed the cache. */
 const HIT_SHARE = 0.5
 
+/**
+ * With the five-minute cache a refresh goes every four minutes. Each reads
+ * the prompt at a tenth of the input price, and a rebuild costs about 1.15×
+ * more than a read (a 1.25× write instead of a 0.1× read), so past about
+ * eleven refreshes keeping it warm costs more than letting it lapse.
+ */
+export const FIVE_MINUTE_IDLE_CAP_MS = 45 * 60_000
+
 /** Changes Control Room can see that rebuild the cache on the next request. */
 export type CacheChange = 'compact' | 'model' | 'policy' | 'style' | 'tools' | 'effort'
+
+/** Who made a change: the person, Control Room's model router, or the engine itself. */
+export type ChangeBy = 'person' | 'router' | 'engine'
 
 export type MissCause = CacheChange | 'expired' | 'unexplained'
 
@@ -54,9 +65,11 @@ export type CacheMiss = {
   detail: string
   /** True when it was a Keep warm refresh that missed. */
   isRefresh: boolean
+  /** Who made the change behind it, when one was seen. */
+  by?: ChangeBy
 }
 
-export type CacheEvent = { cause: CacheChange; at: number; detail: string }
+export type CacheEvent = { cause: CacheChange; at: number; detail: string; by?: ChangeBy }
 
 export type KeepWarmState = {
   refreshes: number
@@ -175,11 +188,14 @@ export function durationWords(ms: number): string {
 /** Why a miss happened, in kind and severity, from the change seen before it or the gap. */
 function classify(state: CacheState, gapMs: number, recached: number, isRefresh: boolean, at: number): Omit<CacheMiss, 'at' | 'recached' | 'prefix' | 'read' | 'gapMs' | 'isRefresh'> {
   const change = ORDER.map(c => state.pending.find(p => p.cause === c)).find(p => p !== undefined)
-  if (change !== undefined) {
-    if (change.cause === 'compact') return { cause: 'compact', kind: 'lifecycle', severity: 'info', detail: change.detail }
-    return { cause: change.cause, kind: 'preventable', severity: recached >= 20_000 ? 'warn' : 'info', detail: change.detail }
-  }
   const ttl = ttlMs(state)
+  // A cache known to have lapsed already was not lost to a change made after it.
+  const isSurelyExpired = ttl !== null && gapMs > ttl
+  if (change !== undefined && (change.cause === 'compact' || !isSurelyExpired)) {
+    const by = change.by === undefined ? {} : { by: change.by }
+    if (change.cause === 'compact') return { cause: 'compact', kind: 'lifecycle', severity: 'info', detail: change.detail, ...by }
+    return { cause: change.cause, kind: 'preventable', severity: recached >= 20_000 ? 'warn' : 'info', detail: change.detail, ...by }
+  }
   const isExpired = ttl === null ? gapMs > TTL_MS['5m'] : gapMs > ttl
   if (isExpired) {
     return {
@@ -219,11 +235,13 @@ export function observeRequest(
   const prompt = req.input + req.read + req.written
   const gapMs = state.lastRequestAt === null ? 0 : Math.max(0, req.at - state.lastRequestAt)
   let next: CacheState = { ...state }
-  // A change of model or effort is itself a change the cache may not survive.
-  if (!isRefresh && state.requests > 0 && req.model !== null && state.model !== null && req.model !== state.model) {
+  // A change of model or effort is itself a change the cache may not survive
+  // (unless one was already noted with more to say, such as the router's).
+  const isNoted = (cause: CacheChange) => next.pending.some(p => p.cause === cause)
+  if (!isRefresh && state.requests > 0 && req.model !== null && state.model !== null && req.model !== state.model && !isNoted('model')) {
     next = noteChange(next, { cause: 'model', at: req.at, detail: `Model changed: ${shortModel(state.model)} → ${shortModel(req.model)}` })
   }
-  if (!isRefresh && state.requests > 0 && req.effort !== null && state.effort !== null && req.effort !== state.effort) {
+  if (!isRefresh && state.requests > 0 && req.effort !== null && state.effort !== null && req.effort !== state.effort && !isNoted('effort')) {
     next = noteChange(next, { cause: 'effort', at: req.at, detail: `Effort changed: ${state.effort} → ${req.effort}` })
   }
   const expected = state.lastPrefix
@@ -313,8 +331,13 @@ export function nextRefresh(
   if (input.isTurnRunning) return { at: null, reason: 'Claude is working: its requests keep the cache warm' }
   if (input.standDown !== null) return { at: null, reason: input.standDown }
   if (input.contextTokens < input.minTokens) return { at: null, reason: 'The context is small: starting cold costs little' }
-  const idleEnd = input.idleSince === null ? null : input.idleSince + input.maxIdleMs
-  if (idleEnd !== null && input.now >= idleEnd) return { at: null, reason: `Paused after ${durationWords(input.maxIdleMs)} idle` }
+  // The five-minute cache is only worth holding for so long (FIVE_MINUTE_IDLE_CAP_MS).
+  const isShortCache = state.ttl?.value === '5m'
+  const maxIdleMs = isShortCache ? Math.min(input.maxIdleMs, FIVE_MINUTE_IDLE_CAP_MS) : input.maxIdleMs
+  const isCapped = maxIdleMs < input.maxIdleMs
+  const idleEnd = input.idleSince === null ? null : input.idleSince + maxIdleMs
+  const why = isCapped ? ' (past that, refreshing the 5-minute cache costs more than rebuilding it)' : ''
+  if (idleEnd !== null && input.now >= idleEnd) return { at: null, reason: `Paused after ${durationWords(maxIdleMs)} idle${why}` }
   const ttl = ttlMs(state)
   if (ttl === null) {
     // The TTL is unknown: one refresh at six idle minutes tells. A hit means the hour.
@@ -324,8 +347,13 @@ export function nextRefresh(
   const expiry = state.lastRequestAt + ttl
   if (input.now >= expiry) return { at: null, reason: 'The cache lapsed before a refresh' }
   const at = Math.max(input.now, expiry - leadMs(ttl))
-  if (idleEnd !== null && at > idleEnd) return { at: null, reason: `Pauses at the ${durationWords(input.maxIdleMs)} idle limit` }
+  if (idleEnd !== null && at > idleEnd) return { at: null, reason: `Paused at the ${durationWords(maxIdleMs)} idle limit${why}` }
   return { at, isProbe: false }
+}
+
+/** Keep warm starts over (turned on again by the person): its verdict and failures are forgotten. */
+export function withVerdictReset(state: CacheState): CacheState {
+  return { ...state, keepWarm: { ...state.keepWarm, verified: 'unknown', provingAfter: null, failures: 0 } }
 }
 
 /** What to do about a miss, in one sentence. */
@@ -336,7 +364,9 @@ export function adviceFor(miss: CacheMiss, input: { keepWarm: boolean; stablePol
         ? 'Keep warm was paused or idle past its limit; raise the limit if you return later than that.'
         : 'Turn on Keep warm to hold the cache while you are away.'
     case 'model':
-      return 'Switch models at the start of a fresh context; Control Room asks first when the cache is large.'
+      return miss.by === 'router'
+        ? 'The model router switched models for this task. Set the router to Balanced or Off to keep one model per context.'
+        : 'Switch models at the start of a fresh context; Control Room asks first when the cache is large.'
     case 'effort':
       return 'Change effort at the start of a fresh context: on this model the change rebuilds the cache.'
     case 'policy':
@@ -367,14 +397,27 @@ export const CAUSE_LABEL: Record<MissCause, string> = {
   unexplained: 'Unexplained',
 }
 
-/** What is remembered across sessions (store `cache.v1`): the TTL learned, and Keep warm's verdict. */
-export type CacheMemory = { v: 1; ttl: TtlValue | null; ttlSource: TtlSource | null; verified: KeepWarmState['verified']; verifiedAt: number | null }
+/**
+ * What is remembered across sessions (store `cache.v1`): the TTL learned,
+ * Keep warm's verdict, and the models on which a change of effort was seen
+ * to rebuild the cache.
+ */
+export type CacheMemory = {
+  v: 1
+  ttl: TtlValue | null
+  ttlSource: TtlSource | null
+  verified: KeepWarmState['verified']
+  verifiedAt: number | null
+  /** Short model names ("opus-5-5") on which an effort change was followed by a miss. */
+  effortRebuilds: string[]
+}
 
 export function memoryOf(raw: unknown): CacheMemory {
   const r = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
   const ttl = r.ttl === '5m' || r.ttl === '1h' ? r.ttl : null
   const src = r.ttlSource === 'engine' || r.ttlSource === 'observed' || r.ttlSource === 'probe' ? r.ttlSource : null
   const verified = r.verified === 'yes' || r.verified === 'no' ? r.verified : 'unknown'
-  return { v: 1, ttl, ttlSource: ttl === null ? null : src, verified, verifiedAt: typeof r.verifiedAt === 'number' ? r.verifiedAt : null }
+  const rebuilds = Array.isArray(r.effortRebuilds) ? r.effortRebuilds.filter((m): m is string => typeof m === 'string' && m.length > 0 && m.length <= 80).slice(-12) : []
+  return { v: 1, ttl, ttlSource: ttl === null ? null : src, verified, verifiedAt: typeof r.verifiedAt === 'number' ? r.verifiedAt : null, effortRebuilds: rebuilds }
 }
 

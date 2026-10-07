@@ -73,7 +73,7 @@ export class CacheGuardian {
     return Cache.emptyCache({ ttl: m.ttl === null ? null : { value: m.ttl, source: 'stored' }, verified: m.verified })
   }
 
-  private remember(): void {
+  private remember(patch: Partial<Cache.CacheMemory> = {}): void {
     const s = this.state
     const next: Cache.CacheMemory = {
       v: 1,
@@ -81,6 +81,8 @@ export class CacheGuardian {
       ttlSource: s.ttl !== null && s.ttl.source !== 'stored' ? s.ttl.source : this.memory.ttlSource,
       verified: s.keepWarm.verified === 'unknown' ? this.memory.verified : s.keepWarm.verified,
       verifiedAt: s.keepWarm.verified !== this.memory.verified && s.keepWarm.verified !== 'unknown' ? this.ctx.now() : this.memory.verifiedAt,
+      effortRebuilds: this.memory.effortRebuilds,
+      ...patch,
     }
     if (JSON.stringify(next) === JSON.stringify(this.memory)) return
     this.memory = next
@@ -93,9 +95,24 @@ export class CacheGuardian {
     this.state = this.fresh()
     this.steps.clear()
     this.delivered = null
+    this.isHeldNoteSent = false
     this.idleSince = null
     this.plan = { at: null, reason: 'Nothing cached yet' }
     this.ctx.changed()
+  }
+
+  /** Keep warm turned on again: whatever it concluded about itself before is forgotten, so it tries afresh. */
+  resetVerdict(): void {
+    this.state = Cache.withVerdictReset(this.state)
+    this.remember({ verified: 'unknown', verifiedAt: null })
+    this.lastError = null
+    this.ctx.changed()
+  }
+
+  /** True when a change of effort was seen to rebuild the cache on this model (learned from earlier misses). */
+  isEffortRebuilding(model: string | null): boolean {
+    const m = model ?? this.state.model
+    return m !== null && this.memory.effortRebuilds.includes(Cache.shortModel(m))
   }
 
   // ---------------------------------------------------------------------------
@@ -120,11 +137,15 @@ export class CacheGuardian {
   }
 
   private observe(req: Parameters<typeof Cache.observeRequest>[1]): void {
+    const model = this.state.model
     const result = Cache.observeRequest(this.state, req)
     this.state = result.state
     if (result.miss !== null) this.ctx.missed(result.miss)
     if (result.verdict !== null) this.ctx.verdict(result.verdict)
-    this.remember()
+    // An effort change followed by a miss: on this model effort is part of what the cache keys on.
+    const short = model === null ? null : Cache.shortModel(model)
+    const isEffortMiss = result.miss !== null && result.miss.cause === 'effort' && short !== null && !this.memory.effortRebuilds.includes(short)
+    this.remember(isEffortMiss && short !== null ? { effortRebuilds: [...this.memory.effortRebuilds, short].slice(-12) } : {})
     this.ctx.changed()
   }
 
@@ -149,6 +170,13 @@ export class CacheGuardian {
     this.ctx.changed()
   }
 
+  /** The model router sends this turn to another model: a miss after it is the router's doing, not the person's. */
+  noteRouted(from: string, to: string, why: string): void {
+    if (from === to) return
+    this.state = Cache.noteChange(this.state, { cause: 'model', at: this.ctx.now(), detail: `Model router: ${Cache.shortModel(from)} → ${Cache.shortModel(to)} (${why})`, by: 'router' })
+    this.ctx.changed()
+  }
+
   /** The cache lifetime as the engine reported it before a model switch. */
   noteTtl(ttl: '5m' | '1h'): void {
     this.state = Cache.withTtl(this.state, ttl, 'engine')
@@ -157,10 +185,11 @@ export class CacheGuardian {
   }
 
   /** A model switch the engine reported: its TTL, and the rebuild it means. */
-  noteModelSwitch(input: { from: string; to: string; ttl: '5m' | '1h'; now: number }): void {
+  noteModelSwitch(input: { from: string; to: string; ttl: '5m' | '1h'; now: number; by: Cache.ChangeBy }): void {
     this.state = Cache.withTtl(this.state, input.ttl, 'engine')
     if (input.from !== input.to) {
-      this.state = Cache.noteChange(this.state, { cause: 'model', at: input.now, detail: `Model changed: ${Cache.shortModel(input.from)} → ${Cache.shortModel(input.to)}` })
+      const how = input.by === 'engine' ? 'Claude Code switched models' : 'Model changed'
+      this.state = Cache.noteChange(this.state, { cause: 'model', at: input.now, detail: `${how}: ${Cache.shortModel(input.from)} → ${Cache.shortModel(input.to)}`, by: input.by })
     }
     this.remember()
     this.ctx.changed()
@@ -196,16 +225,23 @@ export class CacheGuardian {
       this.delivered = current
       return text
     }
-    if (current === this.delivered) return text
+    if (current === this.delivered) {
+      this.isHeldNoteSent = false
+      return text
+    }
     if (this.isHoldingPolicies()) return this.delivered === '' ? null : this.delivered
     // A cold cache is rebuilt anyway: only a warm one is lost to the change.
     if (Cache.warmthOf(this.state, this.ctx.now()) === 'warm') {
-      this.state = Cache.noteChange(this.state, { cause: 'policy', at: this.ctx.now(), detail: reason === null ? 'Control Room policies changed' : `Control Room policies changed: ${reason}` })
+      this.state = Cache.noteChange(this.state, { cause: 'policy', at: this.ctx.now(), detail: reason === null ? 'Control Room policies changed' : `Control Room policies changed: ${reason}`, by: 'person' })
     }
     this.delivered = current
+    this.isHeldNoteSent = false
     this.ctx.changed()
     return text
   }
+
+  /** True once Claude was told, by a note, that policies other than its system prompt's apply. */
+  isHeldNoteSent = false
 
   /** True while setting changes are told to Claude as notes, so the cached system prompt stays as it is. */
   isHoldingPolicies(): boolean {

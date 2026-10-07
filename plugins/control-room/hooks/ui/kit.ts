@@ -25,7 +25,7 @@ export type Ui = {
   Button: ElementConstructor<ButtonProps>
   Code: ElementConstructor<CodeProps>
   Markdown: ElementConstructor<MarkdownProps>
-  /** Absent on the mobile app: controls fall back to cycling buttons. */
+  /** Desktop and VS Code only: their native popup works with pointer and keys alike. */
   Select?: ElementConstructor<SelectProps>
   Input?: ElementConstructor<InputProps>
   /** Remote surfaces only (Desktop, VS Code, mobile). */
@@ -35,7 +35,10 @@ export type Ui = {
 export type Actions = {
   openPane: () => void
   closePane: () => void
+  togglePane: () => void
   setTab: (tab: TabId) => void
+  /** Opens one in-place picker, or closes it when it is the open one; null closes any. */
+  togglePicker: (key: string | null) => void
   setActivitySub: (sub: 'calls' | 'changes') => void
   update: (change: (draft: ControlRoomSettings) => void) => void
   applyProfile: (id: string) => void
@@ -60,24 +63,28 @@ export type Kit = {
   columns: number
   surface: RenderSurface
   now: number
+  /** The in-place picker drawn open, by key. */
+  openPicker: string | null
 }
 
 /**
  * Picks the surface's element table into a Ui. The engine completes every
  * table (an element a surface lacks draws as an empty fragment), so what a
  * surface can really draw is decided by the surface, not by presence.
+ *
+ * The terminal's Select is left out on purpose: its option list cannot be
+ * picked or closed with the pointer, so the terminal draws choices in place.
  */
 export function uiOf(table: Partial<Ui> & Pick<Ui, 'Box' | 'Text' | 'Button' | 'Code' | 'Markdown'>, surface: RenderSurface): Ui {
-  const hasFields = surface !== 'mobile'
-  const hasSvg = surface !== 'terminal'
+  const isNative = surface === 'desktop' || surface === 'vscode'
   return {
     Box: table.Box,
     Text: table.Text,
     Button: table.Button,
     Code: table.Code,
     Markdown: table.Markdown,
-    Select: hasFields ? table.Select : undefined,
-    Input: hasFields ? table.Input : undefined,
-    Svg: hasSvg ? table.Svg : undefined,
+    Select: isNative ? table.Select : undefined,
+    Input: surface === 'mobile' ? undefined : table.Input,
+    Svg: surface === 'terminal' ? undefined : table.Svg,
   }
 }

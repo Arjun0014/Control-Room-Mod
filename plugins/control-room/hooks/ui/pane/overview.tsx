@@ -1,154 +1,128 @@
 /**
- * Overview: the whole session at a glance (monitoring), then the handful of
- * controls people reach for most (profile, the big toggles, handoff).
+ * Overview: how this session is doing, and what is on. Context and cost
+ * first, then every system with its switch and one line of state, then the
+ * profile. Anything that needs the person sits at the very top.
  */
 
 import type { RenderElement } from 'claude-code'
 
-import type { Tone } from '../../../types'
+import type { StatusView, Tone } from '../../../types'
 import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
-import { actionRow, card, choice, title } from '../components'
 import type { Kit } from '../kit'
-import { G, toneOfLevel } from '../theme'
+import { callout, labelWidth, link, listItem, meterBar, pair, picker, row, section, stat, switchControl } from '../primitives'
+import { G } from '../theme'
 import type { PaneData } from './frame'
 
-export function overviewTab(kit: Kit, data: PaneData): RenderElement {
-  const { Box, Svg } = kit.ui
-  const { pane, hud, resources, activity } = data
-  const s = pane.settings
-  const twoColumns = kit.columns >= 58
-  const width = twoColumns ? Math.floor((kit.columns - 2) / 2) : kit.columns - 2
+/** A status as a row's detail: quiet unless it needs a look. */
+export const detailOf = (s: StatusView): { detail: string; detailTone: Tone } => ({
+  detail: s.text,
+  detailTone: s.tone === 'warn' || s.tone === 'bad' ? s.tone : 'muted',
+})
 
-  const ctx = hud.ctx
-  const cards: { key: string; title: string; value: string; tone: Tone; detail?: string }[] = [
-    {
-      key: 'ctx',
-      title: 'Context',
-      value: ctx.tokens === null ? 'waiting for the first response' : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`}${ctx.pct === null ? '' : ` (${ctx.pct}%)`}`,
-      tone: ctx.tone,
-      detail: ctx.threshold === null ? 'autopilot off' : `handoff at ${fmt.tokens(ctx.threshold)}`,
-    },
-    {
-      key: 'cost',
-      title: 'Cost',
-      value: hud.cost.usd === null ? 'not reported by this host' : `${fmt.cost(hud.cost.usd)} this session`,
-      tone: hud.cost.usd === null ? 'muted' : 'normal',
-      detail: hud.cost.runUsd === null ? undefined : `${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} across the run`,
-    },
-    {
-      key: 'auto',
-      title: 'Context Autopilot',
-      value: hud.autopilot.label,
-      tone: hud.autopilot.tone,
-      detail: pane.autopilot.note,
-    },
-    {
-      key: 'frontier',
-      title: 'Frontier Max',
-      value: s.frontier.enabled ? `ON ${G.mid} effort ${s.frontier.effort}` : 'OFF',
-      tone: s.frontier.enabled ? 'accent' : 'muted',
-      detail: !s.frontier.enabled
-        ? undefined
-        : pane.frontier.isEffortSupported === false
-          ? 'this model takes no effort setting'
-          : pane.frontier.lastEffort === null
-            ? 'applies from the next request'
-            : `last request sent effort ${pane.frontier.lastEffort}`,
-    },
-    {
-      key: 'guard',
-      title: 'No-Lazy-Exit Guard',
-      value: hud.guard.label.replace('GUARD ', ''),
-      tone: hud.guard.tone,
-      detail: pane.guard.reason ?? (pane.guard.session > 0 ? `${pane.guard.session} continuation${pane.guard.session === 1 ? '' : 's'} this session` : 'watching stops'),
-    },
-    {
-      key: 'res',
-      title: 'Resource Governor',
-      value: hud.resources.label.replace('RES ', ''),
-      tone: hud.resources.tone,
-      detail:
-        resources === undefined || resources.status !== 'live'
-          ? (resources?.status ?? 'off')
-          : `CPU ${resources.cpu === null ? '—' : Math.round(resources.cpu)}% · RAM ${resources.ram === null ? '—' : Math.round(resources.ram)}% · ${resources.level}`,
-    },
-    {
-      key: 'agents',
-      title: 'Subagents',
-      value: hud.agents.label.replace('AGENTS ', ''),
-      tone: hud.agents.tone,
-      detail:
-        [
-          pane.agents.running.length > 0 ? `${pane.agents.running.length} running` : '',
-          pane.agents.spawned > 0 ? `${pane.agents.spawned} started` : '',
-          pane.agents.denied > 0 ? `${pane.agents.denied} refused` : '',
-        ]
-          .filter(Boolean)
-          .join(' · ') || 'none started yet',
-    },
-    {
-      key: 'router',
-      title: 'Model Router',
-      value: hud.router.label.replace('ROUTER ', ''),
-      tone: hud.router.tone,
-      detail: pane.router.lastDecision ?? undefined,
-    },
-    {
-      key: 'focus',
-      title: 'Focus View',
-      value: s.focus.enabled ? `ON ${G.mid} tools ${s.focus.tools}` : 'OFF',
-      tone: s.focus.enabled ? 'good' : 'muted',
-      detail: activity === undefined ? undefined : `${fmt.plural(activity.sessionTools, 'tool call')} · ${fmt.plural(activity.totals.files, 'file')} changed`,
-    },
-  ]
-
-  const rows: RenderElement[] = []
-  for (let i = 0; i < cards.length; i += twoColumns ? 2 : 1) {
-    const pair = cards.slice(i, i + (twoColumns ? 2 : 1))
-    rows.push(
-      <Box flexDirection="row" key={`cards-${i}`}>
-        {pair.map(c => card(kit, { ...c, width }))}
-      </Box>,
-    )
+export function alertCallout(kit: Kit, data: PaneData): RenderElement | null {
+  const alert = data.hud.alert
+  if (alert === null) return null
+  if (alert.kind === 'pending') {
+    return callout(kit, {
+      key: 'alert',
+      tone: 'warn',
+      title: 'Handing off soon',
+      text: 'Claude is finishing the current step. Then it writes handoff notes and continues in a fresh context.',
+      actions: [
+        { key: 'alert-handoff', label: 'Hand off now', onPress: kit.actions.handoff, isPrimary: true },
+        { key: 'alert-later', label: 'Later', onPress: kit.actions.snooze },
+      ],
+    })
   }
+  if (alert.kind === 'awaiting') {
+    return callout(kit, {
+      key: 'alert',
+      tone: 'bad',
+      title: 'Waiting for you',
+      text: alert.text,
+      actions: [
+        { key: 'alert-fresh', label: 'Start fresh context', onPress: kit.actions.fresh, isPrimary: true },
+        { key: 'alert-later', label: 'Later', onPress: kit.actions.snooze },
+      ],
+    })
+  }
+  return callout(kit, { key: 'alert', tone: 'bad', title: 'Machine under heavy load', text: alert.text })
+}
 
-  const gauge =
-    Svg !== undefined && ctx.tokens !== null && ctx.window !== null && ctx.window > 0
-      ? contextGauge(ctx.tokens / ctx.window, ctx.threshold === null ? null : ctx.threshold / ctx.window, toneOfLevel(ctx.tone === 'bad' ? 'critical' : ctx.tone === 'warn' ? 'elevated' : 'ok'))
-      : null
+export function overviewPage(kit: Kit, data: PaneData): RenderElement {
+  const { Box } = kit.ui
+  const { pane, hud } = data
+  const s = pane.settings
+  const st = pane.status
+  const u = kit.actions.update
+  const ctx = hud.ctx
+  const lw = labelWidth(kit, 'Lazy-exit guard'.length)
 
-  const profiles = listProfiles(s).map(p => ({ value: p.id, label: p.name }))
-  const a = pane.autopilot
+  const fraction = ctx.tokens !== null && ctx.window !== null && ctx.window > 0 ? ctx.tokens / ctx.window : 0
+  const marker = ctx.threshold !== null && ctx.window !== null && ctx.window > 0 ? ctx.threshold / ctx.window : null
+  const runCost = hud.cost.runUsd !== null && hud.cost.usd !== null && hud.cost.runUsd - hud.cost.usd > 0.005 ? `${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} this run` : undefined
+
+  const toggleRow = (key: string, label: string, isOn: boolean, onPress: () => void, status: StatusView) =>
+    row(kit, { key, label, labelWidth: lw, control: switchControl(kit, { key, isOn, onPress }), ...(isOn ? detailOf(status) : {}) })
+
+  const profiles = listProfiles(s).map(p => ({ value: p.id, label: p.name, hint: p.tagline }))
 
   return (
     <Box flexDirection="column">
-      {title(kit, 'Monitoring')}
-      {gauge !== null && Svg !== undefined ? <Svg key="ctx-gauge" source={gauge} alt={`Context ${ctx.pct ?? 0}% used`} height={28} /> : null}
-      {rows}
-      {title(kit, 'Controls')}
-      {choice(kit, { key: 'profile', label: 'Profile', value: s.profile, options: profiles, onSelect: v => kit.actions.applyProfile(v), detail: pane.profileLabel.endsWith('*') ? 'modified' : undefined })}
-      {actionRow(kit, [
-        { key: 'q-frontier', label: `Frontier Max ${s.frontier.enabled ? G.dot : G.ring}`, isPrimary: s.frontier.enabled, onPress: () => kit.actions.update(d => { d.frontier.enabled = !d.frontier.enabled; if (d.frontier.enabled) d.guard.enabled = true }) },
-        { key: 'q-autopilot', label: `Autopilot ${s.autopilot.enabled ? G.dot : G.ring}`, isPrimary: s.autopilot.enabled, onPress: () => kit.actions.update(d => { d.autopilot.enabled = !d.autopilot.enabled }) },
-        { key: 'q-guard', label: `Guard ${s.guard.enabled ? G.dot : G.ring}`, isPrimary: s.guard.enabled, onPress: () => kit.actions.update(d => { d.guard.enabled = !d.guard.enabled }) },
-        { key: 'q-focus', label: `Focus ${s.focus.enabled ? G.dot : G.ring}`, isPrimary: s.focus.enabled, onPress: kit.actions.toggleFocus },
-      ])}
-      {actionRow(kit, [
-        { key: 'q-handoff', label: 'Handoff now', onPress: kit.actions.handoff, isHidden: !a.canHandoff },
-        { key: 'q-fresh', label: 'Start fresh context', isPrimary: true, onPress: kit.actions.fresh, isHidden: a.state !== 'awaiting' },
-        { key: 'q-snooze', label: 'Snooze handoff', onPress: kit.actions.snooze, isHidden: !a.canSnooze },
-      ])}
+      {alertCallout(kit, data)}
+
+      <Box key="ctx" flexDirection="column" marginTop={1}>
+        {stat(kit, {
+          key: 'ctx',
+          label: 'Context',
+          value: ctx.pct === null ? G.none : `${ctx.pct}%`,
+          tone: ctx.tone === 'warn' || ctx.tone === 'bad' ? ctx.tone : 'normal',
+        })}
+        {meterBar(kit, { key: 'ctx-meter', fraction, marker, tone: ctx.tone === 'muted' ? 'good' : ctx.tone, width: kit.columns, alt: `Context ${ctx.pct ?? 0}% used` })}
+        {pair(kit, {
+          key: 'ctx-under',
+          left: ctx.tokens === null ? 'Waiting for the first response' : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`} tokens`,
+          right: hud.autopilot.isOn ? (ctx.threshold === null ? hud.autopilot.text : `hands off at ${fmt.tokens(ctx.threshold)}`) : undefined,
+        })}
+      </Box>
+
+      <Box key="cost" flexDirection="column" marginTop={1}>
+        {stat(kit, { key: 'cost', label: 'Cost', value: fmt.cost(hud.cost.usd), tone: hud.cost.usd === null ? 'muted' : 'normal', under: hud.cost.usd === null ? 'Not reported by this host' : 'This session', underRight: runCost })}
+      </Box>
+
+      {section(kit, {
+        key: 'profile',
+        children: [row(kit, { key: 'profile', label: 'Profile', labelWidth: lw, control: picker(kit, { key: 'profile', value: s.profile, options: profiles, onSelect: v => kit.actions.applyProfile(v) }), detail: hud.profile.isModified ? 'edited' : undefined })],
+      })}
+
+      {section(kit, {
+        key: 'systems',
+        title: 'Systems',
+        children: [
+          toggleRow('sys-autopilot', 'Autopilot', s.autopilot.enabled, () => u(d => void (d.autopilot.enabled = !d.autopilot.enabled)), st.autopilot),
+          toggleRow('sys-frontier', 'Frontier Max', s.frontier.enabled, () => u(d => {
+            d.frontier.enabled = !d.frontier.enabled
+            if (d.frontier.enabled) d.guard.enabled = true
+          }), st.frontier),
+          toggleRow('sys-guard', 'Lazy-exit guard', s.guard.enabled, () => u(d => void (d.guard.enabled = !d.guard.enabled)), st.guard),
+          toggleRow('sys-qa', 'Release check', s.qa.enabled, () => u(d => void (d.qa.enabled = !d.qa.enabled)), st.qa),
+          toggleRow('sys-focus', 'Focus view', s.focus.enabled, kit.actions.toggleFocus, st.focus),
+          toggleRow('sys-load', 'Machine load', s.resources.level !== 'off', () => u(d => void (d.resources.level = d.resources.level === 'off' ? 'medium' : 'off')), st.load),
+          row(kit, { key: 'sys-agents', label: 'Subagents', labelWidth: lw, control: link(kit, { key: 'sys-agents', label: st.subagents.text, onPress: () => kit.actions.setTab('guardrails') }) }),
+          row(kit, { key: 'sys-router', label: 'Model router', labelWidth: lw, control: link(kit, { key: 'sys-router', label: st.router.text, onPress: () => kit.actions.setTab('behavior') }) }),
+        ],
+      })}
+
+      {pane.agents.running.length === 0
+        ? null
+        : section(kit, {
+            key: 'agents',
+            title: 'Subagents running',
+            children: pane.agents.running.map(a => listItem(kit, { key: `agent-${a.id}`, glyph: G.dot, tone: 'info', text: `${a.type}  ${a.description}`, right: a.status })),
+          })}
+
+
     </Box>
   )
-}
-
-/** A Desktop-only context gauge: fill, threshold marker. Raw colors (SVG cannot read theme keys). */
-function contextGauge(fraction: number, threshold: number | null, tone: Tone): string {
-  const w = 400
-  const h = 14
-  const fill = Math.round(Math.min(1, Math.max(0, fraction)) * w)
-  const color = tone === 'bad' ? '#d9534f' : tone === 'warn' ? '#d9a441' : '#4f9d69'
-  const marker = threshold === null ? '' : `<rect x="${Math.round(Math.min(1, threshold) * w) - 1}" y="0" width="2" height="${h}" fill="#d97757"/>`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect x="0" y="3" width="${w}" height="8" rx="4" fill="#8884"/><rect x="0" y="3" width="${fill}" height="8" rx="4" fill="${color}"/>${marker}</svg>`
 }

@@ -48,12 +48,13 @@ This page lists them and how to check your work.
   win. Fallbacks (`.catch`) must be at least as strict as Claude Code without the plugin.
 - **No invented numbers.** Show cost, context and effort only as Claude Code reports them;
   otherwise show "—".
-- **Presentation never changes behaviour.** Focus View and the HUD only draw.
+- **Presentation never changes behaviour.** Focus view and the status bar only draw.
 - **Hooks stay fast.** A hook has a 10-second own-time budget, so long work runs from timers.
   Don't block `session.end`.
-- **Same tree everywhere.** UI code builds one element tree from `$.ui.resolve(e)` for the
-  terminal, Desktop, VS Code and mobile. Decide capabilities by surface (`uiOf`), not by whether an
-  element exists in the table.
+- **Same tree everywhere, through the design system.** Pages are built only from the components in
+  `hooks/ui/primitives.tsx`, which draw natively per surface. Decide capabilities by surface
+  (`uiOf`), not by whether an element exists in the table. Never use the terminal's `Select`: its
+  options cannot be picked or closed with the pointer. Read [docs/DESIGN.md](docs/DESIGN.md) first.
 
 ## Tests
 
@@ -74,16 +75,16 @@ assuming one.
 
 Unit tests don't paint. Before a release:
 
-- Run the plugin in a real terminal at a few widths (80, 120, 150+ columns) and look at the HUD
-  and every Control Centre tab.
+- Run the plugin in a real terminal at a few widths (80, 120, 150+ columns). Look at the status bar
+  and every panel section, and use them with the mouse and the keyboard.
 - Run one Autopilot chain end to end, ideally in the Desktop host protocol (stream-json). A low
   threshold with a cheap model is enough: `/cr autopilot 45k`, then a small multi-step task.
-- On macOS and Linux, turn the Resource Governor on and confirm `/cr status` shows live CPU and RAM.
+- On macOS and Linux, turn machine load on and confirm `/cr status` shows live CPU and memory.
 
 ## Releases
 
-1. Update `version` in `plugins/control-room/.claude-plugin/plugin.json` **and** in
-   `.claude-plugin/marketplace.json`.
+1. Update `version` in `plugins/control-room/.claude-plugin/plugin.json`, in
+   `.claude-plugin/marketplace.json` **and** `VERSION` in `plugins/control-room/hooks/constants.ts`.
 2. Move the `Unreleased` notes in `CHANGELOG.md` under the new version.
 3. Run `npm run check`.
 4. Run `claude plugin tag plugins/control-room` to create the `control-room--v<version>` tag after

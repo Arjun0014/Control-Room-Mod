@@ -62,9 +62,9 @@ Platform constraints discovered and designed around:
 
 | Surface element | Mechanism | Terminal | Desktop |
 | --- | --- | --- | --- |
-| **HUD** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys | ✅ | ✅ |
+| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status` | ✅ | ✅ |
 | **Launcher / sidebar** | `Pane` `control-room`: docked beside the transcript in the fullscreen TUI, inline otherwise; placed by Desktop | ✅ | ✅ |
-| **Control Centre** | the same pane, tabbed | ✅ | ✅ (native controls) |
+| **Control Room panel** | the same pane: six sections drawn by the design system (`ui/primitives.tsx`) | ✅ | ✅ (native controls, SVG meters) |
 | Activity line | `Spinner` `message` rewrite while a turn runs | ✅ | ✅ |
 | Focus View | `ToolUse` / `ToolResult` / `ToolGroup` render hooks | ✅ | ✅ |
 | Alerts | `$.ui.toast`, `$.ui.status` (only on state changes) | ✅ | ✅ |
@@ -84,9 +84,10 @@ plugins/control-room/
   hooks/constants.ts              ids, store keys, limits
   hooks/app/
     runtime.ts                    composition root: wires features, owns the live model, performs effects
-    views.ts                      projections: HUD, pane, resources, chain, activity, permissions, focus, spinner
+    views.ts                      projections (HUD, pane, resources, chain, activity, permissions, focus, spinner)
+                                  and the plain-language status every surface shares
     publisher.ts                  coalesced, diffed writes of those projections to $.state (+ status line)
-    commands.ts / actions.ts      /cr sub-commands; the Control Centre's actions
+    commands.ts / actions.ts      /cr sub-commands; the panel's actions
     persist.ts                    store reads/writes (settings, runs, index), debouncing, pruning
     monitor.ts                    resource sampler lifecycle (spawn, parse, restart, stop)
   hooks/core/
@@ -104,7 +105,9 @@ plugins/control-room/
     prompts.ts                    every text Control Room gives Claude
     permissions/                  shell tokenizer, category classifier, decisions + invariants
     resources/                    samplers + parsers (Windows/macOS/Linux), pressure, heavy commands
-  hooks/ui/                       theme, kit, components, HUD, Focus View rows, pane/ (frame + 9 tabs)
+  hooks/ui/                       design system (primitives.tsx, theme.ts, kit.ts), status bar (hud.tsx),
+                                  Focus view rows, pane/ (frame + overview, context, behavior,
+                                  guardrails, activity, setup)
   types/index.d.ts                settings schema + PluginState contract (render view models)
   tests/                          claude plugin test suites + fixtures (fake host, engine world)
 ```
@@ -139,7 +142,7 @@ computed from settings + live state, in this order (higher wins):
 2. **Permission Policy** — deny > ask > allow; applies to every action,
    including work the autopilot or guard asked for.
 3. **The person's live actions** — Esc/abort cancels pending automation; a
-   prompt typed during HANDOFF PENDING is honoured (with a handoff reminder).
+   prompt typed while a handoff is pending is honoured (with a handoff reminder).
 4. **Context Autopilot** — once pending, the guard is suspended for the
    boundary and the handoff turn; no new large work is encouraged.
 5. **Resource Governor** — constrains *how* (parallelism, heavy jobs), never
@@ -151,8 +154,9 @@ computed from settings + live state, in this order (higher wins):
 9. **Model Router** — acts only where nothing above constrains.
 10. **Focus View** — presentation only; never changes what Claude reads.
 
-The Overview tab shows each system's *effective* state with the reason when
-it differs from its setting (e.g. "Guard · suspended — handoff in progress").
+Overview shows each system's *effective* state with the reason when it
+differs from its setting (e.g. "Lazy-exit guard ● On  Paused during the handoff").
+The UI's design decisions are recorded in [DESIGN.md](DESIGN.md).
 
 ## 6. Context Autopilot state machine
 
@@ -217,7 +221,7 @@ prompt, verify the file, clear, compact, notify), which the Runtime performs.
   `$.agent.list()`), Unlimited.
 * **Focus View** — compact one-line tool rows, hidden results and inline
   diffs by default when on; reveal per Focus toggle, the Activity tab and
-  the Changes tab (per-file hunks from `structuredPatch`, `<Code format="diff">`).
+  Activity → Changes (per-file hunks from `structuredPatch`, `<Code format="diff">`).
   Spinner shows `Working · 27 tools · 6 files changed · tests running`.
 * **Resource Governor** — one sampler process per platform (Windows
   P/Invoke→CIM fallback, macOS `top` + `kern.memorystatus_level`, Linux
@@ -247,7 +251,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (115 tests): pure-logic suites (settings, profiles,
+* `claude plugin test` (118 tests): pure-logic suites (settings, profiles,
   permissions classifier, guard heuristics, resource parsers, Autopilot
   reducer, router, chain, activity), a Runtime suite over an in-memory host
   with a manual clock, and engine-driven suites (`$.session.start`,
@@ -262,7 +266,8 @@ only. Unknown future events/props → passed through untouched.
   subagent block, Router learning and routing, and the Windows sampler on
   2.1.292; a live resource-pressure notice that Claude acted on (2.1.289).
 * Terminal UI in a real console (Windows conhost, 150 × 46): the HUD and
-  all nine tabs read back from the screen buffer, including hot reload.
+  every panel section read back from the screen buffer, driven with injected
+  keyboard and mouse input, including hot reload.
 * Install from the folder marketplace into an isolated Claude Code config,
   and a session loading the installed copy.
 * Not yet done: visual review inside the Claude Desktop app (needs the

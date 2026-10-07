@@ -56,5 +56,8 @@ export const LIMITS = {
   classifyTimeoutMs: 12_000,
 } as const
 
+/** The plugin's version, as in .claude-plugin/plugin.json (kept in step on release). */
+export const VERSION = '0.2.0'
+
 /** Version floor this release was verified on (Desktop 2.1.289, CLI 2.1.292). */
 export const MIN_ENGINE = '2.1.289'

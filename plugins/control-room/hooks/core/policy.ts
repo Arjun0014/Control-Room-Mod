@@ -46,9 +46,9 @@ export function effective(settings: Settings, live: Live): Effective {
   const isPlan = live.permissionMode === 'plan'
 
   let guardReason: string | null = null
-  if (!settings.guard.enabled) guardReason = 'off'
-  else if (isHandoff) guardReason = 'suspended — context handoff in progress'
-  else if (isPlan) guardReason = 'suspended — plan mode'
+  if (!settings.guard.enabled) guardReason = 'Off'
+  else if (isHandoff) guardReason = 'Paused during the handoff'
+  else if (isPlan) guardReason = 'Paused in plan mode'
 
   let routerReason: string | null = null
   if (settings.router.strategy === 'off') routerReason = 'off'

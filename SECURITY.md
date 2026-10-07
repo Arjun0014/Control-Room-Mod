@@ -26,10 +26,10 @@ own settings and run records in Claude Code's per-plugin store. Run
 | The running subagents list (type, status, description) | Subagent counts and limits | Memory only |
 | The names of registered slash commands | Only so as not to take `/cr` if something else uses it | Nothing |
 | Whether managed (organisation) policy settings exist (only whether any key is set) | Choosing how to deliver policies (system prompt, or prompt context where a managed guard skips user plugins' prompt sections) | Nothing |
-| Machine-wide CPU busy % and RAM used % (Resource Governor on only) | Pressure levels, meters, notices | Memory only (a short sliding window) |
+| Machine-wide CPU busy % and memory used % (machine load on only) | Pressure levels, meters, notices | Memory only (a short sliding window) |
 
 **How the machine metrics are read.** One long-lived sampler process runs only while the
-Resource Governor is on, and stops when it is turned off or the session ends:
+machine load is on, and stops when it is turned off or the session ends:
 
 - **Windows:** `powershell.exe -NoProfile -NonInteractive` running a fixed script that calls
   `GetSystemTimes` and `GlobalMemoryStatusEx`, with a CIM fallback.
@@ -42,7 +42,7 @@ It reads totals only: no per-process data, no process names, nothing about other
 
 | Change | When |
 | --- | --- |
-| Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release/QA, Resource Governor, Subagent limits or Autopilot are on |
+| Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release check, machine load, subagent limits or Autopilot are on |
 | Add short hidden notes to the conversation, which Claude reads at its next request | Autopilot pending, resource pressure, or you changed a setting mid-session |
 | Submit prompts in the session: the handoff prompt, one corrective retry, the continuation prompt | Only with the Context Autopilot on, or when you ask for a handoff |
 | Run `/clear`; run `/compact` as a fallback | Only after a handoff whose file was verified as freshly written (`/compact` only if `/clear` fails and the fallback is allowed) |
@@ -50,8 +50,8 @@ It reads totals only: no per-process data, no process names, nothing about other
 | Refuse a tool call; require approval; or answer an approval prompt with *allow* | Permission Policy and heavy-job gating (see the rules below) |
 | Hide, refuse or ask about a subagent | Subagent Control |
 | Continue a turn that stopped early, with a short message | No-Lazy-Exit Guard (capped per turn and per session) |
-| Stop a background task that Claude started | Only when you press Stop in the Resources tab |
-| Draw UI: the band above the prompt, the pane, compact tool rows, spinner text, status line, toasts | Always (Focus View and the HUD can be turned off) |
+| Stop a background job that Claude started | Only when you press Stop in Guardrails → Machine load |
+| Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts | Always (Focus view and the status bar can be turned off) |
 | Write its own store | Settings changes, run records |
 
 **Permission rules that always hold:**
@@ -70,7 +70,7 @@ It reads totals only: no per-process data, no process names, nothing about other
 
 - No network requests, telemetry or analytics, and no hidden model calls. The guard's optional
   check is one small classification through Claude Code's own client, made only when the
-  heuristics are unsure. Turn it off in Modes → *Model check when unsure*.
+  heuristics are unsure. Turn it off in Behavior → *Smart check*.
 - It never reads your project's file contents or environment variables.
 - It never writes your files. Claude writes `NEXT_SESSION_PROMPT.md` with its normal,
   permission-checked tools.
@@ -87,7 +87,7 @@ It reads totals only: no per-process data, no process names, nothing about other
   behaviour. A failed approval check defers to Claude Code. A failed subagent check refuses the
   subagent while subagents are set to Off.
 - A corrupt or hand-edited store falls back to defaults or repaired values, with a one-time notice.
-- If the sampler fails, the Resource Governor shows "unavailable", restarts up to twice, and the
+- If the sampler fails, machine load shows "Readings unavailable", restarts up to twice, and the
   static policy still applies.
 - The Autopilot never clears a context without a verified, freshly written handoff file. If the
   file is missing it asks once more, then waits for you.

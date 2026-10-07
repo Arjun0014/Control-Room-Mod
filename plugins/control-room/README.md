@@ -3,7 +3,7 @@
 This folder is the Control Room plugin itself, the folder Claude Code loads.
 
 - Try it for one session: `claude --plugin-dir <this folder>`
-- Open the Control Centre: `/cr` (or `/control-room`)
+- Open the Control Room panel: `/cr` (or `/control-room`)
 - Every command: `/cr help`
 
 Installation, usage, configuration, security notes and limitations are in the repository's

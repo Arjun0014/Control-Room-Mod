@@ -137,12 +137,12 @@ const set = (model: Autopilot, patch: Partial<Autopilot>): Autopilot => ({ ...mo
 function proceedAfterHandoff(model: Autopilot, cfg: AutopilotConfig): Step {
   switch (cfg.continuation) {
     case 'clear':
-      return { model: set(model, { state: 'clearing', note: 'Handoff written — starting a fresh context' }), effects: [{ kind: 'clear' }] }
+      return { model: set(model, { state: 'clearing', note: 'Handoff written. Starting a fresh context' }), effects: [{ kind: 'clear' }] }
     case 'compact':
-      return { model: set(model, { state: 'compacting', note: 'Handoff written — compacting the context' }), effects: [{ kind: 'compact' }] }
+      return { model: set(model, { state: 'compacting', note: 'Handoff written. Compacting the context' }), effects: [{ kind: 'compact' }] }
     case 'manual':
       return {
-        model: set(model, { state: 'awaiting', note: 'Handoff written — press START FRESH CONTEXT to continue' }),
+        model: set(model, { state: 'awaiting', note: 'Handoff written. Start the fresh context when you’re ready' }),
         effects: [{ kind: 'notify', text: 'Handoff written. Start a fresh context from the Control Room when ready.', level: 'info' }],
       }
   }
@@ -157,7 +157,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
     }
     const next = set(model, { threshold: event.threshold, isClamped: event.isClamped })
     if (model.state === 'off') {
-      return { model: set(next, { state: 'armed', note: 'Armed — watching context' }), effects: none }
+      return { model: set(next, { state: 'armed', note: 'Watching the context' }), effects: none }
     }
     return { model: next, effects: none }
   }
@@ -178,7 +178,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       })
       if (event.isInTurn) {
         return {
-          model: set(triggered, { state: 'pending', note: 'HANDOFF PENDING — finishing the current unit of work' }),
+          model: set(triggered, { state: 'pending', note: 'Finishing the current step, then handing off' }),
           effects: [
             { kind: 'appendPending', tokens: event.tokens, threshold: model.threshold, window: event.window },
             { kind: 'notify', text: 'Context threshold reached: finishing the current unit of work, then handing off.', level: 'warn' },
@@ -186,7 +186,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         }
       }
       return {
-        model: set(triggered, { state: 'requested', note: 'Threshold reached between turns — starting the handoff' }),
+        model: set(triggered, { state: 'requested', note: 'Threshold reached. Starting the handoff' }),
         effects: [
           { kind: 'submitHandoff' },
           { kind: 'notify', text: 'Context threshold reached: starting the handoff turn.', level: 'warn' },
@@ -197,14 +197,14 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
     case 'turnComplete': {
       if (model.state === 'pending') {
         if (event.reason === 'aborted') {
-          return { model: set(model, { note: 'HANDOFF PENDING — interrupted; handoff waits for the next completed turn' }), effects: none }
+          return { model: set(model, { note: 'Interrupted. The handoff waits for the next finished turn' }), effects: none }
         }
-        return { model: set(model, { state: 'requested', note: 'Work boundary reached — starting the handoff turn' }), effects: [{ kind: 'submitHandoff' }] }
+        return { model: set(model, { state: 'requested', note: 'Step finished. Starting the handoff' }), effects: [{ kind: 'submitHandoff' }] }
       }
       if (model.state === 'handoff') {
         if (event.reason === 'aborted') {
           return {
-            model: set(model, { state: 'awaiting', note: 'Handoff interrupted — resume it from the Control Room' }),
+            model: set(model, { state: 'awaiting', note: 'Handoff interrupted. Resume it when you’re ready' }),
             effects: [{ kind: 'notify', text: 'Handoff interrupted. Resume it from the Control Room when ready.', level: 'warn' }],
           }
         }
@@ -215,14 +215,14 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
 
     case 'handoffStarted':
       if (model.state !== 'requested') return { model, effects: none }
-      return { model: set(model, { state: 'handoff', handoffSince: event.now, note: 'Handoff turn running' }), effects: none }
+      return { model: set(model, { state: 'handoff', handoffSince: event.now, note: 'Claude is writing the handoff' }), effects: none }
 
     case 'handoffVerified': {
       if (model.state !== 'verifying') return { model, effects: none }
       if (event.isOk) return proceedAfterHandoff(set(model, { retries: 0 }), cfg)
       if (model.retries < 1) {
         return {
-          model: set(model, { state: 'handoff', retries: model.retries + 1, note: 'Handoff notes missing — asking Claude to write them' }),
+          model: set(model, { state: 'handoff', retries: model.retries + 1, note: 'Notes missing. Asking Claude to write them' }),
           effects: [{ kind: 'submitRetry' }],
         }
       }
@@ -230,7 +230,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         model: set(model, {
           state: 'awaiting',
           lastError: 'handoff file not written',
-          note: 'Handoff notes not found — the context was NOT cleared',
+          note: 'No handoff notes found, so the context was kept',
         }),
         effects: [{ kind: 'notify', text: 'Handoff notes were not written, so the context was not cleared. Review and continue manually.', level: 'error' }],
       }
@@ -240,22 +240,22 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (model.state !== 'clearing') return { model, effects: none }
       if (!cfg.autoContinue) {
         return {
-          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Fresh context ready — continue when you are' }),
+          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Fresh context ready. Continue when you are' }),
           effects: [{ kind: 'notify', text: 'Fresh context ready. Auto-continue is off.', level: 'info' }],
         }
       }
-      return { model: set(model, { state: 'resuming', note: 'Fresh context — resuming the work' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
+      return { model: set(model, { state: 'resuming', note: 'Continuing in the fresh context' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
 
     case 'clearFailed':
       if (model.state !== 'clearing') return { model, effects: none }
       if (cfg.fallbackToCompact) {
         return {
-          model: set(model, { state: 'compacting', lastError: event.error, note: '/clear was refused — compacting instead' }),
+          model: set(model, { state: 'compacting', lastError: event.error, note: 'Clearing was refused. Compacting instead' }),
           effects: [{ kind: 'compact' }, { kind: 'notify', text: `/clear was refused (${event.error}); compacting instead.`, level: 'warn' }],
         }
       }
       return {
-        model: set(model, { state: 'awaiting', lastError: event.error, note: '/clear was refused — press START FRESH CONTEXT' }),
+        model: set(model, { state: 'awaiting', lastError: event.error, note: 'Clearing was refused. Start fresh when you’re ready' }),
         effects: [{ kind: 'notify', text: `Automatic /clear was refused: ${event.error}`, level: 'error' }],
       }
 
@@ -263,23 +263,23 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (model.state !== 'compacting') return { model, effects: none }
       if (!cfg.autoContinue) {
         return {
-          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Context compacted — continue when you are' }),
+          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Context compacted. Continue when you are' }),
           effects: none,
         }
       }
-      return { model: set(model, { state: 'resuming', note: 'Context compacted — resuming the work' }), effects: [{ kind: 'submitContinuation', via: 'compact' }] }
+      return { model: set(model, { state: 'resuming', note: 'Context compacted. Continuing the work' }), effects: [{ kind: 'submitContinuation', via: 'compact' }] }
 
     case 'compactFailed':
       if (model.state !== 'compacting') return { model, effects: none }
       return {
-        model: set(model, { state: 'awaiting', lastError: event.error, note: 'Compaction failed — press START FRESH CONTEXT' }),
+        model: set(model, { state: 'awaiting', lastError: event.error, note: 'Compaction failed. Start fresh when you’re ready' }),
         effects: [{ kind: 'notify', text: `Compaction failed: ${event.error}`, level: 'error' }],
       }
 
     case 'submitFailed':
       if (!BUSY.includes(model.state)) return { model, effects: none }
       return {
-        model: set(model, { state: 'awaiting', lastError: event.error, note: 'Could not start the next step automatically' }),
+        model: set(model, { state: 'awaiting', lastError: event.error, note: 'Couldn’t continue automatically' }),
         effects: [{ kind: 'notify', text: `Autopilot could not continue: ${event.error}`, level: 'error' }],
       }
 
@@ -292,21 +292,21 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           triggeredTokens: null,
           triggeredAt: null,
           handoffSince: null,
-          note: 'Armed — continuing in a fresh context',
+          note: 'Watching the context',
         }),
         effects: none,
       }
 
     case 'engineCompacted':
       if (model.state === 'pending' || model.state === 'requested') {
-        return { model: set(model, { state: 'armed', note: 'Claude Code compacted the context first — handoff cancelled' }), effects: none }
+        return { model: set(model, { state: 'armed', note: 'Claude Code compacted first, so no handoff was needed' }), effects: none }
       }
       return { model, effects: none }
 
     case 'manualHandoff':
       if (BUSY.includes(model.state)) return { model, effects: none }
       return {
-        model: set(model, { state: 'requested', triggeredAt: event.now, retries: 0, lastError: null, note: 'Handoff requested by you' }),
+        model: set(model, { state: 'requested', triggeredAt: event.now, retries: 0, lastError: null, note: 'Handoff requested' }),
         effects: [{ kind: 'submitHandoff' }],
       }
 
@@ -332,7 +332,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           handoffSince: null,
           snoozeUntil: null,
           retries: 0,
-          note: 'Armed — new context (cleared by you)',
+          note: 'Watching the context',
         }),
         effects: none,
       }

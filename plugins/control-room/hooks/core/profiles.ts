@@ -11,6 +11,7 @@ import {
   type CustomProfile,
   DEFAULT_PERMISSIONS,
   PERMISSION_CATEGORIES,
+  PERMISSION_LABEL,
   type Settings,
   type SystemSettings,
   clone,
@@ -69,23 +70,23 @@ const releaseQa = (): SystemSettings => {
 }
 
 export const BUILTIN_PROFILES: readonly Omit<ProfileInfo, 'systems'>[] = [
-  { id: 'normal', name: 'Normal', tagline: 'Claude Code as usual, with a quieter transcript', isBuiltin: true },
+  { id: 'normal', name: 'Normal', tagline: 'Claude Code as usual, quieter', isBuiltin: true },
   {
     id: 'frontier',
     name: 'Frontier Max',
-    tagline: 'Max effort, finish-the-job guard, automatic context handoff',
+    tagline: 'Maximum effort, finishes the job',
     isBuiltin: true,
   },
   {
     id: 'low-resource',
     name: 'Low Resource',
-    tagline: 'Keeps the machine responsive: low ceilings, one subagent',
+    tagline: 'Gentle on your machine',
     isBuiltin: true,
   },
   {
     id: 'release-qa',
     name: 'Release / QA',
-    tagline: 'Verification first: strict guard, careful permissions, diffs shown',
+    tagline: 'Verifies before calling it done',
     isBuiltin: true,
   },
 ]
@@ -137,43 +138,43 @@ export function profileLabel(settings: Settings): string {
 export type SettingChange = { path: string; label: string; from: string; to: string }
 
 const LABELS: Record<string, string> = {
-  'autopilot.enabled': 'Context Autopilot',
-  'autopilot.thresholdMode': 'Autopilot threshold mode',
-  'autopilot.thresholdTokens': 'Autopilot threshold (tokens)',
-  'autopilot.thresholdPercent': 'Autopilot threshold (%)',
-  'autopilot.continuation': 'Continuation method',
-  'autopilot.fallbackToCompact': 'Compact fallback',
-  'autopilot.handoffFile': 'Handoff file',
-  'autopilot.autoContinue': 'Auto-continue',
+  'autopilot.enabled': 'Autopilot',
+  'autopilot.thresholdMode': 'Measure by',
+  'autopilot.thresholdTokens': 'Hand off at (tokens)',
+  'autopilot.thresholdPercent': 'Hand off at (%)',
+  'autopilot.continuation': 'Then',
+  'autopilot.fallbackToCompact': 'If clearing fails',
+  'autopilot.handoffFile': 'Notes file',
+  'autopilot.autoContinue': 'Continue on its own',
   'frontier.enabled': 'Frontier Max',
-  'frontier.effort': 'Frontier effort',
-  'frontier.subagentEffort': 'Frontier effort for subagents',
-  'qa.enabled': 'Release/QA policy',
-  'guard.enabled': 'No-Lazy-Exit Guard',
+  'frontier.effort': 'Effort',
+  'frontier.subagentEffort': 'Effort for subagents',
+  'qa.enabled': 'Release check',
+  'guard.enabled': 'Lazy-exit guard',
   'guard.strictness': 'Guard strictness',
-  'guard.maxPerTurn': 'Guard continuations per turn',
-  'guard.maxPerSession': 'Guard continuations per session',
-  'guard.modelCheck': 'Guard model check',
-  'router.strategy': 'Model Router',
+  'guard.maxPerTurn': 'Continuations per turn',
+  'guard.maxPerSession': 'Continuations per session',
+  'guard.modelCheck': 'Smart check',
+  'router.strategy': 'Model router',
   'router.mainLoop': 'Route main conversation',
   'router.subagents': 'Route subagents',
-  'subagents.mode': 'Subagent Control',
+  'subagents.mode': 'Subagents',
   'subagents.limit': 'Subagent limit',
   'subagents.countTeammates': 'Count teammates',
-  'focus.enabled': 'Focus View',
-  'focus.tools': 'Tool rows',
+  'focus.enabled': 'Focus view',
+  'focus.tools': 'Tool calls',
   'focus.results': 'Tool results',
-  'focus.diffs': 'Inline diffs',
-  'focus.spinner': 'Activity summary',
-  'resources.level': 'Resource Governor',
+  'focus.diffs': 'Inline file diffs',
+  'focus.spinner': 'Activity line',
+  'resources.level': 'Machine load',
   'resources.cpu': 'CPU ceiling',
-  'resources.ram': 'RAM ceiling',
+  'resources.ram': 'Memory ceiling',
   'resources.intervalSec': 'Sample interval',
-  'resources.enforcement': 'Resource enforcement',
+  'resources.enforcement': 'When over',
 }
 
 for (const category of PERMISSION_CATEGORIES) {
-  LABELS[`permissions.${category}`] = `Permission: ${category}`
+  LABELS[`permissions.${category}`] = PERMISSION_LABEL[category]
 }
 
 const show = (v: unknown): string => {

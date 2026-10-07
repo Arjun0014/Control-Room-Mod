@@ -8,6 +8,38 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
+A redesign of everything you see, for the terminal and Desktop. The design is recorded in
+[docs/DESIGN.md](docs/DESIGN.md).
+
+### Changed
+
+- **Status bar** (formerly the HUD) now uses plain words and shows only what is on or needs a
+  look. "Context ━━━━── 31%", "Hands off at 70%" and "Memory 91%" replace codes like `CTX`,
+  `AUTO 700k` and `RES MED ▲`. There are no separators or all-caps labels. Its button opens and
+  closes the panel.
+- **Control Room panel** has six sections instead of nine tabs: Overview, Context (Autopilot and
+  the session chain), Behavior, Guardrails (permissions, subagents, machine load), Activity and
+  Setup (profiles, display, about). Each section answers one question.
+- **A design system** (`hooks/ui/primitives.tsx`) draws every control natively per surface:
+  - switches, segmented choices, choices that open in place with one line per option, − / +
+    steppers, thin meters with a threshold tick, and callouts for anything that needs you;
+  - Desktop gets native buttons and popups, plus SVG meters and charts.
+- **Progressive disclosure:** a system is one switch, and its finer settings appear only while it
+  is on.
+- **Profiles** read "Normal · edited" when changed, and Setup lists each change
+  (`Machine load  Off › Medium`), with *Save as* and *Back to Normal*.
+- `/cr status` and `/cr help` use the same plain language.
+- The Autopilot's state notes and the guard's pause reasons are reworded the same way.
+
+### Fixed
+
+- Terminal choices could get stuck open: Claude Code's terminal dropdown opens on a click, but its
+  options could not be clicked and it could not be closed with the pointer. The terminal no longer
+  uses dropdowns. Every choice works with a click or with Tab and Enter, and closes on a pick or a
+  second click.
+
 ## [0.1.0] - 2026-10-07
 
 First release.

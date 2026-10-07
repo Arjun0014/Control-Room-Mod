@@ -11,22 +11,22 @@ import { listProfiles } from '../core/profiles'
 import { defaultSettings } from '../core/settings'
 import * as Chain from '../features/chain'
 import type { Runtime } from './runtime'
-import { hudOf, runLabelOf, statusLineOf } from './views'
+import { hudOf, profileOf, runLabelOf, statusOf } from './views'
 
 const HELP = [
-  'Control Room commands (/control-room or /cr):',
-  '  (none)                 open or close the Control Centre',
-  '  status                 one-screen status',
-  '  profile [name]         list profiles, or apply one (normal, frontier, low-resource, release-qa, or yours)',
-  '  autopilot on|off|70%|700k   Context Autopilot and its threshold',
-  '  handoff                run the handoff now (notes + NEXT_SESSION_PROMPT.md), then continue fresh',
-  '  fresh                  start the fresh context after a written handoff',
-  '  frontier on|off · guard on|off · qa on|off · focus on|off',
-  '  resources off|low|medium|high|<cpu>/<ram>',
-  '  agents unlimited|off|ask|<n>',
-  '  router off|balanced|performance|economy|custom',
-  '  hud band|status|both|off',
-  '  reset                  back to safe defaults (Normal)',
+  'Control Room  (/cr or /control-room)',
+  '  /cr                       open or close Control Room',
+  '  /cr status                everything at a glance',
+  '  /cr profile [name]        list profiles, or switch (normal, frontier, low-resource, release-qa, yours)',
+  '  /cr autopilot on|off|70%|700k',
+  '  /cr handoff               hand off now, then continue in a fresh context',
+  '  /cr fresh                 start the fresh context when a handoff is waiting',
+  '  /cr frontier|guard|qa|focus on|off',
+  '  /cr resources off|low|medium|high|60/80',
+  '  /cr agents unlimited|off|ask|<n>',
+  '  /cr router off|balanced|performance|economy|custom',
+  '  /cr hud band|status|both|off',
+  '  /cr reset confirm         back to Normal (custom profiles are kept)',
 ].join('\n')
 
 const onOff = (word: string | undefined): boolean | null =>
@@ -34,18 +34,25 @@ const onOff = (word: string | undefined): boolean | null =>
 
 export function statusText(rt: Runtime): string {
   const hud = hudOf(rt)
+  const st = statusOf(rt)
+  const p = profileOf(rt)
   const totals = rt.run === null ? null : Chain.totals(rt.run, Date.now())
-  const lines = [
-    statusLineOf(hud),
-    `${runLabelOf(rt)} · ${totals === null ? '' : `${fmt.plural(totals.sessions, 'session')} · run cost ${fmt.cost(totals.costUsd)}${totals.isCostPartial ? ' (partial)' : ''}`}`,
-    `Autopilot: ${rt.autopilot.note}${rt.autopilot.threshold === null ? '' : ` (threshold ${fmt.tokens(rt.autopilot.threshold)})`}`,
-    `Guard: ${rt.effective.guard.isActive ? 'active' : (rt.effective.guard.reason ?? 'off')} · Router: ${rt.settings.router.strategy} · Subagents: ${rt.subagentLabel()} · Focus View: ${rt.settings.focus.enabled ? 'on' : 'off'}`,
+  const ctx = hud.ctx.pct === null ? 'waiting for the first response' : `${hud.ctx.pct}% · ${fmt.tokens(hud.ctx.tokens)} of ${fmt.tokens(hud.ctx.window)} tokens`
+  const runCost = totals !== null && totals.sessions > 1 ? ` · ${fmt.cost(totals.costUsd)}${totals.isCostPartial ? '+' : ''} this run` : ''
+  const lines: [string, string][] = [
+    ['Context', ctx],
+    ['Cost', `${fmt.cost(hud.cost.usd)} this session${runCost}`],
+    ['Autopilot', rt.settings.autopilot.enabled ? `${st.autopilot.text} · ${rt.autopilot.note}` : st.autopilot.text],
+    ['Frontier Max', st.frontier.text],
+    ['Guard', st.guard.text],
+    ['Release check', st.qa.text],
+    ['Router', st.router.text],
+    ['Subagents', st.subagents.text],
+    ['Machine load', st.load.text],
+    ['Focus view', st.focus.text],
   ]
-  if (rt.settings.resources.level !== 'off') {
-    const p = rt.monitor.pressure
-    lines.push(`Resources: ${rt.settings.resources.level} · ${rt.monitor.status}${p.cpu === null ? '' : ` · CPU ${Math.round(p.cpu)}%`}${p.ram === null ? '' : ` · RAM ${Math.round(p.ram)}%`} · ${p.level}`)
-  }
-  return lines.join('\n')
+  const head = `◆ Control Room · ${p.name}${p.isModified ? ' (edited)' : ''} · ${runLabelOf(rt)}`
+  return [head, ...lines.map(([label, value]) => `${label.padEnd(14)}${value}`)].join('\n')
 }
 
 export async function handleCommand(rt: Runtime, args: string): Promise<CommandRunResult> {

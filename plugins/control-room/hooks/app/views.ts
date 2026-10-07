@@ -2,6 +2,10 @@
  * View models: render-ready projections of the Runtime, one per `$.state`
  * atom. Pure functions of the runtime's state; the publisher decides when
  * to publish them.
+ *
+ * The plain-language status helpers below are the product's one voice: the
+ * HUD, the Control Centre, the status line and `/cr status` all say the same
+ * thing the same way ("Hands off at 70%", "Watching for early stops").
  */
 
 import type {
@@ -14,17 +18,18 @@ import type {
   PermissionsView,
   ResourcesView,
   SpinnerModel,
+  StatusView,
+  SystemId,
   Tone,
 } from '../../types'
 import { MIN_ENGINE } from '../constants'
 import * as fmt from '../core/format'
+import { findProfile, isModified } from '../core/profiles'
 import { relativeTo, shortPath } from '../core/text'
 import { versionAtLeast } from '../core/version'
-import * as Chain from '../features/chain'
 import { isHandoffActive } from '../features/autopilot'
+import * as Chain from '../features/chain'
 import type { Runtime } from './runtime'
-
-const EFFORT_LABEL: Record<string, string> = { max: 'MAX', xhigh: 'XHIGH', high: 'HIGH' }
 
 function contextTone(rt: Runtime): Tone {
   const tokens = rt.usage.tokens
@@ -38,115 +43,167 @@ function contextTone(rt: Runtime): Tone {
   return 'good'
 }
 
-function autopilotLabel(rt: Runtime): { label: string; tone: Tone } {
-  if (!rt.settings.autopilot.enabled) return { label: 'AUTO OFF', tone: 'muted' }
-  const t = rt.autopilot.threshold
+// ---------------------------------------------------------------------------
+// Plain-language status
+
+const EFFORT_NAME: Record<string, string> = { max: 'Maximum effort', xhigh: 'Extra-high effort', high: 'High effort', keep: 'Policy only' }
+const LEVEL_NAME: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', custom: 'Custom' }
+const STRATEGY_NAME: Record<string, string> = { off: 'Off', balanced: 'Balanced', performance: 'Performance', economy: 'Economy', custom: 'Custom' }
+
+/** "70%" or "700k": the threshold as the person set it. */
+export function thresholdText(rt: Runtime): string {
+  const a = rt.settings.autopilot
+  return a.thresholdMode === 'percent' ? `${a.thresholdPercent}%` : fmt.tokens(rt.autopilot.threshold ?? a.thresholdTokens)
+}
+
+export function autopilotStatus(rt: Runtime): StatusView {
+  if (!rt.settings.autopilot.enabled) return { text: 'Off', tone: 'muted' }
   switch (rt.autopilot.state) {
     case 'off':
-    case 'armed': {
-      const a = rt.settings.autopilot
-      const target = a.thresholdMode === 'percent' && t === null ? `${a.thresholdPercent}%` : fmt.tokens(t ?? a.thresholdTokens)
-      return { label: `AUTO ${target}`, tone: 'normal' }
-    }
+    case 'armed':
+      return { text: `Hands off at ${thresholdText(rt)}`, tone: 'normal' }
     case 'pending':
-      return { label: 'HANDOFF PENDING', tone: 'warn' }
+      return { text: 'Handoff soon', tone: 'warn' }
     case 'requested':
     case 'handoff':
     case 'verifying':
-      return { label: 'HANDOFF', tone: 'accent' }
+      return { text: 'Writing the handoff', tone: 'accent' }
     case 'clearing':
     case 'compacting':
-      return { label: 'FRESH CONTEXT…', tone: 'accent' }
+      return { text: 'Starting fresh', tone: 'accent' }
     case 'resuming':
-      return { label: 'RESUMING', tone: 'accent' }
+      return { text: 'Resuming', tone: 'accent' }
     case 'awaiting':
-      return { label: 'AUTO NEEDS YOU', tone: 'bad' }
+      return { text: 'Waiting for you', tone: 'bad' }
   }
 }
 
-function resourcesLabel(rt: Runtime): { label: string; tone: Tone } {
-  const r = rt.settings.resources
-  if (r.level === 'off') return { label: 'RES OFF', tone: 'muted' }
-  const name = r.level === 'custom' ? `${r.cpu}/${r.ram}` : r.level.slice(0, 3).toUpperCase()
-  const p = rt.monitor.pressure
-  const status = rt.monitor.status
-  if (status === 'unavailable') return { label: `RES ${name} ?`, tone: 'muted' }
-  if (status !== 'live' || p.level === 'unknown') return { label: `RES ${name}`, tone: 'normal' }
-  const pct = p.driver === 'ram' ? p.ram : p.cpu
-  const tone: Tone = p.level === 'ok' ? 'good' : p.level === 'elevated' ? 'warn' : 'bad'
-  const mark = p.level === 'ok' ? '' : ` ${p.level === 'elevated' ? '▲' : '▲▲'}${pct === null ? '' : ` ${Math.round(pct)}%`}`
-  return { label: `RES ${name}${mark}`, tone }
+export function frontierStatus(rt: Runtime): StatusView {
+  const f = rt.settings.frontier
+  if (!f.enabled) return { text: 'Off', tone: 'muted' }
+  if (f.effort !== 'keep' && rt.frontier.isEffortSupported === false) return { text: 'Policy on · this model has no effort setting', tone: 'normal' }
+  return { text: EFFORT_NAME[f.effort] ?? 'On', tone: 'normal' }
 }
 
-function agentsLabel(rt: Runtime): { label: string; tone: Tone } {
+export function guardStatus(rt: Runtime): StatusView {
+  if (!rt.settings.guard.enabled) return { text: 'Off', tone: 'muted' }
+  const eff = rt.effective.guard
+  if (!eff.isActive) return { text: eff.reason ?? 'Paused', tone: 'muted' }
+  if (rt.guard.turnBlocks > 0) return { text: `Kept Claude going ${rt.guard.turnBlocks}× this turn`, tone: 'warn' }
+  if (rt.guard.sessionBlocks > 0) return { text: `Kept Claude going ${rt.guard.sessionBlocks}× this session`, tone: 'normal' }
+  return { text: 'Watching for early stops', tone: 'normal' }
+}
+
+export function routerStatus(rt: Runtime): StatusView {
+  const s = rt.settings.router.strategy
+  return { text: STRATEGY_NAME[s] ?? s, tone: s === 'off' ? 'muted' : 'normal' }
+}
+
+export function subagentStatus(rt: Runtime): StatusView {
   const s = rt.settings.subagents
   const running = rt.runningSubagents
+  const live = running > 0 ? ` · ${running} running` : ''
   switch (s.mode) {
     case 'unrestricted':
-      return { label: running > 0 ? `AGENTS ${running}` : 'AGENTS ∞', tone: running > 0 ? 'info' : 'muted' }
+      return { text: `No limit${live}`, tone: 'normal' }
     case 'block':
-      return { label: 'AGENTS OFF', tone: 'warn' }
+      return { text: 'Off', tone: 'warn' }
     case 'ask':
-      return { label: running > 0 ? `AGENTS ${running} ASK` : 'AGENTS ASK', tone: 'normal' }
+      return { text: `Ask each time${live}`, tone: 'normal' }
     case 'limit':
-      return { label: `AGENTS ${running}/${s.limit}`, tone: running >= s.limit ? 'warn' : 'normal' }
+      return { text: `Up to ${s.limit} at once${live}`, tone: running >= s.limit ? 'warn' : 'normal' }
   }
 }
 
-function guardLabel(rt: Runtime): { label: string; tone: Tone } {
-  const eff = rt.effective
-  if (!rt.settings.guard.enabled) return { label: 'GUARD OFF', tone: 'muted' }
-  if (!eff.guard.isActive) return { label: 'GUARD ⏸', tone: 'muted' }
-  if (rt.guard.turnBlocks > 0) return { label: `GUARD ${rt.guard.turnBlocks}/${rt.settings.guard.maxPerTurn}`, tone: 'warn' }
-  return { label: 'GUARD ON', tone: 'good' }
+/** Machine load. `attention` is set only when it needs a look; the HUD shows nothing otherwise. */
+export function loadStatus(rt: Runtime): StatusView & { isOn: boolean; attention: string | null; level: string } {
+  const r = rt.settings.resources
+  const level = LEVEL_NAME[r.level] ?? r.level
+  if (r.level === 'off') return { isOn: false, attention: null, level, text: 'Off', tone: 'muted' }
+  const m = rt.monitor
+  const p = m.pressure
+  if (m.status === 'unavailable') return { isOn: true, attention: 'Load unavailable', level, text: 'Readings unavailable', tone: 'muted' }
+  if (m.status !== 'live' || p.level === 'unknown') return { isOn: true, attention: null, level, text: 'Starting…', tone: 'muted' }
+  const pct = (n: number | null) => (n === null ? '—' : `${Math.round(n)}%`)
+  const tone: Tone = p.level === 'ok' ? 'good' : p.level === 'elevated' ? 'warn' : 'bad'
+  const driver = p.driver === 'ram' ? `Memory ${pct(p.ram)}` : `CPU ${pct(p.cpu)}`
+  return { isOn: true, attention: p.level === 'ok' ? null : driver, level, text: `CPU ${pct(p.cpu)} · Memory ${pct(p.ram)}`, tone }
 }
 
-function routerLabel(rt: Runtime): { label: string; tone: Tone } {
-  const s = rt.settings.router.strategy
-  if (s === 'off') return { label: 'ROUTER OFF', tone: 'muted' }
-  const short = { balanced: 'BAL', performance: 'PERF', economy: 'ECO', custom: 'CUSTOM' }[s]
-  return { label: `ROUTER ${short}`, tone: 'normal' }
+export function focusStatus(rt: Runtime): StatusView {
+  const f = rt.settings.focus
+  if (!f.enabled) return { text: 'Off', tone: 'muted' }
+  return { text: f.tools === 'hidden' ? 'Tool calls hidden' : 'Compact transcript', tone: 'normal' }
+}
+
+export function qaStatus(rt: Runtime): StatusView {
+  return rt.settings.qa.enabled ? { text: 'Verify before done', tone: 'normal' } : { text: 'Off', tone: 'muted' }
+}
+
+export function statusOf(rt: Runtime): Record<SystemId, StatusView> {
+  const load = loadStatus(rt)
+  return {
+    autopilot: autopilotStatus(rt),
+    frontier: frontierStatus(rt),
+    qa: qaStatus(rt),
+    guard: guardStatus(rt),
+    router: routerStatus(rt),
+    subagents: subagentStatus(rt),
+    load: load.isOn ? { text: `${load.level} · ${load.text}`, tone: load.tone } : { text: 'Off', tone: 'muted' },
+    focus: focusStatus(rt),
+  }
+}
+
+export function profileOf(rt: Runtime): { id: string; name: string; isModified: boolean } {
+  const profile = findProfile(rt.settings, rt.settings.profile)
+  return { id: rt.settings.profile, name: profile?.name ?? 'Custom', isModified: isModified(rt.settings) }
 }
 
 export function runLabelOf(rt: Runtime): string {
-  if (rt.run === null) return 'No run'
+  if (rt.run === null) return 'No run yet'
   const s = Chain.currentSession(rt.run)
-  return `Run #${rt.run.number} · S${s?.index ?? 1}`
+  return `Run ${rt.run.number} · Session ${s?.index ?? 1}`
 }
+
+// ---------------------------------------------------------------------------
+// Projections
 
 export function hudOf(rt: Runtime): HudModel {
   const tokens = rt.usage.tokens ?? null
   const window = rt.usage.window ?? null
   const pct = tokens !== null && window !== null && window > 0 ? Math.round((100 * tokens) / window) : (rt.usage.pct ?? null)
   const totals = rt.run === null ? null : Chain.totals(rt.run, Date.now())
-  const ap = autopilotLabel(rt)
+  const ap = autopilotStatus(rt)
+  const load = loadStatus(rt)
+  const s = rt.settings
   let alert: HudModel['alert'] = null
-  if (rt.autopilot.state === 'awaiting') alert = { text: rt.autopilot.note, tone: 'bad' }
-  else if (rt.monitor.pressure.level === 'critical') alert = { text: 'Machine under heavy load — Claude was asked to reduce it', tone: 'bad' }
-  else if (rt.autopilot.state === 'pending') alert = { text: 'Finishing the current unit of work, then handing off', tone: 'warn' }
+  if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: 'bad' }
+  else if (rt.monitor.pressure.level === 'critical' && s.resources.level !== 'off') alert = { kind: 'load', text: 'Your machine is under heavy load. Claude was asked to ease off.', tone: 'bad' }
+  else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Claude is finishing this step, then hands off to a fresh context.', tone: 'warn' }
   return {
-    isVisible: rt.settings.ui.hud === 'band' || rt.settings.ui.hud === 'both',
-    ctx: { tokens, window, pct, threshold: rt.settings.autopilot.enabled ? rt.autopilot.threshold : null, tone: contextTone(rt) },
+    isVisible: s.ui.hud === 'band' || s.ui.hud === 'both',
+    isPaneOpen: rt.ui.isPaneOpen,
+    ctx: { tokens, window, pct, threshold: s.autopilot.enabled ? rt.autopilot.threshold : null, tone: contextTone(rt) },
     cost: { usd: rt.usage.costUsd ?? null, runUsd: totals?.costUsd ?? null, isRunPartial: totals?.isCostPartial ?? false },
-    profile: { label: rt.profileLabel },
-    autopilot: { label: ap.label, tone: ap.tone, state: rt.autopilot.state, isPending: rt.autopilot.state === 'pending' },
-    frontier: { isOn: rt.settings.frontier.enabled, effort: rt.settings.frontier.enabled ? (EFFORT_LABEL[rt.settings.frontier.effort] ?? null) : null },
-    guard: guardLabel(rt),
-    resources: resourcesLabel(rt),
-    agents: agentsLabel(rt),
-    router: routerLabel(rt),
-    focus: { isOn: rt.settings.focus.enabled },
+    profile: profileOf(rt),
+    frontier: { isOn: s.frontier.enabled, effort: s.frontier.enabled ? (EFFORT_NAME[s.frontier.effort] ?? null) : null },
+    autopilot: { isOn: s.autopilot.enabled, state: rt.autopilot.state, text: ap.text, tone: ap.tone },
+    resources: { isOn: load.isOn, text: load.attention, tone: load.tone },
+    agents: { running: rt.runningSubagents, limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode },
+    guard: { isOn: s.guard.enabled, continued: rt.guard.turnBlocks },
+    session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1) },
     alert,
-    run: { label: runLabelOf(rt) },
   }
 }
 
-/** The status-line form of the HUD: `CR · CTX 684k/1M 68% · $3.84 · FRONTIER MAX · AUTO 700k · RES MED · AGENTS OFF`. */
+/** The one-line HUD for Claude Code's status line (`/cr hud status`). */
 export function statusLineOf(hud: HudModel): string {
-  const ctx = hud.ctx.tokens === null ? 'CTX —' : `CTX ${fmt.tokens(hud.ctx.tokens)}${hud.ctx.window ? `/${fmt.tokens(hud.ctx.window)}` : ''}${hud.ctx.pct === null ? '' : ` ${hud.ctx.pct}%`}`
-  const parts = ['CR', ctx, fmt.cost(hud.cost.usd), hud.profile.label.toUpperCase()]
-  if (hud.frontier.isOn && !hud.profile.label.toLowerCase().startsWith('frontier')) parts.push(`FRONTIER ${hud.frontier.effort ?? ''}`.trim())
-  parts.push(hud.autopilot.label, hud.resources.label, hud.agents.label)
+  const parts = [`◆ ${hud.ctx.pct === null ? 'Context —' : `Context ${hud.ctx.pct}%`}`, fmt.cost(hud.cost.usd)]
+  if (hud.frontier.isOn) parts.push('Frontier Max')
+  else if (hud.profile.id !== 'normal') parts.push(hud.profile.name)
+  if (hud.autopilot.isOn) parts.push(hud.autopilot.text)
+  if (hud.resources.text !== null) parts.push(hud.resources.text)
+  if (hud.agents.running > 0) parts.push(fmt.plural(hud.agents.running, 'agent'))
   return parts.join(' · ')
 }
 
@@ -155,6 +212,8 @@ export function paneOf(rt: Runtime): PaneModel {
   const isBusy = isHandoffActive(a.state) && a.state !== 'pending'
   return {
     tab: rt.ui.tab,
+    openPicker: rt.ui.openPicker,
+    status: statusOf(rt),
     activitySub: rt.ui.activitySub,
     settings: rt.settings,
     profileLabel: rt.profileLabel,

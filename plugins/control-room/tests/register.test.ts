@@ -31,8 +31,8 @@ describe('register', () => {
     expect(w.kept.registered).toContain('control-room')
     expect(w.kept.registered).toContain('cr')
     const { text } = await $.command.run(cmd('control-room', 'status'))
-    expect(text).toContain('CR ·')
-    expect(text).toContain('Run #1')
+    expect(text).toContain('◆ Control Room')
+    expect(text).toContain('Run 1')
   })
 
   test('/cr sub-commands change settings and persist them', async ($, on) => {
@@ -159,7 +159,7 @@ describe('register', () => {
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 4 })) void _
     await w.clock.settle()
     const pending = await $.command.run(cmd('cr', 'status'))
-    expect(pending.text).toContain('HANDOFF PENDING')
+    expect(pending.text).toContain('Handoff soon')
 
     w.live.usage = { ...w.live.usage, context: { tokens: 112_000, window: 1_000_000, percent: 11 } }
     await $.turn.complete({ answer: 'Feature done.', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
@@ -179,7 +179,7 @@ describe('register', () => {
     expect(continuation).toContain('NEXT_SESSION_PROMPT.md')
 
     const status = await $.command.run(cmd('cr', 'status'))
-    expect(status.text).toContain('S2')
+    expect(status.text).toContain('Session 2')
   })
 
   test('the handoff never clears the context when the notes were not written', async ($, on) => {
@@ -209,6 +209,6 @@ describe('register', () => {
     expect(composed.sections.map(x => x.text).join(' ')).toContain('Resource Governor: LOW')
     expect(w.kept.spawned.length).toBe(0)
     const status = await $.command.run(cmd('cr', 'status'))
-    expect(status.text).toContain('Resources: low')
+    expect(status.text).toMatch(/Machine load\s+Low/)
   })
 })

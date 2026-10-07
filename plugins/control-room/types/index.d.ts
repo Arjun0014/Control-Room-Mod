@@ -82,21 +82,23 @@ export type Tone = 'normal' | 'muted' | 'good' | 'warn' | 'bad' | 'accent' | 'in
 
 export type HudModel = {
   isVisible: boolean
+  isPaneOpen: boolean
   ctx: { tokens: number | null; window: number | null; pct: number | null; threshold: number | null; tone: Tone }
   cost: { usd: number | null; runUsd: number | null; isRunPartial: boolean }
-  profile: { label: string }
-  autopilot: { label: string; tone: Tone; state: string; isPending: boolean }
+  /** The applied profile; `isModified` when settings changed since it was applied. */
+  profile: { id: string; name: string; isModified: boolean }
   frontier: { isOn: boolean; effort: string | null }
-  guard: { label: string; tone: Tone }
-  resources: { label: string; tone: Tone }
-  agents: { label: string; tone: Tone }
-  router: { label: string; tone: Tone }
-  focus: { isOn: boolean }
-  alert: { text: string; tone: Tone } | null
-  run: { label: string }
+  /** `text` is the plain-language state ("Hands off at 70%", "Writing the handoff"). */
+  autopilot: { isOn: boolean; state: string; text: string; tone: Tone }
+  /** `text` is set only when the machine needs attention ("Memory 91%"). */
+  resources: { isOn: boolean; text: string | null; tone: Tone }
+  agents: { running: number; limit: number | null; mode: string }
+  guard: { isOn: boolean; continued: number }
+  session: { run: number | null; index: number }
+  alert: { kind: 'pending' | 'awaiting' | 'load'; text: string; tone: Tone } | null
 }
 
-export type TabId = 'overview' | 'autopilot' | 'modes' | 'resources' | 'permissions' | 'chain' | 'activity' | 'profiles' | 'settings'
+export type TabId = 'overview' | 'context' | 'behavior' | 'guardrails' | 'activity' | 'setup'
 
 export type AutopilotView = {
   state: string
@@ -114,10 +116,18 @@ export type AutopilotView = {
   canSnooze: boolean
 }
 
+export type SystemId = 'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'load' | 'focus'
+
+export type StatusView = { text: string; tone: Tone }
+
 export type AgentView = { id: string; type: string; description: string; status: string }
 
 export type PaneModel = {
   tab: TabId
+  /** The expandable picker that is open, by key (terminal and mobile draw choices in place). */
+  openPicker: string | null
+  /** Each system in plain words, as the HUD, the status line and /cr status say it. */
+  status: Record<SystemId, StatusView>
   activitySub: 'calls' | 'changes'
   settings: ControlRoomSettings
   profileLabel: string

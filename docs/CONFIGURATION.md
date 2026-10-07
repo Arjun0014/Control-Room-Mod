@@ -1,9 +1,9 @@
 # Configuration
 
-Everything is configured from the Control Centre (`/cr`) or with `/cr` sub-commands. Settings
+Everything is configured from the Control Room panel (`/cr`) or with `/cr` sub-commands. Settings
 apply immediately, are saved within a couple of seconds, and are used by every later session.
-Claude is told about material changes mid-session (Frontier Max, Release/QA, the subagent policy,
-the resource level). The updated policy reaches the system prompt from its next request.
+Claude is told about material changes mid-session (Frontier Max, Release check, the subagent policy,
+machine load). The updated policy reaches the system prompt from its next request.
 
 ## Where settings live
 
@@ -18,7 +18,9 @@ they ran in.
 
 ## Reference
 
-### Context Autopilot (`autopilot`)
+### Autopilot (`autopilot`)
+
+In the panel: **Context**.
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
@@ -33,9 +35,13 @@ they ran in.
 
 The effective threshold is capped at 97% of the window. It is also kept below Claude Code's own
 auto-compact point (minus 5% of the window), so the handoff runs before Claude Code would
-compact. The Autopilot tab says when this clamp applies.
+compact. The Context section says when this clamp applies.
 
 ### Frontier Max (`frontier`)
+
+In the panel: **Behavior**.
+
+In the panel: **Behavior**.
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
@@ -43,13 +49,13 @@ compact. The Autopilot tab says when this clamp applies.
 | `effort` | `max` / `xhigh` / `high` / `keep` | `max` | Sent only to models that take an effort setting. `keep` leaves the session's effort alone and applies only the policy. |
 | `subagentEffort` | on / off | off | Also raise subagents' effort (costs more) |
 
-### Release/QA (`qa`)
+### Release check (`qa`)
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
 | `enabled` | on / off | off | A verification-first policy: test before claiming, report what was and was not verified |
 
-### No-Lazy-Exit Guard (`guard`)
+### Lazy-exit guard (`guard`)
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
@@ -57,13 +63,13 @@ compact. The Autopilot tab says when this clamp applies.
 | `strictness` | `lenient` / `standard` / `strict` | `standard` | How much evidence of a premature stop is needed |
 | `maxPerTurn` | 1–5 | 2 | Continuations within one turn |
 | `maxPerSession` | 1–50 | 12 | Continuations per session |
-| `modelCheck` | on / off | on | One small classification through Claude Code's client, only when the heuristics are unsure |
+| `modelCheck` | on / off | on | *Smart check*: one small classification through Claude Code's client, only when the heuristics are unsure |
 
 The guard only judges turns you started (and Autopilot continuations). It stands down during a
 handoff, in plan mode, while background work Claude started is still running, and when Claude
 repeats the answer it was just continued from.
 
-### Model Router (`router`)
+### Model router (`router`)
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
@@ -96,7 +102,9 @@ Rules:
 - A model that Claude Code refuses is not chosen again in that session.
 - Forks inherit the parent's model, and a model Claude chose explicitly for a subagent is respected.
 
-### Subagent Control (`subagents`)
+### Subagents (`subagents`)
+
+In the panel: **Guardrails**.
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
@@ -104,7 +112,9 @@ Rules:
 | `limit` | 1–16 | 2 | For `limit`: the maximum running at once |
 | `countTeammates` | on / off | on | Count agent-team teammates against the limit |
 
-### Focus View (`focus`)
+### Focus view (`focus`)
+
+In the panel: **Activity**.
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
@@ -116,14 +126,16 @@ Rules:
 
 A compact row expands in place (`▸`). Errors are always shown.
 
-### Resource Governor (`resources`)
+### Machine load (`resources`)
+
+In the panel: **Guardrails**.
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
 | `level` | `off` / `low` / `medium` / `high` / `custom` | `off` | |
 | `cpu`, `ram` | 10–100 (%) | 70, 85 | Used by `custom` |
 | `intervalSec` | 2–60 | 5 | Sampling interval |
-| `enforcement` | `inform` / `limit` / `strict` | `limit` | `inform`: notices only. `limit`: also hold back *additional* heavy jobs over a ceiling. `strict`: hold back every new heavy job while over a ceiling. |
+| `enforcement` | `inform` / `limit` / `strict` | `limit` | *When over*. `inform` (Just tell Claude): notices only. `limit` (Hold extra heavy jobs): also hold back *additional* heavy jobs over a ceiling. `strict` (Hold all heavy jobs): hold back every new heavy job while over a ceiling. |
 
 | Level | CPU ceiling | RAM ceiling | Heavy jobs at once (over a ceiling) |
 | --- | --- | --- | --- |
@@ -138,21 +150,23 @@ compilers, benchmarks and dev servers. Pressure levels are *ok*, *elevated* (nea
 more). Claude is told when pressure starts and ends. The ceilings are machine-wide and advisory;
 see [SECURITY.md](../SECURITY.md#what-it-observes) for how they are measured.
 
-### Permission Policy (`permissions`)
+### Permissions (`permissions`)
 
-Each category is `default` (Claude Code decides), `allow`, `ask` or `deny`.
+In the panel: **Guardrails**.
+
+Each category is `default` (shown as *Default*: Claude Code decides), `allow`, `ask` or `deny`.
 
 | Category | Examples | Default | Allow offered |
 | --- | --- | --- | --- |
-| `install`: package installation | `npm install zod`, `pip install requests` | ask | yes |
-| `network`: internet and network access | `curl https://…`, `git pull` | Claude Code decides | yes |
+| `install`: package installs | `npm install zod`, `pip install requests` | ask | yes |
+| `network`: internet and network access | `curl https://…`, `git pull` | Default | yes |
 | `download`: downloading files | `wget https://…/model.bin` | ask | yes |
-| `edit`: project file changes | Edit `src/app.ts` | Claude Code decides | yes |
+| `edit`: project edits | Edit `src/app.ts` | Default | yes |
 | `editOutside`: changes outside the project | Write `~/.bashrc` | ask | no |
-| `delete`: file deletion | `rm -rf dist` | ask | yes |
-| `commit`: Git commits | `git commit -m "…"` | Claude Code decides | yes |
+| `delete`: deleting files | `rm -rf dist` | ask | yes |
+| `commit`: Git commits | `git commit -m "…"` | Default | yes |
 | `push`: Git push | `git push origin main` | ask | no |
-| `gitDestructive`: force push and destructive Git | `git push --force`, `git reset --hard` | deny | no |
+| `gitDestructive`: force push and resets | `git push --force`, `git reset --hard` | deny | no |
 | `deploy`: deploy and publish | `npm publish`, `terraform apply` | ask | no |
 | `dangerous`: dangerous system commands | `rm -rf ~`, `curl … \| sh` | deny | no |
 
@@ -163,16 +177,20 @@ Each category is `default` (Claude Code decides), `allow`, `ask` or `deny`.
 
 ### Display (`ui`)
 
+In the panel: **Setup**.
+
+In the panel: **Setup**.
+
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `hud` | `band` / `status` / `both` / `off` | `band` | `status` puts the HUD on the status line |
+| `hud` | `band` / `status` / `both` / `off` | `band` | *Status bar*: above the prompt, in Claude Code's status line, both, or hidden |
 | `toasts` | on / off | on | Brief notices on state changes |
-| `openOnStart` | on / off | off | Open the Control Centre when a session starts. In the terminal it seats from 144 columns. |
+| `openOnStart` | on / off | off | Open the Control Room panel when a session starts. In the terminal it seats from 144 columns. |
 
 ## Profiles
 
 A profile is a complete set of the systems above (everything except Display). The built-in
-profiles are described in the [README](../README.md#profiles). Custom profiles are saved from the
-Profiles tab with a name. Saving a name again replaces that profile, and custom profiles can be
+profiles are described in the [README](../README.md#profiles). Custom profiles are saved from
+Setup with a name. Saving a name again replaces that profile, and custom profiles can be
 deleted there. `profile` records which profile was applied last, and the UI adds `*` when the
-current settings differ from it.
+current settings differ from it ("Normal · edited"), and Setup lists each change.

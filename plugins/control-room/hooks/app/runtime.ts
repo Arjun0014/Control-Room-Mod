@@ -114,6 +114,7 @@ export class Runtime {
     selectedPath: null as string | null,
     expanded: new Set<string>(),
     isPaneOpen: false,
+    openPicker: null as string | null,
   }
   notes: string[] = []
   savedAt: number | null = null
@@ -1049,7 +1050,7 @@ export class Runtime {
     const host = this.host
     if (host === null) return false
     const opened = await host
-      .open({ id: PANE_ID, title: PANE_TITLE, columns: 64, rows: 26, ...(isPersonAsking ? { focus: true as const } : {}) })
+      .open({ id: PANE_ID, title: PANE_TITLE, columns: 66, rows: 28, ...(isPersonAsking ? { focus: true as const } : {}) })
       .catch(() => null)
     this.ui.isPaneOpen = opened !== null
     this.publisher.markAll()
@@ -1059,6 +1060,7 @@ export class Runtime {
   async closePane(): Promise<void> {
     await this.host?.close({ id: PANE_ID }).catch(() => undefined)
     this.ui.isPaneOpen = false
+    this.publisher.mark('hud')
   }
 
   async togglePane(): Promise<'opened' | 'closed' | 'waiting'> {
@@ -1074,6 +1076,13 @@ export class Runtime {
 
   setTab(tab: TabId): void {
     this.ui.tab = tab
+    this.ui.openPicker = null
+    this.publisher.mark('pane')
+  }
+
+  /** Opens one in-place picker (terminal, mobile), or closes it when it is the open one. */
+  togglePicker(key: string | null): void {
+    this.ui.openPicker = key === null || this.ui.openPicker === key ? null : key
     this.publisher.mark('pane')
   }
 

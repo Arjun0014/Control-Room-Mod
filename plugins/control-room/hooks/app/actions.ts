@@ -13,7 +13,9 @@ export function actionsOf(rt: Runtime): Actions {
   return {
     openPane: () => void rt.openPane(true),
     closePane: () => void rt.closePane(),
+    togglePane: () => void rt.togglePane(),
     setTab: tab => rt.setTab(tab),
+    togglePicker: key => rt.togglePicker(key),
     setActivitySub: sub => {
       rt.ui.activitySub = sub
       rt.publisher.mark('pane')

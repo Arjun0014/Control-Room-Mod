@@ -122,6 +122,7 @@ export const register: Register = on => {
     columns: Math.max(20, columns),
     surface,
     now: Date.now(),
+    openPicker: null,
   })
 
   // -------------------------------------------------------------------------
@@ -285,7 +286,10 @@ export const register: Register = on => {
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
     const answer = await next(e)
-    if (answer.deny === undefined) rt.ui.isPaneOpen = false
+    if (answer.deny === undefined) {
+      rt.ui.isPaneOpen = false
+      rt.publisher.mark('hud')
+    }
     return answer
   }).catch(($, e, next) => next(e))
 
@@ -363,8 +367,9 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const hud = await read($, hudAtom)
-    if (hud.profile.label === 'Normal') return next(e)
-    return next({ ...e, props: { ...e.props, modes: [...e.props.modes, `◆ ${hud.profile.label}`] } })
+    const label = hud.frontier.isOn && hud.profile.id !== 'frontier' ? 'Frontier Max' : hud.profile.id === 'normal' ? null : hud.profile.name
+    if (label === null) return next(e)
+    return next({ ...e, props: { ...e.props, modes: [...e.props.modes, `◆ ${label}`] } })
   })
 
 }

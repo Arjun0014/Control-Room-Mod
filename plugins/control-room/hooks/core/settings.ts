@@ -76,6 +76,21 @@ export const SYSTEM_KEYS = [
 export const HIGH_RISK_CATEGORIES: readonly PermissionCategory[] = ['editOutside', 'push', 'gitDestructive', 'deploy', 'dangerous']
 
 /** Safe defaults: the Normal profile. */
+/** Each category's name as the person reads it. */
+export const PERMISSION_LABEL: Record<PermissionCategory, string> = {
+  install: 'Package installs',
+  network: 'Network access',
+  download: 'Downloads',
+  edit: 'Project edits',
+  editOutside: 'Edits outside project',
+  delete: 'Deleting files',
+  commit: 'Git commits',
+  push: 'Git push',
+  gitDestructive: 'Force push & resets',
+  deploy: 'Deploy & publish',
+  dangerous: 'Dangerous commands',
+}
+
 export const DEFAULT_PERMISSIONS: Record<PermissionCategory, PermissionState> = {
   install: 'ask',
   network: 'default',

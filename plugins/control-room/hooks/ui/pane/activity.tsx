@@ -56,6 +56,15 @@ const CALL_STATUS: Record<string, { glyph: string; tone: Tone }> = {
 
 const elapsed = (kit: Kit, since: number): string => fmt.duration(Math.max(0, kit.now - since))
 
+/** How a milestone reads in the run's list: its glyph, tone, and a word for the states a glyph alone would not say. */
+const TASK_LOOK: Record<string, { glyph: string; tone: Tone; word?: string }> = {
+  completed: { glyph: G.ok, tone: 'good' },
+  in_progress: { glyph: G.arrow, tone: 'info' },
+  verifying: { glyph: G.verify, tone: 'info', word: 'verifying' },
+  blocked: { glyph: G.stop, tone: 'warn', word: 'blocked' },
+  pending: { glyph: G.ring, tone: 'muted' },
+}
+
 // ---------------------------------------------------------------------------
 // Run progress
 
@@ -97,16 +106,21 @@ function runCard(kit: Kit, view: ActivityView, isAnimated: boolean): RenderEleme
             })}
             <Box key="run-milestones" flexDirection="column" marginLeft={10} marginTop={1} marginBottom={1}>
               {plan.earlier > 0 ? <Text key="run-earlier" dimColor>{`${plan.earlier} earlier done`}</Text> : null}
-              {plan.tasks.map((t, i) =>
-                listItem(k, {
+              {plan.tasks.map((t, i) => {
+                const look = TASK_LOOK[t.status] ?? TASK_LOOK.pending!
+                return listItem(k, {
                   key: `milestone-${i}`,
-                  glyph: t.status === 'completed' ? G.ok : t.isCurrent || t.status === 'in_progress' ? G.arrow : G.ring,
-                  tone: t.status === 'completed' ? 'good' : t.isCurrent ? 'info' : 'muted',
+                  glyph: t.isCurrent && t.status === 'in_progress' ? G.arrow : look.glyph,
+                  tone: t.isCurrent && t.status === 'in_progress' ? 'info' : look.tone,
                   text: t.subject,
-                  isDim: t.status === 'completed' || (!t.isCurrent && t.status !== 'in_progress'),
+                  right: look.word,
+                  rightTone: t.status === 'blocked' ? 'warn' : 'muted',
+                  // What blocks it, or how it is being verified.
+                  detail: t.status === 'blocked' || t.status === 'verifying' ? t.detail : null,
+                  isDim: t.status === 'completed' || (!t.isCurrent && t.status === 'pending'),
                   isBold: t.isCurrent,
-                }),
-              )}
+                })
+              })}
               {plan.later > 0 ? <Text key="run-later" dimColor>{`${plan.later} more to come`}</Text> : null}
             </Box>
           </Box>

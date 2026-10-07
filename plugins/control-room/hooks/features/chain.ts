@@ -9,6 +9,7 @@
  */
 
 import { LIMITS } from '../constants'
+import type { HandoffRecord } from './handoff'
 import { type Plan, emptyPlan } from './plan'
 import type { RunQuest } from './quest'
 
@@ -62,6 +63,8 @@ export type Run = {
   objective?: string | null
   /** Quest log: the run's XP and the milestones already paid for. Absent until it earns any. */
   quest?: RunQuest
+  /** The latest handoff: its health when the notes were checked, and the fresh context's continuity. Absent before 1.2.0. */
+  lastHandoff?: HandoffRecord | null
 }
 
 export function newSession(id: string, index: number, start: SessionStart, now: number): SessionEntry {

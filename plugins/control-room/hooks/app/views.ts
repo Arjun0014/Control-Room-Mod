@@ -404,6 +404,23 @@ export function paneOf(rt: Runtime): PaneModel {
     planSource: rt.planSource,
     nativeOutputStyle: rt.nativeOutputStyle,
     cache: rt.cache.view(rt.clock()),
+    handoff: handoffOf(rt),
+  }
+}
+
+/** The run's latest handoff, as Context shows it. */
+function handoffOf(rt: Runtime): PaneModel['handoff'] {
+  const h = rt.run?.lastHandoff
+  if (h === undefined || h === null || rt.run === null) return null
+  const index = Chain.currentSession(rt.run)?.index ?? 1
+  return {
+    at: h.at,
+    fromSession: h.fromSession,
+    toSession: h.toSession,
+    via: h.via,
+    health: h.health,
+    continuity: h.continuity,
+    isChecking: h.toSession !== null && h.continuity === null && h.toSession === index,
   }
 }
 
@@ -482,7 +499,7 @@ export function missionOf(rt: Runtime): MissionView {
     plan = {
       done: p.done,
       total: p.total,
-      tasks: [...shownDone, ...shownOpen].map(t => ({ subject: t.subject, status: t.status, isCurrent: t === p.current })),
+      tasks: [...shownDone, ...shownOpen].map(t => ({ subject: t.subject, status: t.status, isCurrent: t === p.current, detail: t.detail })),
       earlier: done.length - shownDone.length,
       later: open.length - shownOpen.length,
     }

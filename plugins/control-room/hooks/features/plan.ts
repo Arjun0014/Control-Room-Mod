@@ -12,7 +12,13 @@
 
 import { clean } from '../core/text'
 
-export type PlanStatus = 'pending' | 'in_progress' | 'completed'
+/**
+ * TodoWrite and the Task tools know pending, in progress and completed.
+ * Control Room's milestones tool adds two more a run needs to be honest:
+ * verifying (done, being checked) and blocked (cannot go on without
+ * something only the person or the world can give).
+ */
+export type PlanStatus = 'pending' | 'in_progress' | 'verifying' | 'blocked' | 'completed'
 
 export type PlanTask = {
   /** Normalised subject: how a rewritten list is matched to what came before. */
@@ -26,6 +32,8 @@ export type PlanTask = {
   /** The session (1-based, in the run) that last wrote the task. */
   session: number
   doneAt: number | null
+  /** How it was (or is being) verified, or what blocks it, in Claude's words; null when not given. */
+  detail: string | null
 }
 
 export type Plan = { tasks: PlanTask[]; session: number; updatedAt: number | null }
@@ -40,7 +48,11 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
-const statusOf = (v: unknown): PlanStatus | null => (v === 'pending' || v === 'in_progress' || v === 'completed' ? v : null)
+const statusOf = (v: unknown): PlanStatus | null =>
+  v === 'pending' || v === 'in_progress' || v === 'verifying' || v === 'blocked' || v === 'completed' ? v : null
+
+/** Work under way: a milestone in progress, or one being verified. */
+export const isActive = (status: PlanStatus): boolean => status === 'in_progress' || status === 'verifying'
 
 /** Earlier sessions' open work is dropped once a new session plans for itself. */
 function forSession(plan: Plan, session: number): PlanTask[] {
@@ -85,6 +97,7 @@ export function fromTodoWrite(plan: Plan, todos: unknown, session: number, now: 
       status,
       session,
       doneAt: status === 'completed' ? (prev?.doneAt ?? now) : null,
+      detail: clean(str(item.detail), 160) || (status === 'completed' && prev?.status === 'completed' ? prev.detail : null),
     })
   }
   const kept = before.filter(t => t.status === 'completed' && !seen.has(t.key))
@@ -98,7 +111,7 @@ export function fromTaskCreate(plan: Plan, input: Record<string, unknown>, resul
   const subject = clean(str(task?.subject) || str(input.subject), 120)
   if (id === '' || subject === '') return plan
   const tasks = forSession(plan, session).filter(t => t.id !== id)
-  tasks.push({ key: keyOf(subject), id, subject, activeForm: clean(str(input.activeForm), 80) || null, status: 'pending', session, doneAt: null })
+  tasks.push({ key: keyOf(subject), id, subject, activeForm: clean(str(input.activeForm), 80) || null, status: 'pending', session, doneAt: null, detail: null })
   return { tasks: capped(tasks), session: Math.max(plan.session, session), updatedAt: now }
 }
 
@@ -153,7 +166,7 @@ export function fromTaskList(plan: Plan, result: unknown, session: number, now: 
   }
   for (const [id, l] of listed) {
     if (l.subject === '') continue
-    tasks.push({ key: keyOf(l.subject), id, subject: l.subject, activeForm: null, status: l.status, session, doneAt: l.status === 'completed' ? now : null })
+    tasks.push({ key: keyOf(l.subject), id, subject: l.subject, activeForm: null, status: l.status, session, doneAt: l.status === 'completed' ? now : null, detail: null })
   }
   return { tasks: capped(tasks), session: Math.max(plan.session, session), updatedAt: now }
 }
@@ -184,24 +197,32 @@ export const isPlanTool = (tool: string): boolean => tool === 'TodoWrite' || too
  */
 export function fromMilestones(plan: Plan, input: Record<string, unknown>, session: number, now: number): Plan {
   if (!Array.isArray(input.milestones)) return plan
-  const todos = input.milestones.filter(isRecord).map(m => ({ content: str(m.title), status: m.status, activeForm: str(m.doing) }))
+  const todos = input.milestones.filter(isRecord).map(m => ({
+    content: str(m.title),
+    status: m.status,
+    activeForm: str(m.doing),
+    // Evidence for a milestone verified or being verified; the blocker for one that is blocked.
+    detail: m.status === 'blocked' ? str(m.blocker) : str(m.evidence),
+  }))
   return fromTodoWrite(plan, todos, session, now)
 }
 
 export type Progress = {
   done: number
   total: number
-  /** The task under way: the latest one marked in progress. */
+  /** The task under way: the latest one marked in progress or being verified. */
   current: PlanTask | null
   /** The first open task after it. */
   next: PlanTask | null
+  /** Milestones that cannot go on, with what blocks them. */
+  blocked: PlanTask[]
 }
 
 export function progressOf(plan: Plan): Progress {
   const done = plan.tasks.filter(t => t.status === 'completed').length
-  const current = [...plan.tasks].reverse().find(t => t.status === 'in_progress') ?? null
+  const current = [...plan.tasks].reverse().find(t => isActive(t.status)) ?? null
   const next = plan.tasks.find(t => t.status === 'pending') ?? null
-  return { done, total: plan.tasks.length, current, next }
+  return { done, total: plan.tasks.length, current, next, blocked: plan.tasks.filter(t => t.status === 'blocked') }
 }
 
 /**
@@ -238,6 +259,7 @@ export function planOf(raw: unknown): Plan {
       status,
       session: typeof t.session === 'number' ? t.session : 1,
       doneAt: typeof t.doneAt === 'number' ? t.doneAt : null,
+      detail: typeof t.detail === 'string' ? t.detail : null,
     })
   }
   return { tasks: tasks.slice(-PLAN_MAX), session: typeof raw.session === 'number' ? raw.session : 0, updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : null }

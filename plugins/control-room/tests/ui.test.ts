@@ -79,6 +79,33 @@ async function boot($: Engine, w: ReturnType<typeof world>) {
 
 const saved = (w: ReturnType<typeof world>) => w.store['settings.v1'] as Settings
 
+/** The run's last handoff as stored: what it left behind, and what session 2 picked up. */
+const LAST_HANDOFF = {
+  at: 950_000,
+  fromSession: 1,
+  toSession: 2,
+  via: 'clear',
+  health: [
+    { id: 'runState', label: 'Run state saved', state: 'ok', detail: 'Milestones sent again' },
+    { id: 'milestone', label: 'Milestone under way captured', state: 'ok', detail: 'Rewrite the hot loop' },
+    { id: 'notes', label: 'Handoff notes written', state: 'ok', detail: 'NEXT_SESSION_PROMPT.md' },
+    { id: 'docs', label: 'Project docs updated', state: 'ok', detail: 'README.md' },
+    { id: 'validation', label: 'Validation recorded', state: 'ok', detail: 'Tests passing' },
+    { id: 'claudeMd', label: 'CLAUDE.md', state: 'none', detail: 'No update needed' },
+  ],
+  currentKey: 'rewrite the hot loop',
+  currentSubject: 'Rewrite the hot loop',
+  done: 1,
+  total: 3,
+  continuity: [
+    { id: 'notesRead', label: 'Handoff notes read', state: 'ok', detail: 'NEXT_SESSION_PROMPT.md' },
+    { id: 'runState', label: 'Run state restored', state: 'ok', detail: '1 of 3 milestones' },
+    { id: 'milestone', label: 'Milestone picked up', state: 'ok', detail: 'Rewrite the hot loop' },
+    { id: 'docsRead', label: 'Project docs read', state: 'missing', detail: 'None opened' },
+    { id: 'resumed', label: 'Work resumed', state: 'ok', detail: '2 edits' },
+  ],
+}
+
 describe('ui', () => {
   test('a coarse meter never hides a reading past its threshold under the tick', () => {
     // 88k of a 1M window, handing off at 60k, in the status bar's ten cells.
@@ -620,6 +647,7 @@ describe('ui', () => {
         { id: 'earlier', index: 1, startedAt: 900_000, endedAt: 950_000, start: 'startup', end: 'handoff', peakTokens: 720_000, lastTokens: 718_000, window: 1_000_000, costUsd: 20, turns: 9, model: null, endNote: 'handoff at 700k tokens', transitions: [] },
         { id: 'session-1', index: 2, startedAt: 950_000, endedAt: null, start: 'handoff', end: null, peakTokens: 300_000, lastTokens: 300_000, window: 1_000_000, costUsd: 4, turns: 2, model: null, endNote: null, transitions: [] },
       ],
+      lastHandoff: LAST_HANDOFF,
     }
     const w = world(on, { tokens: 300_000, settings: { autopilot: { enabled: true, thresholdMode: 'percent', thresholdPercent: 70 } } })
     w.store['run.v1.r1'] = run
@@ -632,6 +660,10 @@ describe('ui', () => {
       const text = textOf(await ui.drawn())
       expect(text, surface).toContain('Peak context per session · hands off at 70%')
       expect(text, surface).toContain('RUN 7')
+      // The last handoff: what it left (5 of 5), and what the fresh context picked up (4 of 5, the docs not read).
+      for (const expected of ['LAST HANDOFF', 'Session 1 → 2', 'Left for the fresh context', '5 of 5', 'Picked up in session 2', '4 of 5', 'Project docs read', 'None opened', 'never from what Claude said']) {
+        expect(text, `${surface}: ${expected}`).toContain(expected)
+      }
       if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
       await ui.unmount()
     }
@@ -772,6 +804,7 @@ describe('ui', () => {
         { id: 'earlier', index: 1, startedAt: 900_000, endedAt: 950_000, start: 'startup', end: 'handoff', peakTokens: 720_000, lastTokens: 718_000, window: 1_000_000, costUsd: 20, turns: 9, model: null, endNote: null, transitions: [] },
         { id: 'session-1', index: 2, startedAt: 950_000, endedAt: null, start: 'handoff', end: null, peakTokens: 300_000, lastTokens: 300_000, window: 1_000_000, costUsd: 4, turns: 2, model: null, endNote: null, transitions: [] },
       ],
+      lastHandoff: LAST_HANDOFF,
     }
     w.store['runs.index.v1'] = ['r1']
     w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }

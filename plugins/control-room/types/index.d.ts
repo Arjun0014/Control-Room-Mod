@@ -279,6 +279,24 @@ export type PaneModel = {
   /** The person's own Claude Code output style when one is chosen; it takes precedence over the answer style. */
   nativeOutputStyle: string | null
   cache: CacheView
+  /** The run's latest handoff: what it left (health) and what the fresh context picked up (continuity); null before any. */
+  handoff: HandoffView | null
+}
+
+/** One item of Handoff Health or Continuity: `none` is neither good nor missing (nothing to do, or not needed). */
+export type HandoffCheckView = { id: string; label: string; state: 'ok' | 'missing' | 'none'; detail: string }
+
+export type HandoffView = {
+  at: number
+  fromSession: number
+  /** The session that picked the work up; null for a handoff that compacted, or before the clear. */
+  toSession: number | null
+  via: 'clear' | 'compact' | 'manual'
+  health: HandoffCheckView[]
+  /** Null until the fresh context's first turn ends. */
+  continuity: HandoffCheckView[] | null
+  /** True while the fresh context's first turn is still under way. */
+  isChecking: boolean
 }
 
 export type ResourcesView = {
@@ -361,8 +379,8 @@ export type MissionView = {
   plan: {
     done: number
     total: number
-    /** A window around the work under way; `earlier` finished and `later` open ones are left out. */
-    tasks: { subject: string; status: string; isCurrent: boolean }[]
+    /** A window around the work under way; `earlier` finished and `later` open ones are left out. `detail`: evidence, or what blocks it. */
+    tasks: { subject: string; status: string; isCurrent: boolean; detail: string | null }[]
     earlier: number
     later: number
   } | null

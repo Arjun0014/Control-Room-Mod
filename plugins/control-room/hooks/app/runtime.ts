@@ -34,9 +34,11 @@ import { versionAtLeast } from '../core/version'
 import { ActivityTracker } from '../features/activity'
 import * as Autopilot from '../features/autopilot'
 import * as Chain from '../features/chain'
+import * as Handoff from '../features/handoff'
 import * as Plan from '../features/plan'
 import * as Quest from '../features/quest'
-import { VALIDATION_LABEL } from '../features/validation'
+import { VALIDATION_LABEL, summarize } from '../features/validation'
+import { groupOf } from '../features/digest'
 import { answerStyleLabel } from '../core/answers'
 import { type GuardAssessment, assessExit, isRepeat } from '../features/guard'
 import * as Guard from '../features/guard'
@@ -138,6 +140,11 @@ export class Runtime {
 
   /** Milestones finished when the turn began, so the turn's summary can count its own. */
   turnStartDone = 0
+
+  /** The handoff turn, for Handoff Health: the first activity turn it counts from, and whether the milestones were sent again in it. */
+  private handoffTurn = { fromTurn: -1, isPlanUpdated: false }
+  /** Files the main conversation read in this context: the continuity check after a handoff looks for the notes and the docs. */
+  private reads: string[] = []
 
   /** The prompt cache: telemetry, the miss doctor, Keep warm and stable policies. */
   readonly cache: CacheGuardian
@@ -391,6 +398,7 @@ export class Runtime {
     const wasDone = new Set(this.plan.tasks.filter(t => t.status === 'completed').map(t => t.key))
     this.run = { ...this.run, plan }
     const after = this.progress
+    if (this.turn.isRunning && (this.turn.kind === 'handoff' || this.turn.kind === 'retry')) this.handoffTurn.isPlanUpdated = true
     for (const t of plan.tasks) {
       if (t.status === 'completed' && !wasDone.has(t.key)) this.questEvent('milestone', `Milestone: ${t.subject}`, t.key)
     }
@@ -474,7 +482,7 @@ export class Runtime {
     const now = await host.now()
     const existing = await findRunBySession(host, this.sessionId)
     if (existing !== null) {
-      this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan) }
+      this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan), lastHandoff: Handoff.handoffRecordOf(existing.lastHandoff) }
       // Milestones done before this runtime attached are no turn's doing.
       this.turnStartDone = this.progress.done
       return
@@ -543,6 +551,12 @@ export class Runtime {
     this.sessionId = input.sessionId
     this.usage = { tokens: undefined, window: this.usage.window, pct: undefined, costUsd: 0 }
     this.cache.resetForContext()
+    this.reads = []
+    if (wasOurs && this.run !== null) {
+      const h = this.run.lastHandoff
+      const index = Chain.currentSession(this.run)?.index ?? 1
+      if (h !== undefined && h !== null && h.toSession === null && h.fromSession === index - 1) this.run = { ...this.run, lastHandoff: { ...h, toSession: index } }
+    }
     this.activity.reset()
     this.guard = { turnBlocks: 0, sessionBlocks: 0, lastBlockedAnswer: '', last: null }
     this.compose = { ...this.compose, isReached: false, deliveredFallback: false }
@@ -561,7 +575,7 @@ export class Runtime {
         sessionNumber,
         handoffPath: this.handoffPath(),
         policies,
-        milestones: this.plan.tasks.map(t => ({ subject: t.subject, status: t.status })).slice(-30),
+        milestones: this.plan.tasks.map(t => ({ subject: t.subject, status: t.status, detail: t.detail })).slice(-30),
       }),
     ]
   }
@@ -709,6 +723,7 @@ export class Runtime {
                 handoffFile: this.settings.autopilot.handoffFile,
                 runNumber: this.run?.number ?? null,
                 sessionNumber: this.run === null ? 1 : (Chain.currentSession(this.run)?.index ?? 1),
+                planTool: this.planSource === 'milestones' ? this.milestonesTool : this.planSource === 'tasks' ? 'your task list (TodoWrite or the Task tools)' : null,
               })
         this.expecting = effect.kind === 'submitRetry' ? 'retry' : 'handoff'
         host.after(250, () => void this.submitOwn(text, effect.kind === 'submitRetry' ? 'retry' : 'handoff'))
@@ -717,6 +732,7 @@ export class Runtime {
       case 'verifyHandoff': {
         const isOk = await this.verifyHandoff()
         if (isOk) this.questEvent('handoff', 'Clean handoff: notes verified')
+        this.recordHandoffHealth(isOk)
         this.stepAutopilot({ kind: 'handoffVerified', isOk, now: await host.now() })
         return
       }
@@ -755,6 +771,81 @@ export class Runtime {
       this.expecting = null
       this.stepAutopilot({ kind: 'submitFailed', error: error instanceof Error ? error.message : String(error) })
     }
+  }
+
+  /**
+   * Handoff Health, read once the notes are checked: what the handoff turn
+   * left in each of the four places (the milestones, the project's docs,
+   * CLAUDE.md, the notes), and whether a check ran in this context.
+   */
+  private recordHandoffHealth(isNotesWritten: boolean): void {
+    if (this.run === null) return
+    const p = this.progress
+    const ctx = { root: this.root, handoffFile: this.settings.autopilot.handoffFile }
+    const from = this.handoffTurn.fromTurn
+    const changed = from < 0 ? [] : this.activity.changeList().filter(f => f.lastTurn >= from)
+    const isClaudeMd = (path: string) => /(^|[\\/])claude\.md$/i.test(path)
+    const word: Record<string, string> = { passed: 'passing', failed: 'failing', running: 'running', blocked: 'blocked', background: 'in the background', stopped: 'stopped' }
+    const checks = summarize(this.activity.validationRuns(), Date.now()).map(v => ({ label: v.label, status: word[v.status] ?? v.status }))
+    const continuation = this.settings.autopilot.continuation
+    const record: Handoff.HandoffRecord = {
+      at: Date.now(),
+      fromSession: Chain.currentSession(this.run)?.index ?? 1,
+      toSession: null,
+      via: continuation === 'compact' ? 'compact' : continuation === 'manual' ? 'manual' : 'clear',
+      health: Handoff.healthOf({
+        hasPlan: p.total > 0,
+        isPlanUpdated: this.handoffTurn.isPlanUpdated,
+        current: p.current === null ? null : { key: p.current.key, subject: p.current.subject },
+        isPlanSettled: p.total > 0 && this.plan.tasks.every(t => t.status === 'completed' || t.status === 'blocked'),
+        isNotesWritten,
+        handoffFile: this.settings.autopilot.handoffFile,
+        docsEdited: changed.filter(f => groupOf(f.path, ctx) === 'docs' && !isClaudeMd(f.path)).map(f => f.path),
+        checks,
+        isClaudeMdEdited: changed.some(f => isClaudeMd(f.path)),
+      }),
+      currentKey: p.current?.key ?? null,
+      currentSubject: p.current?.subject ?? null,
+      done: p.done,
+      total: p.total,
+      continuity: null,
+    }
+    this.run = { ...this.run, lastHandoff: record }
+    this.persistRun()
+    this.publisher.mark('pane')
+  }
+
+  /**
+   * Continuity, read when the first turn of the context after a handoff
+   * ends: the notes read, the run state restored, the milestone picked up
+   * again, the project's docs read, the work resumed. One toast says how it went.
+   */
+  private checkContinuity(): void {
+    const run = this.run
+    const h = run?.lastHandoff
+    if (run === null || h === undefined || h === null || h.toSession === null || h.continuity !== null) return
+    const index = Chain.currentSession(run)?.index ?? 1
+    if (h.toSession !== index) return
+    const p = this.progress
+    const ctx = { root: this.root, handoffFile: this.settings.autopilot.handoffFile }
+    const continuity = Handoff.continuityOf(
+      {
+        handoffFile: this.settings.autopilot.handoffFile,
+        reads: this.reads,
+        isDoc: path => groupOf(path, ctx) === 'docs',
+        isPlanUpdated: this.plan.session >= index && this.plan.updatedAt !== null,
+        tasks: this.plan.tasks.map(t => ({ key: t.key, subject: t.subject, status: t.status })),
+        done: p.done,
+        current: p.current === null ? null : { key: p.current.key, subject: p.current.subject },
+        edits: this.activity.items.filter(i => i.kind === 'edit' && i.status === 'ok' && i.agentId === null).length,
+        checks: this.activity.validationRuns().length,
+      },
+      h,
+    )
+    this.run = { ...run, lastHandoff: { ...h, continuity } }
+    this.persistRun()
+    this.publisher.mark('pane')
+    if (this.settings.ui.toasts) this.host?.toast(Handoff.continuityToast(continuity), 6000)
   }
 
   private async verifyHandoff(): Promise<boolean> {
@@ -924,6 +1015,7 @@ export class Runtime {
     this.guard.lastBlockedAnswer = ''
     this.activity.turnStarted(Date.now())
     this.turnStartDone = this.progress.done
+    if (kind === 'handoff') this.handoffTurn = { fromTurn: this.activity.turn.index, isPlanUpdated: false }
     this.questGreen.clear()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner')
   }
@@ -1013,6 +1105,7 @@ export class Runtime {
       this.stepAutopilot({ kind: 'context', tokens: this.usage.tokens, window: this.usage.window, isInTurn: false, now })
     }
     this.cache.turnEnded(this.clock())
+    this.checkContinuity()
     this.persistRun()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain')
   }
@@ -1212,6 +1305,7 @@ export class Runtime {
       this.setPlan(Plan.applyTool(this.plan, { tool, input, result: result?.result, session, now }))
     }
     if (agentId === undefined) this.questForCheck(id)
+    if (tool === 'Read' && status === 'ok' && agentId === undefined && typeof input.file_path === 'string') this.reads = [...this.reads, input.file_path].slice(-200)
     if (tool === 'TaskStop' && status === 'ok') {
       const taskId = typeof input.task_id === 'string' ? input.task_id : typeof input.shell_id === 'string' ? input.shell_id : null
       if (taskId !== null) this.activity.backgroundEnded(taskId)

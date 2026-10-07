@@ -72,8 +72,9 @@ export const MILESTONES_TOOL = {
   name: 'milestones',
   description: [
     'Record the milestones of the work in progress, so the person sees how far the run is (Control Room shows done of total).',
-    'Send the whole list each time: when multi-step work starts, and whenever a milestone starts or finishes. Keep it to the real steps of the objective, usually 3 to 10; a quick one-step request needs none.',
+    'Send the whole list each time: when multi-step work starts, and whenever a milestone starts, is being verified, is blocked or finishes. Keep it to the real steps of the objective, usually 3 to 10; a quick one-step request needs none.',
     'Mark exactly one milestone in_progress while you work on it, with `doing` in the present tense ("Running regression tests").',
+    'Use verifying for work that is done but still being checked, completed only once it is verified (give `evidence`: what showed it works), and blocked for a milestone that cannot go on without something you cannot do yourself (give `blocker`).',
   ].join(' '),
   inputSchema: {
     type: 'object',
@@ -89,8 +90,10 @@ export const MILESTONES_TOOL = {
           type: 'object',
           properties: {
             title: { type: 'string', description: 'The milestone, in a few words ("Fix the renderer").' },
-            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
-            doing: { type: 'string', description: 'While in progress, what you are doing, in the present tense.' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'verifying', 'blocked', 'completed'] },
+            doing: { type: 'string', description: 'While in progress or verifying, what you are doing, in the present tense.' },
+            evidence: { type: 'string', description: 'For verifying or completed: what showed it works, in a few words ("42 of 42 tests pass").' },
+            blocker: { type: 'string', description: 'For blocked: what it is waiting for, in a few words ("needs the API key").' },
           },
           required: ['title', 'status'],
         },
@@ -103,7 +106,7 @@ export const MILESTONES_TOOL = {
 export function milestonesPolicy(tool: string): string {
   return [
     '## Run progress',
-    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin (the whole list, 3 to 10 real steps, and the objective in a few words), and send the list again each time a milestone starts or finishes. Give the one in progress a short present-tense \`doing\` line. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
+    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin (the whole list, 3 to 10 real steps, and the objective in a few words), and send the list again each time a milestone starts, moves to verifying, is blocked or finishes. Give the one in progress a short present-tense \`doing\` line. Mark a milestone completed only once it is verified, with its \`evidence\`; mark one blocked, with its \`blocker\`, when it needs something you cannot do yourself. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
   ].join('\n')
 }
 
@@ -224,25 +227,42 @@ export function pendingPromptReminder(): string {
   return 'Control Room · Context Autopilot is in HANDOFF PENDING: handle this request, keep the work in a clean, consistent state, and do not start other large tasks. A handoff and fresh-context continuation will follow.'
 }
 
+/**
+ * The handoff turn's prompt. The work is left in four places, each for what
+ * it is for: the run's milestones (Control Room's run state, which the fresh
+ * context is handed), the project's own documentation, CLAUDE.md (durable
+ * instructions only) and the handoff notes. Their contents are Claude's to
+ * decide; the prompt only says where each kind of knowledge belongs.
+ */
 export function handoffPrompt(input: {
   tokens: number | undefined
   window: number | undefined
   handoffFile: string
   runNumber: number | null
   sessionNumber: number
+  /** Where the run's milestones are kept: Control Room's milestones tool by name, Claude Code's task list, or null for none. */
+  planTool?: string | null
 }): string {
   const used = input.tokens === undefined ? '' : ` (${fmt.tokens(input.tokens)}${input.window ? ` of ${fmt.tokens(input.window)}` : ''} tokens used)`
   const where = input.runNumber === null ? '' : ` — run #${input.runNumber}, session ${input.sessionNumber}`
+  const tool = input.planTool ?? null
+  const runState =
+    tool === null
+      ? []
+      : [
+          `   - The run's milestones, first: the canonical record of progress, which Control Room hands to the fresh context. Send the whole list with ${tool.startsWith('mcp__') ? `\`${tool}\`` : tool}: each milestone verified as completed, the one under way in_progress${tool.startsWith('mcp__') ? ' (or verifying, with its evidence), anything blocked with its blocker' : ''}, the rest pending.`,
+        ]
   return [
     `Context Autopilot — final handoff for this context window${used}${where}.`,
     '',
-    'This context will be cleared after this turn and a fresh session will continue the work, with no memory of this conversation beyond what you leave in the project. Before that:',
+    'This context will be cleared after this turn and a fresh session will continue the work, with no memory of this conversation beyond what you leave behind. Before that:',
     '',
-    '1. Verify the current state of the work: what is done, what is in progress, what is broken or unverified.',
-    "2. Update the project's existing documentation and handoff/plan files where they genuinely need it, so they are accurate.",
-    '3. Record important unfinished work, open decisions and the current state where appropriate.',
-    '4. Run the sensible minimum validation for what changed recently (targeted, within the active resource policy).',
-    `5. Create or update \`${input.handoffFile}\` at the project root. Write whatever a fresh session needs to continue effectively — you decide its contents from the project and its existing documentation.`,
+    '1. Verify the current state of the work: what is done, what is in progress, what is broken or unverified. Run the sensible minimum validation for what changed recently (targeted, within the active resource policy), so what you leave states verified facts.',
+    '2. Leave what the fresh session needs in these places, each for what it is for:',
+    ...runState,
+    "   - The project's own documentation (README, docs, changelog, plans it already keeps): update it where the work changed what it says, with important unfinished work and open decisions where the project records them.",
+    '   - CLAUDE.md: only for durable instructions or invariants every future session must follow. Never use it as a progress log.',
+    `   - \`${input.handoffFile}\` at the project root: the prompt you would want to receive to continue this work effectively. You decide its contents from the project and its documentation.`,
     '',
     'Do not start new feature work in this turn. When the handoff is written, end your turn with a short summary.',
   ].join('\n')
@@ -258,7 +278,7 @@ export function continuationContext(input: {
   handoffPath: string
   policies: string[]
   /** The run's milestones as the previous context left its task list. */
-  milestones?: readonly { subject: string; status: string }[]
+  milestones?: readonly { subject: string; status: string; detail?: string | null }[]
 }): string {
   const run = input.runNumber === null ? '' : ` (Control Room run #${input.runNumber}, session ${input.sessionNumber})`
   const lines = [
@@ -270,7 +290,9 @@ export function continuationContext(input: {
   const open = milestones.filter(m => m.status !== 'completed')
   if (open.length > 0) {
     const done = milestones.length - open.length
-    const list = open.map(m => `${m.status === 'in_progress' ? '[in progress] ' : ''}${m.subject}`).join('; ')
+    const tag = (m: { status: string; detail?: string | null }) =>
+      m.status === 'in_progress' ? '[in progress] ' : m.status === 'verifying' ? '[verifying] ' : m.status === 'blocked' ? `[blocked${m.detail ? `: ${m.detail}` : ''}] ` : ''
+    const list = open.map(m => `${tag(m)}${m.subject}`).join('; ')
     lines.push(
       `The run's task list (${done} of ${milestones.length} milestones done) left these open: ${list}. Recreate your task list (or your milestones) from them, checked against the handoff notes, so the run's progress carries on.`,
     )

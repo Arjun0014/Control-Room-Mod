@@ -78,6 +78,8 @@ export const G = {
   stop: '⊘',
   /** Under way: a call running, a milestone in progress. */
   run: '▸',
+  /** A milestone done and being verified. */
+  verify: '◎',
   warn: '▲',
   minus: '−',
   plus: '+',

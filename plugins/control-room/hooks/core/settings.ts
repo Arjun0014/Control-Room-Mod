@@ -73,7 +73,7 @@ export const SYSTEM_KEYS = [
 ] as const satisfies readonly (keyof SystemSettings)[]
 
 /** Categories whose loosest state is Ask: Control Room never auto-allows them. */
-export const HIGH_RISK_CATEGORIES: readonly PermissionCategory[] = ['editOutside', 'push', 'gitDestructive', 'deploy', 'dangerous']
+export const HIGH_RISK_CATEGORIES: readonly PermissionCategory[] = ['editOutside', 'delete', 'push', 'gitDestructive', 'deploy', 'dangerous']
 
 /** Safe defaults: the Normal profile. */
 /** Each category's name as the person reads it. */

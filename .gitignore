@@ -5,3 +5,5 @@ plugins/control-room/tsconfig.json
 *.log
 .DS_Store
 Thumbs.db
+# Local development handoff notes (Context Autopilot writes them in whatever project it runs in).
+/NEXT_SESSION_PROMPT.md

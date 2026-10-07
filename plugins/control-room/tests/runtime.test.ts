@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { ResourcesView } from '../types'
 import { Runtime } from '../hooks/app/runtime'
 import * as Views from '../hooks/app/views'
-import { defaultSettings } from '../hooks/core/settings'
+import { defaultSettings, systemsOf } from '../hooks/core/settings'
 import type { Settings } from '../hooks/core/settings'
 import { fakeHost, flush } from './fixtures/fake-host'
 
@@ -198,6 +198,21 @@ describe('runtime', () => {
     expect(rt.settings.frontier.effort).toBe('max')
     expect(rt.settings.permissions.dangerous).toBe('ask')
     expect(rt.notes.join(' ')).toContain('reset to safe defaults')
+  })
+
+  test('a saved Allow for deleting files reads as Ask, is named once, and is saved tightened', async () => {
+    const f = fakeHost()
+    const custom = { id: 'fast', name: 'Fast', createdAt: 1, systems: { ...systemsOf(defaultSettings()), permissions: { ...defaultSettings().permissions, delete: 'allow' } } }
+    f.kept.store['settings.v1'] = { ...defaultSettings(), permissions: { ...defaultSettings().permissions, delete: 'allow' }, customProfiles: [custom] }
+    const rt = new Runtime()
+    rt.bind(f.host)
+    await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    expect(rt.settings.permissions.delete).toBe('ask')
+    expect(rt.settings.customProfiles[0]?.systems.permissions.delete).toBe('ask')
+    expect(rt.notes.join(' ')).toContain('Deleting files no longer offers Allow')
+    expect(rt.notes.join(' ')).not.toContain('reset to safe defaults')
+    await f.advance(2000)
+    expect((f.kept.store['settings.v1'] as Settings).permissions.delete).toBe('ask')
   })
 
   test('views are published for every render site', async () => {

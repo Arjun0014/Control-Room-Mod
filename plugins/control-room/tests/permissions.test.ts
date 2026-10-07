@@ -146,10 +146,14 @@ describe('decisions', () => {
     expect(adjustVerdict({ engine: { decision: 'ask' }, decision: allowInstall, permissionMode: 'plan' }).decision).toBe('ask')
     const allowPush = { state: 'allow' as const, category: 'push' as const, evidence: 'git push' }
     expect(adjustVerdict({ engine: { decision: 'ask' }, decision: allowPush, permissionMode: 'default' }).decision).toBe('ask')
+    // Deleting files is high-risk: a saved Allow never answers the engine's prompt for it.
+    const allowDelete = { state: 'allow' as const, category: 'delete' as const, evidence: 'rm -rf dist' }
+    expect(adjustVerdict({ engine: { decision: 'ask' }, decision: allowDelete, permissionMode: 'default' }).decision).toBe('ask')
+    expect(adjustVerdict({ engine: { decision: 'ask' }, decision: allowDelete, permissionMode: 'bypassPermissions' }).decision).toBe('ask')
   })
 
   test('the UI never offers Allow for high-risk categories', () => {
-    for (const c of ['push', 'gitDestructive', 'deploy', 'dangerous', 'editOutside'] as const) expect(statesFor(c)).not.toContain('allow')
+    for (const c of ['push', 'gitDestructive', 'deploy', 'dangerous', 'editOutside', 'delete'] as const) expect(statesFor(c)).not.toContain('allow')
     expect(statesFor('install')).toContain('allow')
   })
 })

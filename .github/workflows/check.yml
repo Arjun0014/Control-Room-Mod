@@ -1,0 +1,74 @@
+# Everything that runs unattended: the type-check against the engine's own declarations, strict
+# validation of the plugin and the marketplace, and the test suite (pure logic, the Runtime over an
+# in-memory host, and the engine-driven UI and hook tests). No step signs in or calls a model.
+#
+# What CI does not cover: the live CPU and memory sampler on a real machine (only Windows has been
+# verified live), the Autopilot handoff against a real model, and how Desktop draws the panel.
+
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.os }} · Claude Code ${{ matrix.engine }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        engine: [latest]
+        include:
+          # The oldest engine Control Room supports (MIN_ENGINE in hooks/constants.ts).
+          - os: ubuntu-latest
+            engine: 2.1.289
+    defaults:
+      run:
+        shell: bash
+    env:
+      # A throwaway configuration: nothing from a real account is used or needed.
+      CLAUDE_CONFIG_DIR: ${{ github.workspace }}/../claude-config
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the workspace (TypeScript)
+        run: npm ci
+
+      - name: Install Claude Code ${{ matrix.engine }}
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${{ matrix.engine }}"
+          claude --version
+
+      - name: Lay the engine's type declarations
+        # Loading the mod once writes .claude-plugin/types/ and tsconfig.json beside it. The headless
+        # session then stops at "Not logged in" before any model call, which is expected here.
+        run: |
+          claude --plugin-dir plugins/control-room -p "ok" < /dev/null || true
+          test -f plugins/control-room/.claude-plugin/types/claude-code/index.d.ts
+          test -f plugins/control-room/tsconfig.json
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Validate the plugin and the marketplace
+        run: npm run validate
+
+      - name: Test
+        run: npm test

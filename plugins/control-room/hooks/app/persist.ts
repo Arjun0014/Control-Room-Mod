@@ -8,14 +8,47 @@
 
 import { LIMITS, STORE_KEYS } from '../constants'
 import { type Run, isRun, updateIndex } from '../features/chain'
-import { type Settings, normalizeSettings } from '../core/settings'
+import { HIGH_RISK_CATEGORIES, PERMISSION_LABEL, type Settings, normalizeSettings } from '../core/settings'
 import type { Host } from '../host'
 
-export async function loadSettings(host: Host): Promise<{ settings: Settings; isFresh: boolean; wasRepaired: boolean }> {
+export async function loadSettings(
+  host: Host,
+): Promise<{ settings: Settings; isFresh: boolean; wasRepaired: boolean; tightened: string[] }> {
   const raw = await host.storeGet(STORE_KEYS.settings).catch(() => undefined)
-  if (raw === undefined || raw === null) return { settings: normalizeSettings(undefined), isFresh: true, wasRepaired: false }
+  if (raw === undefined || raw === null) return { settings: normalizeSettings(undefined), isFresh: true, wasRepaired: false, tightened: [] }
   const settings = normalizeSettings(raw)
-  return { settings, isFresh: false, wasRepaired: hasChangedValues(raw, settings) }
+  const { value, tightened } = withHighRiskAsk(raw)
+  return { settings, isFresh: false, wasRepaired: hasChangedValues(value, settings), tightened }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * A saved Allow for a category that no longer offers it (deleting files,
+ * before 1.0.2) reads as Ask. That is a deliberate tightening, not a repair:
+ * it is reported by name, in the settings and in custom profiles alike.
+ */
+export function withHighRiskAsk(raw: unknown): { value: unknown; tightened: string[] } {
+  if (!isRecord(raw)) return { value: raw, tightened: [] }
+  const tightened = new Set<string>()
+  const fix = (permissions: unknown): unknown => {
+    if (!isRecord(permissions)) return permissions
+    const out: Record<string, unknown> = { ...permissions }
+    for (const category of HIGH_RISK_CATEGORIES) {
+      if (out[category] === 'allow') {
+        out[category] = 'ask'
+        tightened.add(PERMISSION_LABEL[category])
+      }
+    }
+    return out
+  }
+  const value: Record<string, unknown> = { ...raw, permissions: fix(raw.permissions) }
+  if (Array.isArray(raw.customProfiles)) {
+    value.customProfiles = raw.customProfiles.map(p =>
+      isRecord(p) && isRecord(p.systems) ? { ...p, systems: { ...p.systems, permissions: fix(p.systems.permissions) } } : p,
+    )
+  }
+  return { value, tightened: [...tightened] }
 }
 
 /** Whether normalising changed a value that was present (missing fields are not repairs). */

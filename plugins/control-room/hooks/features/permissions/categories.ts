@@ -60,7 +60,7 @@ export const CATEGORY_INFO: Record<PermissionCategory, CategoryInfo> = {
     id: 'delete',
     label: 'File deletion',
     description: 'rm, del, Remove-Item, rimraf, git rm, find -delete',
-    loosest: 'allow',
+    loosest: 'ask',
     examples: 'rm -rf dist',
   },
   commit: {

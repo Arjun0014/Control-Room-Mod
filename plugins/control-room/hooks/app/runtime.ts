@@ -159,6 +159,11 @@ export class Runtime {
         const loaded = await loadSettings(host)
         this.settings = loaded.settings
         if (loaded.wasRepaired) this.note('Some saved Control Room settings were invalid and were reset to safe defaults.')
+        if (loaded.tightened.length > 0) {
+          this.note(`${loaded.tightened.join(', ')} no longer offer${loaded.tightened.length === 1 ? 's' : ''} Allow, so Claude Code asks first.`)
+          // Saved at once, so the note shows in one session rather than every one.
+          this.saveSettings.schedule(this.settings)
+        }
         this.isLoaded = true
       })().finally(() => {
         this.loading = null

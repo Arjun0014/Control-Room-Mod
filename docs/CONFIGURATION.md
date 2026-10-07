@@ -161,7 +161,7 @@ Each category is `default` (shown as *Default*: Claude Code decides), `allow`, `
 | `download`: downloading files | `wget https://…/model.bin` | ask | yes |
 | `edit`: project edits | Edit `src/app.ts` | Default | yes |
 | `editOutside`: changes outside the project | Write `~/.bashrc` | ask | no |
-| `delete`: deleting files | `rm -rf dist` | ask | yes |
+| `delete`: deleting files | `rm -rf dist` | ask | no |
 | `commit`: Git commits | `git commit -m "…"` | Default | yes |
 | `push`: Git push | `git push origin main` | ask | no |
 | `gitDestructive`: force push and resets | `git push --force`, `git reset --hard` | deny | no |
@@ -171,7 +171,9 @@ Each category is `default` (shown as *Default*: Claude Code decides), `allow`, `
 - **Deny** refuses before any dialog, in every permission mode, for Claude and its subagents.
 - **Ask** forces an approval prompt, even where a rule or the mode (including bypass) would allow.
 - **Allow** only answers a prompt Claude Code would otherwise show. It never lifts a deny, never
-  acts in plan mode, and is not offered for the high-risk categories.
+  acts in plan mode, and is not offered for the high-risk categories (edits outside the project,
+  deleting files, push, force push and resets, deploy, dangerous commands). A saved Allow for one
+  of them reads as Ask, and the panel says so once.
 
 ### Display (`ui`)
 

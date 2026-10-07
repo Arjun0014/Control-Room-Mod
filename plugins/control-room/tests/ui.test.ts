@@ -177,6 +177,34 @@ describe('ui', () => {
     }
   })
 
+  test('a segmented choice sits beside its label when the text fits, under it when it would not', async ($, on) => {
+    const w = world(on)
+    await boot($, w)
+    await $.command.run({ command: 'cr', args: 'guard on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    await w.clock.advance(300)
+    const at = async (columns: number, placement: 'dock' | 'inline') => {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement) })
+      await ui.press({ key: 'tab-behavior' })
+      await w.clock.advance(300)
+      const where = { beside: await ui.find({ key: 'gu-strict-right' }), under: await ui.find({ key: 'gu-strict-stacked' }) }
+      await ui.unmount()
+      return where
+    }
+    // Docked (a 60-cell card): the description would wrap beside the choice, so it moves under.
+    const docked = await at(66, 'dock')
+    expect(docked.under).toBeDefined()
+    expect(docked.beside).toBeUndefined()
+    // A wide frame (a 76-cell card): there is room for both on one line.
+    const wide = await at(100, 'inline')
+    expect(wide.beside).toBeDefined()
+    expect(wide.under).toBeUndefined()
+    // Switches never move, however narrow.
+    const narrow = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(44) })
+    await narrow.press({ key: 'tab-behavior' })
+    await w.clock.advance(300)
+    expect(await narrow.find({ key: 'gu-on-right' })).toBeDefined()
+  })
+
   test('the terminal never draws a dropdown; desktop uses its native popup', async ($, on) => {
     const w = world(on)
     await boot($, w)

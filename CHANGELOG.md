@@ -28,8 +28,9 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 - **No repeated titles.** A row never repeats its card's title. Behavior's cards say what each
   system does ("Keep Claude going when it stops early"), Context's reads "Hand off before the
   context fills up", and Subagents reads "Allowed  No limit". Overview's profile row has no title.
-- Wide controls such as segmented choices move under their label sooner, so a description never
-  wraps into a narrow column beside them.
+- A segmented choice moves under its label only when the label or description would not fit beside
+  it (or it would take over half the row), so text never wraps into a narrow column, and wide
+  panels keep each setting on one line.
 - **Terminal:** a page is at most 80 columns, centred in a wider frame. In the frame above the prompt
   the tabs sit right under the title. Action buttons keep a blank line above them.
 - **Setup** lists changes in the panel's own words and units (`Effort  Maximum › High`,

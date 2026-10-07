@@ -92,12 +92,15 @@ export function card(
   )
 }
 
+/** Controls at most this wide (switches, steppers, pickers) always stay on the right. */
+const NARROW_CONTROL = 20
+
 /**
  * A settings row: label (and a dim description under it) on the left, the
- * control or value on the right. A control wider than about two fifths of
- * the row (a segmented choice) moves under the label, so the description
- * never wraps into a narrow column beside it. An open picker's options
- * appear under the row.
+ * control or value on the right. A wide control (a segmented choice) moves
+ * under the label when it would take over half the row, or when the label
+ * or description would no longer fit beside it, so text never wraps into a
+ * narrow column. An open picker's options appear under the row.
  */
 export function row(
   kit: Kit,
@@ -105,8 +108,12 @@ export function row(
 ): RenderElement {
   const { Box, Text } = kit.ui
   const control = input.control
-  const isStacked = control !== undefined && control.width > Math.max(12, Math.floor(kit.columns * 0.42))
   const subtitle = input.subtitle === undefined || input.subtitle === '' ? null : input.subtitle
+  const textWidth = Math.max(input.label.length, subtitle?.length ?? 0)
+  const isStacked =
+    control !== undefined &&
+    control.width > 12 &&
+    (control.width > Math.floor(kit.columns * 0.55) || (control.width > NARROW_CONTROL && kit.columns - control.width - 2 < textWidth))
   const subtitleTone = input.subtitleTone ?? 'muted'
   const subtitleEl = subtitle === null ? null : (
     <Text key={`${input.key}-sub`} {...toneProps(subtitleTone)} dimColor={subtitleTone === 'muted' ? true : undefined} wrap="wrap">

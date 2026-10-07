@@ -37,8 +37,9 @@ This page records the decisions behind the UI, so later changes keep it that way
 A page is a stack of cards. A card is a small-caps title (with an optional aside or *Open ›* link),
 a rounded box of rows, and at most a short footnote under it. A row reads like a settings list:
 the label, with a one-line dim description under it, on the left; the control on the right edge,
-at every width. A control wider than about two fifths of the row (a segmented choice) moves under
-the label, so the description never wraps into a narrow column beside it. On Desktop rows are
+at every width. A wide control (a segmented choice) moves under the label when it would take over
+half the row, or when the label or description would no longer fit beside it, so text never wraps
+into a narrow column. Switches, steppers and pickers always stay on the right. On Desktop rows are
 spaced so native buttons never touch.
 
 A row never repeats its card's title. The title names the system ("FRONTIER MAX"); the first row

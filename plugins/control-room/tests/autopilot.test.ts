@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { type Autopilot, type AutopilotConfig, type AutopilotEvent, initialAutopilot, isHandoffActive, resolveThreshold, step } from '../hooks/features/autopilot'
+import { type Autopilot, type AutopilotConfig, type AutopilotEvent, initialAutopilot, isHandoffActive, recordOf, recover, resolveThreshold, step } from '../hooks/features/autopilot'
 
 const CFG: AutopilotConfig = { continuation: 'clear', fallbackToCompact: true, autoContinue: true }
 
@@ -128,5 +128,52 @@ describe('state machine', () => {
     expect(isHandoffActive('handoff')).toBe(true)
     expect(isHandoffActive('armed')).toBe(false)
     expect(isHandoffActive('awaiting')).toBe(false)
+  })
+})
+
+describe('a reload mid-handoff', () => {
+  const armed = () => run([ARM]).model
+  const at = (events: AutopilotEvent[]) => run([ARM, ...events]).model
+  const crossing: AutopilotEvent = { kind: 'context', tokens: 710_000, window: 1_000_000, isInTurn: true, now: 1 }
+
+  test('nothing is recorded while plainly watching; a snooze and every handoff step are', () => {
+    expect(recordOf(armed(), 'S1', 5)).toBeNull()
+    expect(recordOf(initialAutopilot(), 'S1', 5)).toBeNull()
+    expect(recordOf(at([crossing]), null, 5)).toBeNull()
+    expect(recordOf(at([crossing]), 'S1', 5)?.state).toBe('pending')
+    expect(recordOf(at([crossing, { kind: 'snooze', tokens: 710_000, window: 1_000_000 }]), 'S1', 5)?.snoozeUntil).toBe(810_000)
+  })
+
+  test('steps that cannot be half-done resume as they were, and the turn under way moves them on', () => {
+    for (const events of [[crossing], [crossing, { kind: 'turnComplete', reason: 'answer', now: 2 }, { kind: 'handoffStarted', now: 3 }]] as AutopilotEvent[][]) {
+      const before = at(events)
+      const back = recover(armed(), recordOf(before, 'S1', 9)!, { sessionId: 'S1' })
+      expect(back.model.state).toBe(before.state)
+      expect(back.effects).toEqual([])
+      expect(back.model.handoffSince).toBe(before.handoffSince)
+    }
+    // The handoff turn ends after the reload: the notes are checked, not asked for again.
+    const handoff = recover(armed(), recordOf(at([crossing, { kind: 'turnComplete', reason: 'answer', now: 2 }, { kind: 'handoffStarted', now: 3 }]), 'S1', 9)!, { sessionId: 'S1' }).model
+    expect(step(handoff, { kind: 'turnComplete', reason: 'answer', now: 4 }, CFG).effects.map(e => e.kind)).toEqual(['verifyHandoff'])
+    // Context still above the threshold after the reload never starts a second handoff.
+    expect(step(handoff, { kind: 'context', tokens: 800_000, window: 1_000_000, isInTurn: true, now: 5 }, CFG).effects).toEqual([])
+  })
+
+  test('a check or a clear that was owed is carried out; an unsure step waits for the person', () => {
+    const verifying = at([crossing, { kind: 'turnComplete', reason: 'answer', now: 2 }, { kind: 'handoffStarted', now: 3 }, { kind: 'turnComplete', reason: 'answer', now: 4 }])
+    expect(recover(armed(), recordOf(verifying, 'S1', 9)!, { sessionId: 'S1' }).effects.map(e => e.kind)).toEqual(['verifyHandoff'])
+    const clearing = step(verifying, { kind: 'handoffVerified', isOk: true, now: 5 }, CFG).model
+    expect(recover(armed(), recordOf(clearing, 'S1', 9)!, { sessionId: 'S1' }).effects.map(e => e.kind)).toEqual(['clear'])
+    // Requested: the handoff prompt may or may not have gone out, so it is not sent again.
+    const requested = recover(armed(), recordOf(at([{ ...crossing, isInTurn: false }]), 'S1', 9)!, { sessionId: 'S1' })
+    expect(requested.model.state).toBe('awaiting')
+    expect(requested.effects.map(e => e.kind)).toEqual(['notify'])
+  })
+
+  test('a record from another session, or with Autopilot off, changes nothing', () => {
+    const record = recordOf(at([crossing]), 'S1', 9)!
+    expect(recover(armed(), record, { sessionId: 'S2' }).model.state).toBe('armed')
+    expect(recover(initialAutopilot(), record, { sessionId: 'S1' }).model.state).toBe('off')
+    expect(recover(armed(), { ...record, state: 'teleporting' }, { sessionId: 'S1' }).model.state).toBe('armed')
   })
 })

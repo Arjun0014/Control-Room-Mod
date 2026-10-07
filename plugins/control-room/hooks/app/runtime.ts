@@ -221,6 +221,7 @@ export class Runtime {
     await this.attachRun()
     await this.refreshUsage(true)
     this.reconfigure({ isStartup: true })
+    await this.recoverAutopilot()
     void this.refreshHistory()
     this.publisher.markAll()
 
@@ -423,9 +424,46 @@ export class Runtime {
       fallbackToCompact: a.fallbackToCompact,
       autoContinue: a.autoContinue,
     })
+    this.applyAutopilot(result)
+  }
+
+  private applyAutopilot(result: Autopilot.Step): void {
     this.autopilot = result.model
+    this.saveAutopilotRecord()
     this.publisher.mark('hud', 'pane')
     for (const effect of result.effects) void this.runEffect(effect)
+  }
+
+  /** The last record written, so an unchanged machine writes nothing. */
+  private savedRecord = 'null'
+
+  /** Keeps the handoff in flight in `$.state`, where a reload of the plugin finds it. */
+  private saveAutopilotRecord(): void {
+    const host = this.host
+    if (host === null) return
+    const record = Autopilot.recordOf(this.autopilot, this.sessionId, Date.now())
+    const key = JSON.stringify(record === null ? null : { ...record, at: 0 })
+    if (key === this.savedRecord) return
+    this.savedRecord = key
+    void host.saveAutopilotRecord(record).catch(() => {
+      this.savedRecord = 'unsaved'
+    })
+  }
+
+  /**
+   * After a reload: a handoff that was under way carries on from where its
+   * record left it, so the context crossing the threshold again does not
+   * start a second one. A restart or /clear leaves no record.
+   */
+  private async recoverAutopilot(): Promise<void> {
+    const host = this.host
+    if (host === null) return
+    const record = await host.loadAutopilotRecord().catch(() => null)
+    if (record === null) return
+    this.savedRecord = JSON.stringify({ ...record, at: 0 })
+    const result = Autopilot.recover(this.autopilot, record, { sessionId: this.sessionId })
+    if (result.model === this.autopilot) return
+    this.applyAutopilot(result)
   }
 
   private async runEffect(effect: Autopilot.AutopilotEffect): Promise<void> {

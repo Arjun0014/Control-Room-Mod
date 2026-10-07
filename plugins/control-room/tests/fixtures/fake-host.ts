@@ -25,6 +25,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     published: {} as Record<string, unknown>,
     spawned: [] as string[][],
     compacted: 0,
+    /** `$.state`'s autopilot record: kept across a new Runtime (a reload), as the engine keeps it. */
+    autopilotRecord: null as import('../../types').AutopilotRecord | null,
   }
   const live = {
     usage: { startedAt: 0, context: { tokens: 10_000, window: 1_000_000, percent: 1 }, rateLimits: [], cost: { usd: 0.5 } } as SessionUsage,
@@ -110,6 +112,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     publishPermissions: async v => void (kept.published.permissions = v),
     publishFocus: async v => void (kept.published.focus = v),
     publishSpinner: async v => void (kept.published.spinner = v),
+    saveAutopilotRecord: async record => void (kept.autopilotRecord = record === null ? null : JSON.parse(JSON.stringify(record))),
+    loadAutopilotRecord: async () => kept.autopilotRecord,
     invalidateDescribes: () => undefined,
   }
 

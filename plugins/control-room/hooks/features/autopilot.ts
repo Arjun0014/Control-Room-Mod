@@ -148,6 +148,95 @@ function proceedAfterHandoff(model: Autopilot, cfg: AutopilotConfig): Step {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Surviving a reload
+
+/** The handoff in flight, as `$.state` keeps it (see AutopilotRecord in the type contract). */
+export type AutopilotRecord = {
+  sessionId: string
+  state: string
+  triggeredTokens: number | null
+  triggeredAt: number | null
+  handoffSince: number | null
+  retries: number
+  snoozeUntil: number | null
+  lastError: string | null
+  note: string
+  at: number
+}
+
+const STATES: readonly AutopilotState[] = ['off', 'armed', 'pending', 'requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming', 'awaiting']
+
+/**
+ * What must outlive a reload: nothing while plainly watching, the handoff's
+ * place while one is under way or waiting, a snooze while it holds.
+ */
+export function recordOf(model: Autopilot, sessionId: string | null, now: number): AutopilotRecord | null {
+  if (sessionId === null || model.state === 'off') return null
+  if (model.state === 'armed' && model.snoozeUntil === null) return null
+  return {
+    sessionId,
+    state: model.state,
+    triggeredTokens: model.triggeredTokens,
+    triggeredAt: model.triggeredAt,
+    handoffSince: model.handoffSince,
+    retries: model.retries,
+    snoozeUntil: model.snoozeUntil,
+    lastError: model.lastError,
+    note: model.note,
+    at: now,
+  }
+}
+
+/**
+ * A fresh runtime after a reload picks the handoff up where the record left
+ * it, and never starts a second one. Where the record cannot tell whether a
+ * step already happened (a prompt about to be sent, a compaction), it waits
+ * for the person instead of repeating the step.
+ *
+ * `model` is the freshly configured machine (armed, or off when disabled).
+ */
+export function recover(model: Autopilot, record: AutopilotRecord, ctx: { sessionId: string | null }): Step {
+  const none: AutopilotEffect[] = []
+  const state = STATES.find(s => s === record.state)
+  if (model.state === 'off' || state === undefined || record.sessionId !== ctx.sessionId) return { model, effects: none }
+  const kept = set(model, {
+    triggeredTokens: record.triggeredTokens,
+    triggeredAt: record.triggeredAt,
+    handoffSince: record.handoffSince,
+    retries: record.retries,
+    snoozeUntil: record.snoozeUntil,
+    lastError: record.lastError,
+  })
+  switch (state) {
+    case 'off':
+      return { model, effects: none }
+    case 'armed':
+      return { model: set(kept, { state: 'armed', note: record.snoozeUntil === null ? model.note : 'Snoozed until the context grows further' }), effects: none }
+    case 'pending':
+    case 'handoff':
+    case 'awaiting':
+      // Nothing was left half-done: the turn under way (or the person) moves it on.
+      return { model: set(kept, { state, note: record.note }), effects: none }
+    case 'verifying':
+      return { model: set(kept, { state: 'verifying', note: 'Checking the handoff notes' }), effects: [{ kind: 'verifyHandoff' }] }
+    case 'clearing':
+      // The notes were verified and the context is still this session's: the clear is still owed.
+      return { model: set(kept, { state: 'clearing', note: 'Handoff written. Starting a fresh context' }), effects: [{ kind: 'clear' }] }
+    case 'requested':
+    case 'compacting':
+      return {
+        model: set(kept, { state: 'awaiting', note: state === 'requested' ? 'A reload interrupted the handoff. Hand off when you’re ready' : 'A reload interrupted compaction. Start fresh when you’re ready' }),
+        effects: [{ kind: 'notify', text: 'Control Room reloaded in the middle of a handoff, so Autopilot waits for you instead of repeating a step.', level: 'warn' }],
+      }
+    case 'resuming':
+      return {
+        model: set(kept, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, note: 'Watching the context' }),
+        effects: [{ kind: 'notify', text: 'Control Room reloaded as the fresh context began. If Claude is idle, ask it to continue from the handoff notes.', level: 'info' }],
+      }
+  }
+}
+
 export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConfig): Step {
   const none: AutopilotEffect[] = []
 

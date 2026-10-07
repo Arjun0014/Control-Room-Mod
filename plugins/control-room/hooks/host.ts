@@ -30,6 +30,7 @@ import type {
 
 import type {
   ActivityView,
+  AutopilotRecord,
   ChainView,
   FocusModel,
   HudModel,
@@ -97,6 +98,10 @@ export type Host = {
   publishPermissions(value: PermissionsView): Promise<void>
   publishFocus(value: FocusModel): Promise<void>
   publishSpinner(value: SpinnerModel): Promise<void>
+
+  /** The handoff in flight, in `$.state`: survives a reload of the plugin, not a restart or /clear. */
+  saveAutopilotRecord(record: AutopilotRecord | null): Promise<void>
+  loadAutopilotRecord(): Promise<AutopilotRecord | null>
 
   /** Re-runs agent listings (Subagent Control changed what is offered). */
   invalidateDescribes(): void

@@ -240,6 +240,25 @@ export type FocusModel = { isOn: boolean; tools: 'compact' | 'hidden'; results: 
 
 export type SpinnerModel = { line: string | null }
 
+/**
+ * Context Autopilot's handoff in flight, kept in `$.state` so a reload of the
+ * plugin mid-handoff resumes it instead of starting a second one. `$.state`
+ * lasts as long as the session's process and starts empty after /clear, so
+ * a record never outlives the context it belongs to.
+ */
+export type AutopilotRecord = {
+  sessionId: string
+  state: string
+  triggeredTokens: number | null
+  triggeredAt: number | null
+  handoffSince: number | null
+  retries: number
+  snoozeUntil: number | null
+  lastError: string | null
+  note: string
+  at: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'control-room': {
@@ -251,6 +270,7 @@ declare module 'claude-code' {
       permissions: PermissionsView
       focus: FocusModel
       spinner: SpinnerModel
+      autopilot: { record: AutopilotRecord | null }
     }
   }
 }

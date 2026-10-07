@@ -35,6 +35,7 @@ const ACTIVITY = { plugin: 'control-room', key: 'activity' } as const
 const PERMISSIONS = { plugin: 'control-room', key: 'permissions' } as const
 const FOCUS = { plugin: 'control-room', key: 'focus' } as const
 const SPINNER = { plugin: 'control-room', key: 'spinner' } as const
+const AUTOPILOT = { plugin: 'control-room', key: 'autopilot' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -106,6 +107,9 @@ function hostOf($: EngineInterface): Host {
     publishPermissions: v => $.state.set(PERMISSIONS, v).then(() => undefined),
     publishFocus: v => $.state.set(FOCUS, v).then(() => undefined),
     publishSpinner: v => $.state.set(SPINNER, v).then(() => undefined),
+
+    saveAutopilotRecord: record => $.state.set(AUTOPILOT, { record }).then(() => undefined),
+    loadAutopilotRecord: () => $.state.get(AUTOPILOT).then(read => read.value?.record ?? null),
 
     invalidateDescribes: () => $.ui.invalidate('tool.describe'),
   }

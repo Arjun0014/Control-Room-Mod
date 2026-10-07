@@ -215,6 +215,33 @@ describe('runtime', () => {
     expect((f.kept.store['settings.v1'] as Settings).permissions.delete).toBe('ask')
   })
 
+  test('a reload in the middle of a handoff carries it on instead of starting a second one', async () => {
+    const { rt, kept, live, advance, host } = await started(s => {
+      s.autopilot.enabled = true
+      s.autopilot.thresholdMode = 'tokens'
+      s.autopilot.thresholdTokens = 100_000
+    })
+    rt.onTurnStart({ turnId: 't1', text: 'build it' })
+    live.usage = { ...live.usage, context: { tokens: 120_000, window: 1_000_000, percent: 12 } }
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
+    await advance(300)
+    expect(rt.autopilot.state).toBe('handoff')
+    expect(kept.submitted.filter(t => t.includes('final handoff')).length).toBe(1)
+    expect(kept.autopilotRecord?.state).toBe('handoff')
+
+    // The plugin reloads while Claude writes the notes: a fresh Runtime over the same engine state.
+    const reloaded = new Runtime()
+    reloaded.bind(host)
+    await reloaded.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await advance(200)
+    expect(reloaded.autopilot.state).toBe('handoff')
+    // The handoff turn ends with the context still past the threshold: no second handoff prompt.
+    await reloaded.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'notes written' })
+    await advance(3000)
+    expect(kept.submitted.filter(t => t.includes('final handoff')).length).toBe(1)
+    expect(kept.commands).toContain('clear')
+  })
+
   test('views are published for every render site', async () => {
     const { kept } = await started(() => undefined)
     for (const key of ['hud', 'pane', 'resources', 'chain', 'activity', 'permissions', 'focus', 'spinner']) {

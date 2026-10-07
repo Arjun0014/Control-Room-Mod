@@ -15,7 +15,7 @@ import type { RenderElement } from 'claude-code'
 import type { ChainRunView, ChainSessionView, ChainView, HudModel, PaneModel } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
-import { buttons, card, emptyState, listItem, meterBar, pair, row, segmented, steps, stepper, switchControl } from '../primitives'
+import { buttons, card, clip, emptyState, listItem, meterBar, pair, row, segmented, steps, stepper, switchControl } from '../primitives'
 import { ACCENT, G, toneProps } from '../theme'
 
 const END: Record<string, string> = {
@@ -101,7 +101,7 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
     <Box flexDirection="column">
       <Box key="state" flexDirection="column" marginTop={1}>
         <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
-          <Box flexShrink={1}>
+          <Box flexShrink={1} {...clip(kit)}>
             <Text wrap="truncate-end">
               <Text {...toneProps(stateTone)}>{`${s.enabled ? G.dot : G.ring} `}</Text>
               <Text bold>{s.enabled ? a.note : 'Autopilot is off'}</Text>

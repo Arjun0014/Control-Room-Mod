@@ -1,7 +1,7 @@
 {
   "name": "control-room",
   "displayName": "Control Room",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A calm control layer for Claude Code: a status bar, the Control Room panel, Autopilot (automatic handoff to a fresh context), a session chain, Frontier Max, a lazy-exit guard, a model router, subagent limits, Focus view, machine load and permissions, with profiles.",
   "author": {
     "name": "Control Room contributors"

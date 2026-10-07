@@ -10,6 +10,7 @@ import type { RenderElement } from 'claude-code'
 import { clean } from '../core/text'
 import { labelOf } from '../features/activity'
 import type { Kit } from './kit'
+import { clip } from './primitives'
 import { G } from './theme'
 
 export type ToolRowProps = {
@@ -31,7 +32,7 @@ export function compactToolRow(kit: Kit, props: ToolRowProps): RenderElement {
   return (
     <Box flexDirection="row" key={`row-${props.tool_use_id}`}>
       <Text color={status.color}>{`${status.glyph} `}</Text>
-      <Box flexShrink={1} flexGrow={1}>
+      <Box flexShrink={1} flexGrow={1} {...clip(kit)}>
         <Text dimColor wrap="truncate-end">
           <Text dimColor bold>{tool}</Text>
           {label === '' ? '' : `  ${label}`}

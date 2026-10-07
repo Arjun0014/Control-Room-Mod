@@ -87,15 +87,16 @@ function page(kit: Kit, data: PaneData): RenderElement {
 }
 
 /**
- * The widest a page draws in the terminal. Beyond it a row's label and its
- * control drift too far apart to read as one line (an inline frame in a wide
- * terminal spans the screen), so the page keeps to the left at this width.
+ * The widest a page draws. Beyond it a row's label and its control drift too
+ * far apart to read as one line (an inline frame in a wide terminal spans
+ * the screen, as does a Desktop pane at full size), so a wider frame centres
+ * the page at this width.
  */
 export const MAX_COLUMNS = 80
 
 export function paneView(base: Kit, data: PaneData): RenderElement {
   const inner = Math.max(24, base.columns - 2)
-  const columns = base.surface === 'terminal' ? Math.min(MAX_COLUMNS, inner) : inner
+  const columns = Math.min(MAX_COLUMNS, inner)
   const kit: Kit = { ...base, openPicker: data.pane.openPicker, columns }
   const { Box, Text } = kit.ui
   const notes = data.pane.notes

@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import type { Settings } from '../hooks/core/settings'
 import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
+import { navRowColumns } from '../hooks/ui/primitives'
 import { meter } from '../hooks/ui/theme'
 import { SESSION, world } from './fixtures/world'
 
@@ -171,20 +172,83 @@ describe('ui', () => {
     }
   })
 
-  test('a wide inline frame keeps the page to a readable width, centred; docked and desktop pages fill their room', async ($, on) => {
+  test('a wide frame keeps the page to a readable width, centred, on every surface; a narrower one fills its room', async ($, on) => {
     const w = world(on)
     await boot($, w)
     const mount = (surface: 'terminal' | 'desktop', columns: number, placement: 'dock' | 'inline') =>
       $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement), viewport: { columns: columns + 2, rows: 50, isFullscreen: placement === 'dock' } })
-    const wide = await mount('terminal', 180, 'inline')
-    expect(await wide.drawn()).toMatchObject({ props: { alignItems: 'center' } })
-    expect((await wide.find({ key: 'page-body' }))?.props.width).toBe(MAX_COLUMNS + 2)
-    await wide.unmount()
-    for (const [surface, columns, placement] of [['terminal', 66, 'dock'], ['desktop', 180, 'inline']] as const) {
+    for (const [surface, placement] of [['terminal', 'inline'], ['desktop', 'dock']] as const) {
+      const wide = await mount(surface, 180, placement)
+      expect(await wide.drawn(), surface).toMatchObject({ props: { alignItems: 'center' } })
+      expect((await wide.find({ key: 'page-body' }))?.props.width, surface).toBe(MAX_COLUMNS + 2)
+      await wide.unmount()
+    }
+    for (const [surface, columns, placement] of [['terminal', 66, 'dock'], ['desktop', 50, 'dock']] as const) {
       const ui = await mount(surface, columns, placement)
       expect((await ui.find({ key: 'page-body' }))?.props.width, `${surface} ${columns}`).toBeUndefined()
       await ui.unmount()
     }
+  })
+
+  test('desktop section buttons: one row when every label fits, else three equal cells per row with each button centred', async ($, on) => {
+    const w = world(on)
+    await boot($, w)
+    for (const [columns, isOneRow] of [[MAX_COLUMNS + 2, true], [navRowColumns(TABS), true], [navRowColumns(TABS) - 1, false], [50, false], [30, false]] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(columns + 2) })
+      const nav = await ui.find({ key: 'nav' })
+      const rows = (nav?.children ?? []).filter(c => /^nav-row-\d+$/.test(keyOf(c))) as Node[]
+      if (isOneRow) {
+        expect(rows.length, `${columns}`).toBe(0)
+        expect((nav?.children ?? []).map(keyOf), `${columns}`).toEqual(TABS.map(t => `tab-${t.id}`))
+      } else {
+        expect(rows.length, `${columns}`).toBe(2)
+        for (const r of rows) {
+          const cells = (r.children ?? []) as Node[]
+          expect(cells.map(c => keyOf(c).replace(/^nav-cell-/, '')).every(id => TABS.some(t => t.id === id)), `${columns}`).toBe(true)
+          expect(cells.length, `${columns}`).toBe(3)
+          expect(new Set(cells.map(c => c.props?.width)).size, `${columns}: equal cells`).toBe(1)
+          for (const c of cells) expect(c.props?.justifyContent, `${columns}`).toBe('center')
+        }
+      }
+      await ui.unmount()
+    }
+  })
+
+  test('on desktop a truncating line may narrow below its text; the terminal tree is unchanged', async ($, on) => {
+    const w = world(on)
+    await boot($, w)
+    const shrinkers = async (surface: 'terminal' | 'desktop') => {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(48) })
+      let clipped = 0
+      each(await ui.drawn(), n => {
+        if (n.type === 'Box' && n.props?.minWidth === 0 && n.props.overflow === 'hidden') clipped += 1
+      })
+      await ui.unmount()
+      return clipped
+    }
+    expect(await shrinkers('desktop')).toBeGreaterThan(5)
+    expect(await shrinkers('terminal')).toBe(0)
+  })
+
+  test('on desktop the profile name field moves under its label in a narrow pane', async ($, on) => {
+    const w = world(on)
+    await boot($, w)
+    await $.command.run({ command: 'cr', args: 'guard on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    await w.clock.advance(300)
+    const at = async (columns: number) => {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(columns) })
+      await ui.press({ key: 'tab-setup' })
+      await w.clock.advance(300)
+      const where = { beside: await ui.find({ key: 'profile-save-right' }), under: await ui.find({ key: 'profile-save-stacked' }) }
+      await ui.unmount()
+      return where
+    }
+    const narrow = await at(54)
+    expect(narrow.under).toBeDefined()
+    expect(narrow.beside).toBeUndefined()
+    const wide = await at(120)
+    expect(wide.beside).toBeDefined()
+    expect(wide.under).toBeUndefined()
   })
 
   test('a segmented choice sits beside its label when the text fits, under it when it would not', async ($, on) => {

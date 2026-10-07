@@ -36,6 +36,14 @@ type Child = RenderElement | null | false | undefined
 
 const present = (list: readonly Child[]): RenderElement[] => list.filter((c): c is RenderElement => c !== null && c !== false && c !== undefined)
 
+/**
+ * Props that let a flex child narrow below its text on the remote surfaces.
+ * A browser keeps a flex item at least as wide as its content, so a line
+ * that should cut with an ellipsis pushes past its card instead; the
+ * terminal's layout already narrows it.
+ */
+export const clip = (kit: Kit): { minWidth?: number; overflow?: 'hidden' } => (kit.surface === 'terminal' ? {} : { minWidth: 0, overflow: 'hidden' })
+
 // ---------------------------------------------------------------------------
 // Structure
 
@@ -70,9 +78,11 @@ export function card(
           {input.link !== undefined ? (
             <Button key={`${input.key}-link`} label={`${input.link.label} ${G.chevron}`} plain dimColor onPress={input.link.onPress} />
           ) : input.aside === undefined || input.aside === '' ? null : (
-            <Text dimColor wrap="truncate-start">
-              {input.aside}
-            </Text>
+            <Box flexShrink={1} {...clip(kit)}>
+              <Text dimColor wrap="truncate-start">
+                {input.aside}
+              </Text>
+            </Box>
           )}
         </Box>
       ) : null}
@@ -128,17 +138,19 @@ export function row(
         {input.value}
       </Text>
     )
+  // A plain value may cut short where the surface lays out like a browser; a control keeps its size.
+  const isValueShrinking = control === undefined && kit.surface !== 'terminal'
   return (
     <Box key={`row-${input.key}`} flexDirection="column">
       <Box flexDirection="row" columnGap={2}>
-        <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} {...clip(kit)}>
           <Text dimColor={input.isDim === true ? true : undefined} wrap="wrap">
             {input.label}
           </Text>
           {isStacked ? null : subtitleEl}
         </Box>
         {isStacked || right === null ? null : (
-          <Box flexShrink={0} key={`${input.key}-right`}>
+          <Box flexShrink={isValueShrinking ? 1 : 0} key={`${input.key}-right`} {...(isValueShrinking ? clip(kit) : {})}>
             {right}
           </Box>
         )}
@@ -175,7 +187,7 @@ export function field(kit: Kit, input: { key: string; label: string; content: Re
         <Box width={FIELD_LABEL} flexShrink={0}>
           <Text dimColor>{input.label}</Text>
         </Box>
-        <Box flexGrow={1} flexShrink={1}>
+        <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
           {input.content}
         </Box>
       </Box>
@@ -211,7 +223,7 @@ export function pair(kit: Kit, input: { key: string; left: string; right?: strin
   const { Box, Text } = kit.ui
   return (
     <Box key={`pair-${input.key}`} flexDirection="row" justifyContent="space-between" columnGap={2}>
-      <Box flexShrink={1}>
+      <Box flexShrink={1} {...clip(kit)}>
         <Text dimColor wrap="truncate-end">
           {input.left}
         </Text>
@@ -299,7 +311,7 @@ export function listItem(kit: Kit, input: { key: string; glyph: string; tone: To
       <Box width={2} flexShrink={0}>
         <Text {...toneProps(input.tone)}>{input.glyph}</Text>
       </Box>
-      <Box flexGrow={1} flexShrink={1}>
+      <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
         <Text dimColor={input.isDim === true ? true : undefined} wrap="truncate-end">
           {input.text}
         </Text>
@@ -325,7 +337,7 @@ export function steps(kit: Kit, key: string, list: readonly string[], accent?: s
               {String(i + 1)}
             </Text>
           </Box>
-          <Box flexShrink={1}>
+          <Box flexShrink={1} {...clip(kit)}>
             <Text wrap="wrap">{text}</Text>
           </Box>
         </Box>
@@ -416,7 +428,7 @@ export function picker(kit: Kit, input: { key: string; value: string; options: r
             />
           </Box>
           {o.hint === undefined ? null : (
-            <Box flexShrink={1}>
+            <Box flexShrink={1} {...clip(kit)}>
               <Text dimColor wrap="truncate-end">
                 {o.hint}
               </Text>
@@ -563,12 +575,22 @@ export function gauge(
 // ---------------------------------------------------------------------------
 // Navigation
 
+/** Native section buttons per row when they do not fit on one. */
+const NAV_PER_ROW = 3
+
+/**
+ * The columns a native section bar needs to keep every tab on one row: each
+ * label with a native button's padding, and a cell between buttons.
+ */
+export const navRowColumns = (tabs: readonly { label: string }[]): number => tabs.reduce((n, t) => n + t.label.length + 3, 0) + tabs.length - 1
+
 /**
  * The section bar. Terminal: labels with the chosen one bright and its
  * section's accent underline beneath it (which doubles as the header's
- * rule); two rows when one will not fit. Native surfaces: buttons in an
- * even grid (one row when wide, three per row when narrow), the chosen one
- * primary, so they never wrap unevenly.
+ * rule); two rows when one will not fit. Native surfaces: one row of
+ * buttons with an even gap when every label fits; otherwise three equal
+ * cells per row spanning the page, each button centred in its cell. The
+ * chosen one is primary.
  */
 export function navBar<T extends string>(
   kit: Kit,
@@ -576,18 +598,33 @@ export function navBar<T extends string>(
 ): RenderElement {
   const { Box, Button, Text } = kit.ui
   if (kit.surface !== 'terminal') {
-    const perRow = kit.columns >= 70 ? input.tabs.length : 3
+    const tab = (t: { id: T; label: string }) => (
+      <Button key={`tab-${t.id}`} label={t.label} variant={t.id === input.current ? 'primary' : 'secondary'} onPress={() => input.onSelect(t.id)} />
+    )
+    // Room for all: one row at the labels' own widths with an even gap, as the page's other choices sit.
+    if (kit.columns >= navRowColumns(input.tabs)) {
+      return (
+        <Box key="nav" flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={1}>
+          {input.tabs.map(tab)}
+        </Box>
+      )
+    }
+    // Narrow: three equal cells per row across the page, each button centred in its cell, so the columns line up.
     const rows: (typeof input.tabs)[number][][] = []
-    for (let i = 0; i < input.tabs.length; i += perRow) rows.push(input.tabs.slice(i, i + perRow))
-    const cell = `${Math.floor(100 / perRow)}%`
+    for (let i = 0; i < input.tabs.length; i += NAV_PER_ROW) rows.push(input.tabs.slice(i, i + NAV_PER_ROW))
+    const cell = `${Math.floor(100 / NAV_PER_ROW)}%`
     return (
       <Box key="nav" flexDirection="column" rowGap={1}>
         {rows.map((r, i) => (
-          <Box key={`nav-row-${i}`} flexDirection="row">
+          <Box key={`nav-row-${i}`} flexDirection="row" justifyContent="space-between">
             {r.map(t => (
-              <Box key={`nav-cell-${t.id}`} width={cell}>
-                <Button key={`tab-${t.id}`} label={t.label} variant={t.id === input.current ? 'primary' : 'secondary'} onPress={() => input.onSelect(t.id)} />
+              <Box key={`nav-cell-${t.id}`} width={cell} flexDirection="row" justifyContent="center">
+                {tab(t)}
               </Box>
+            ))}
+            {/* A short last row keeps its cells under the ones above. */}
+            {Array.from({ length: NAV_PER_ROW - r.length }, (_, j) => (
+              <Box key={`nav-pad-${i}-${j}`} width={cell} />
             ))}
           </Box>
         ))}

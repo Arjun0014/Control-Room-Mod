@@ -10,7 +10,7 @@ Desktop's Code tab. One plugin gives you:
 - policies for effort, finishing the job, models, subagents, machine load and risky actions
 - **profiles** that set everything at once
 
-> **Status: 1.0.0.** Control Room is built on Claude Code's function-hooks plugin API ("mods"),
+> **Status: 1.0.1.** Control Room is built on Claude Code's function-hooks plugin API ("mods"),
 > which is still early access and may change between Claude Code releases. It is verified on
 > Claude Code **2.1.289** (the engine bundled with Claude Desktop) and **2.1.292** (CLI) on
 > Windows 11. See [Compatibility](#compatibility).
@@ -212,7 +212,8 @@ handoff ever waits for you, it offers **Start fresh**.
 
 `/cr` (or `/control-room`) opens or closes it, and so does the status bar's button. In the
 fullscreen terminal from 110 columns it docks beside the conversation; otherwise it opens in a
-frame above the prompt, where a wide terminal keeps the page to 80 columns, centred. Opened by
+frame above the prompt. A wide frame (a wide terminal, or a Desktop pane at full size) keeps the
+page to 80 columns, centred. Opened by
 you, it seats at any width. If it opens on its own (*Open at session start*), it waits for 144
 columns.
 

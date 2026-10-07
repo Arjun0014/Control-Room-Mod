@@ -8,6 +8,29 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-07
+
+Desktop fixes after a look at the panel in Claude Desktop's Code tab.
+
+### Fixed
+
+- **Desktop: lines ran past their cards.** In Activity, a long tool call pushed past the card's
+  edge and hid its duration. A browser keeps a flex item as wide as its text, so lines that should
+  end in an ellipsis overflowed instead. They now cut at the card's edge, and so do file names,
+  card asides and the status bar's readings.
+- **Desktop: the profile name field overflowed.** In Setup, *Keep as a profile* squeezed its
+  label into a narrow column and its text field ran past the card. In a narrow panel the field now
+  sits under its label.
+
+### Changed
+
+- **Desktop: section buttons.** When they all fit, they sit in one row at their own widths with an
+  even gap, like the panel's other choices. In a narrow panel they form three equal cells per row,
+  each button centred, so the columns line up. At full size they no longer spread across the
+  window.
+- **Desktop: a readable page width.** At full size the page keeps to 80 columns, centred, as in a
+  wide terminal, so a setting's label and its control stay close together.
+
 ## [1.0.0] - 2026-10-07
 
 The first stable release. It finishes the 0.2 redesign after a live pass in a real terminal, and

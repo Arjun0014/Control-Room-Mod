@@ -9,7 +9,7 @@ import type { RenderElement } from 'claude-code'
 import type { ActivityItemView, ActivityView, PaneModel, Tone } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
-import { buttons, card, emptyState, listItem, row, segmented, switchControl } from '../primitives'
+import { buttons, card, clip, emptyState, listItem, row, segmented, switchControl } from '../primitives'
 import { ACCENT, G } from '../theme'
 
 const STATUS: Record<string, { glyph: string; tone: Tone }> = {
@@ -135,7 +135,7 @@ export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | und
             : [
                 ...view.files.slice(0, 30).map(f => (
                   <Box key={`file-${f.path}`} flexDirection="row" columnGap={1}>
-                    <Box flexGrow={1} flexShrink={1}>
+                    <Box flexGrow={1} flexShrink={1} {...clip(k)}>
                       <Button key={`pick-${f.path}`} label={`${f.path === selected ? G.down : G.arrow} ${f.display}`} plain dimColor={f.path !== selected} onPress={() => kit.actions.selectFile(f.path === selected ? null : f.path)} />
                     </Box>
                     <Text color="diffAdded">{`+${f.added}`}</Text>

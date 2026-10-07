@@ -49,9 +49,15 @@ fields, a dim label in a fixed column and the reading after it, so a block of th
 calm table (the top of Overview).
 
 In the terminal an action row (`[ Hand off now ]`) keeps a blank line above it, so it never sits
-flush under text. A page is at most 80 columns wide: in the frame above the prompt in a wide
-terminal it is centred, because a label and its control drift apart past that. That frame is
-short, so its tabs sit right under the title.
+flush under text. A page is at most 80 columns wide: in a wider frame (the frame above the prompt
+in a wide terminal, a Desktop pane at full size) it is centred, because a label and its control
+drift apart past that. The frame above the prompt is short, so its tabs sit right under the
+title.
+
+On Desktop a line that cuts short (a tool call, a file name, a card's aside) sits in a box allowed
+to narrow below its text (`clip`). A browser keeps a flex item at least as wide as its content, so
+without it the line pushes past its card instead of ending in an ellipsis. Native controls are
+wider than their labels: a text field moves under its label sooner than the terminal's does.
 
 Section accents: Overview orange (`claude`), Context blue (`ide`), Behavior purple (`autoAccept`),
 Guardrails teal (`planMode`), Activity periwinkle (`suggestion`), Setup gray (`inactive`).
@@ -68,7 +74,7 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | `link` | `No limit ›`, goes to the section that owns it | native button | native button |
 | `meterBar` | thin line `━━━━──┃──` with the threshold tick | SVG bar | SVG bar |
 | `spark` | `▁▂▄▆█` | SVG area chart with a dashed ceiling | SVG |
-| `navBar` | labels with the section's accent underline under the current one | native buttons in an even grid (one row when wide, three per row when narrow) | same as Desktop |
+| `navBar` | labels with the section's accent underline under the current one | native buttons in one row with an even gap when all fit; otherwise three equal cells per row, each button centred | same as Desktop |
 | `callout` | rounded border in the status color, title, line, actions | same, drawn natively | same |
 | `gauge` | label and %, line meter with ceiling tick, sparkline | label and %, SVG bar | SVG bar |
 | `steps` | numbered lines in the accent | same | same |

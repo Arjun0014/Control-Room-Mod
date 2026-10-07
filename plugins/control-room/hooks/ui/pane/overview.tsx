@@ -14,7 +14,7 @@ import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { FIELD_LABEL, callout, card, field, link, listItem, meterBar, picker, row, switchControl, textRuns } from '../primitives'
+import { FIELD_LABEL, callout, card, clip, field, link, listItem, meterBar, picker, row, switchControl, textRuns } from '../primitives'
 import { ACCENT, G } from '../theme'
 import type { PaneData } from './frame'
 
@@ -87,7 +87,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
   const meterWidth = Math.max(8, kit.columns - FIELD_LABEL - pctText.length - 1)
   const contextLine = (
     <Box key="ctx-line" flexDirection="row" columnGap={1}>
-      <Box flexGrow={1} flexShrink={1}>
+      <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
         {meterBar(kit, { key: 'ctx-meter', fraction, marker, tone: ctx.tone === 'muted' ? 'good' : ctx.tone, width: meterWidth, alt: `Context ${ctx.pct ?? 0}% used` })}
       </Box>
       {textRuns(kit, 'ctx-pct', [{ text: pctText, tone: readingTone(ctx.tone), isBold: ctx.pct !== null }])}

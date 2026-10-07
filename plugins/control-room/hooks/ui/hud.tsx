@@ -16,7 +16,7 @@ import type { RenderElement } from 'claude-code'
 import type { HudModel, Tone } from '../../types'
 import * as fmt from '../core/format'
 import type { Kit } from './kit'
-import { isNative } from './primitives'
+import { clip, isNative } from './primitives'
 import { G, meterCells, sparkline, toneProps } from './theme'
 
 type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean }
@@ -122,7 +122,7 @@ export function hudView(kit: Kit, hud: HudModel): RenderElement {
   const segments = fitSegments(hudSegments(hud, kit.columns, kit.surface), room)
   const line = (
     <Box flexDirection="row" key="hud-line" alignItems="center">
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} columnGap={GAP}>
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} columnGap={GAP} {...clip(kit)}>
         {segments.map(s => (
           <Text key={`seg-${s.key}`} wrap="truncate-end">
             {s.spans.map((p, i) => spanEl(kit, `seg-${s.key}-${i}`, p))}
@@ -150,7 +150,7 @@ export function hudView(kit: Kit, hud: HudModel): RenderElement {
     <Box flexDirection="column">
       {line}
       <Box flexDirection="row" key="hud-alert" alignItems="center" columnGap={2}>
-        <Box flexGrow={1} flexShrink={1}>
+        <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
           <Text wrap="truncate-end">
             <Text {...toneProps(alert.tone)}>{`${alert.kind === 'awaiting' ? G.dot : G.warn} `}</Text>
             <Text>{alert.text}</Text>

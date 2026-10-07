@@ -1,0 +1,16 @@
+{
+  "name": "control-room-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Development workspace for the Control Room Claude Code plugin (the plugin itself has no runtime dependencies).",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc -p plugins/control-room",
+    "validate": "claude plugin validate plugins/control-room --strict && claude plugin validate .",
+    "test": "claude plugin test plugins/control-room",
+    "check": "npm run typecheck && npm run validate && npm run test"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Control Room: HUD, Control Centre pane, autopilot, policies and guards as function hooks",
+  "modules": ["./register.tsx"]
+}

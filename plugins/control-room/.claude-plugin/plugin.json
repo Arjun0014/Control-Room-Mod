@@ -1,0 +1,10 @@
+{
+  "name": "control-room",
+  "displayName": "Control Room",
+  "version": "0.1.0",
+  "description": "A supervisory control layer for Claude Code: live HUD, Control Centre, Context Autopilot with automatic handoff and fresh-context continuation, Session Chain, Frontier Max, No-Lazy-Exit Guard, Model Router, Subagent Control, Focus View, Resource Governor, Permission Policy and Profiles.",
+  "author": { "name": "Control Room contributors" },
+  "license": "MIT",
+  "keywords": ["control-room", "hud", "autopilot", "context", "handoff", "permissions", "subagents", "resources", "profiles", "mod"],
+  "types": "./types/index.d.ts"
+}

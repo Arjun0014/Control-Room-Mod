@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "control-room",
+  "description": "Control Room: a supervisory control layer for Claude Code sessions (HUD, Control Centre, Context Autopilot, policies).",
+  "owner": {
+    "name": "Control Room contributors"
+  },
+  "plugins": [
+    {
+      "name": "control-room",
+      "description": "A supervisory control layer for Claude Code: live HUD, Control Centre, Context Autopilot with automatic handoff and fresh-context continuation, Session Chain, Frontier Max, No-Lazy-Exit Guard, Model Router, Subagent Control, Focus View, Resource Governor, Permission Policy and Profiles.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Control Room contributors"
+      },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["hud", "context", "autopilot", "handoff", "permissions", "resources", "profiles", "subagents", "focus"],
+      "source": "./plugins/control-room"
+    }
+  ]
+}

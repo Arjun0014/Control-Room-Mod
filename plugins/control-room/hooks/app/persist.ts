@@ -1,0 +1,106 @@
+/**
+ * Persistence in the plugin's `$.store` (one JSON file shared by every
+ * session on the machine). Settings are one key, written whole and
+ * debounced; each run is its own key so two sessions never overwrite each
+ * other's chains; a small index lists recent runs. Reads are validated —
+ * a corrupt or foreign value falls back to defaults, never throws.
+ */
+
+import { LIMITS, STORE_KEYS } from '../constants'
+import { type Run, isRun, updateIndex } from '../features/chain'
+import { type Settings, normalizeSettings } from '../core/settings'
+import type { Host } from '../host'
+
+export async function loadSettings(host: Host): Promise<{ settings: Settings; isFresh: boolean; wasRepaired: boolean }> {
+  const raw = await host.storeGet(STORE_KEYS.settings).catch(() => undefined)
+  if (raw === undefined || raw === null) return { settings: normalizeSettings(undefined), isFresh: true, wasRepaired: false }
+  const settings = normalizeSettings(raw)
+  return { settings, isFresh: false, wasRepaired: hasChangedValues(raw, settings) }
+}
+
+/** Whether normalising changed a value that was present (missing fields are not repairs). */
+export function hasChangedValues(raw: unknown, normalized: unknown): boolean {
+  if (typeof raw !== 'object' || raw === null) return raw !== normalized
+  if (Array.isArray(raw)) return JSON.stringify(raw) !== JSON.stringify(normalized)
+  if (typeof normalized !== 'object' || normalized === null) return true
+  for (const [key, value] of Object.entries(raw)) {
+    if (!(key in normalized)) continue
+    if (hasChangedValues(value, (normalized as Record<string, unknown>)[key])) return true
+  }
+  return false
+}
+
+export async function loadRun(host: Host, id: string): Promise<Run | null> {
+  const raw = await host.storeGet(`${STORE_KEYS.runPrefix}${id}`).catch(() => undefined)
+  return isRun(raw) ? raw : null
+}
+
+export async function loadIndex(host: Host): Promise<string[]> {
+  const raw = await host.storeGet(STORE_KEYS.runsIndex).catch(() => undefined)
+  return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string').slice(0, LIMITS.runsKept) : []
+}
+
+/** The run whose sessions include `sessionId`, newest first. */
+export async function findRunBySession(host: Host, sessionId: string): Promise<Run | null> {
+  for (const id of await loadIndex(host)) {
+    const run = await loadRun(host, id)
+    if (run?.sessions.some(s => s.id === sessionId)) return run
+  }
+  return null
+}
+
+export async function nextRunNumber(host: Host): Promise<number> {
+  const raw = await host.storeGet(STORE_KEYS.runCounter).catch(() => undefined)
+  const n = (typeof raw === 'number' && Number.isFinite(raw) ? Math.floor(raw) : 0) + 1
+  await host.storeSet(STORE_KEYS.runCounter, n).catch(() => undefined)
+  return n
+}
+
+export async function saveRun(host: Host, run: Run): Promise<void> {
+  await host.storeSet(`${STORE_KEYS.runPrefix}${run.id}`, run)
+  const { index, dropped } = updateIndex(await loadIndex(host), run.id)
+  await host.storeSet(STORE_KEYS.runsIndex, index)
+  for (const old of dropped) await host.storeDelete(`${STORE_KEYS.runPrefix}${old}`).catch(() => undefined)
+}
+
+export async function loadHistory(host: Host, exceptId: string | null): Promise<Run[]> {
+  const out: Run[] = []
+  for (const id of (await loadIndex(host)).slice(0, 10)) {
+    if (id === exceptId) continue
+    const run = await loadRun(host, id)
+    if (run) out.push(run)
+  }
+  return out
+}
+
+/** Coalesces writes: the last value wins, written at most once per `delayMs`. */
+export class Debounced<T> {
+  private pending: T | undefined
+  private timer: { cancel: () => void } | null = null
+
+  constructor(
+    private readonly host: () => Host | null,
+    private readonly write: (host: Host, value: T) => Promise<void>,
+    private readonly delayMs: number,
+  ) {}
+
+  schedule(value: T): void {
+    this.pending = value
+    const host = this.host()
+    if (host === null || this.timer !== null) return
+    this.timer = host.after(this.delayMs, () => {
+      this.timer = null
+      void this.flush()
+    })
+  }
+
+  async flush(): Promise<void> {
+    const host = this.host()
+    const value = this.pending
+    if (host === null || value === undefined) return
+    this.pending = undefined
+    this.timer?.cancel()
+    this.timer = null
+    await this.write(host, value).catch(() => undefined)
+  }
+}

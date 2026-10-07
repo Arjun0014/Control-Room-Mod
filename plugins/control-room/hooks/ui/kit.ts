@@ -65,6 +65,8 @@ export type Kit = {
   now: number
   /** The in-place picker drawn open, by key. */
   openPicker: string | null
+  /** Where a pane sits: docked beside the transcript, or a short frame above the prompt. */
+  placement?: 'dock' | 'inline'
 }
 
 /**

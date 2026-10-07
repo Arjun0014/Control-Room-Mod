@@ -1,8 +1,8 @@
 /**
  * Behavior: how Claude works. One card per system, so each reads on its
- * own: the card title carries the system's live state, the first row is
- * its switch with a one-line description, and its finer settings follow
- * only while it is on.
+ * own: the card title names the system and carries its live state, the
+ * first row says what it does and holds its switch, and its finer settings
+ * follow only while it is on. A row never repeats its card's title.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -32,6 +32,17 @@ const CLASS_LABEL: Record<string, string> = {
   general: 'Other agents',
 }
 
+const STRATEGY_HINT: Record<string, string> = {
+  off: 'every task uses the session model',
+  balanced: 'lighter for quick work',
+  performance: 'stronger for hard work',
+  economy: 'lightest that fits',
+  custom: 'you choose per task',
+}
+
+/** A picker hint ("lighter for quick work") as a row's subtitle ("Lighter for quick work"). */
+const sentence = (hint: string): string => hint.charAt(0).toUpperCase() + hint.slice(1)
+
 const STRICTNESS_HINT: Record<string, string> = {
   lenient: 'Only obvious hand-backs',
   standard: 'Clear signs the job is unfinished',
@@ -55,8 +66,7 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
         rows: k => [
           row(k, {
             key: 'fr-on',
-            label: 'Frontier Max',
-            subtitle: 'Senior-engineer standards and the strongest reasoning the model offers',
+            label: 'Hold Claude to senior-engineer standards',
             control: switchControl(k, {
               key: 'fr-on',
               isOn: s.frontier.enabled,
@@ -76,8 +86,8 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
                 value: s.frontier.effort,
                 options: [
                   { value: 'max', label: 'Maximum', hint: "the model's highest" },
-                  { value: 'xhigh', label: 'Extra high' },
-                  { value: 'high', label: 'High' },
+                  { value: 'xhigh', label: 'Extra high', hint: 'one step below' },
+                  { value: 'high', label: 'High', hint: 'quicker, still careful' },
                   { value: 'keep', label: 'Leave as is', hint: 'policy only' },
                 ],
                 onSelect: v => u(d => void (d.frontier.effort = (['max', 'xhigh', 'high', 'keep'].includes(v) ? v : 'max') as typeof d.frontier.effort)),
@@ -101,8 +111,7 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
         rows: k => [
           row(k, {
             key: 'gu-on',
-            label: 'Lazy-exit guard',
-            subtitle: 'Keeps Claude going when it stops before the job is done',
+            label: 'Keep Claude going when it stops early',
             control: switchControl(k, { key: 'gu-on', isOn: s.guard.enabled, onPress: () => u(d => void (d.guard.enabled = !d.guard.enabled)) }),
           }),
           s.guard.enabled &&
@@ -150,8 +159,8 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
         rows: k => [
           row(k, {
             key: 'qa-on',
-            label: 'Verify before done',
-            subtitle: 'Claude tests before it calls work done, and says what it could not check',
+            label: 'Test before calling work done',
+            subtitle: 'And say plainly what could not be checked',
             control: switchControl(k, { key: 'qa-on', isOn: s.qa.enabled, onPress: () => u(d => void (d.qa.enabled = !d.qa.enabled)) }),
           }),
         ],
@@ -166,17 +175,17 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
         rows: k => [
           row(k, {
             key: 'ro-strategy',
-            label: 'Router',
-            subtitle: s.router.strategy === 'off' ? 'Every task uses the session model' : 'Picks a model for each task',
+            label: 'Pick a model for each task',
+            subtitle: sentence(STRATEGY_HINT[s.router.strategy] ?? ''),
             control: picker(k, {
               key: 'ro-strategy',
               value: s.router.strategy,
               options: [
-                { value: 'off', label: 'Off' },
-                { value: 'balanced', label: 'Balanced', hint: 'lighter for quick work' },
-                { value: 'performance', label: 'Performance', hint: 'stronger for hard work' },
-                { value: 'economy', label: 'Economy', hint: 'lightest that fits' },
-                { value: 'custom', label: 'Custom', hint: 'you choose per task' },
+                { value: 'off', label: 'Off', hint: STRATEGY_HINT.off },
+                { value: 'balanced', label: 'Balanced', hint: STRATEGY_HINT.balanced },
+                { value: 'performance', label: 'Performance', hint: STRATEGY_HINT.performance },
+                { value: 'economy', label: 'Economy', hint: STRATEGY_HINT.economy },
+                { value: 'custom', label: 'Custom', hint: STRATEGY_HINT.custom },
               ],
               onSelect: v => u(d => void (d.router.strategy = (['off', 'balanced', 'performance', 'economy', 'custom'].includes(v) ? v : 'off') as typeof d.router.strategy)),
             }),

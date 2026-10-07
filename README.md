@@ -18,55 +18,60 @@ Desktop's Code tab. One plugin gives you:
 The status bar shows live readings only (context, cost, CPU, memory, running agents) and events as they happen:
 
 ```
-◆   Context ━━━━━━──── 69%   $78.35   CPU ▂▃▅▃ 23%   RAM ▇▇▇▇ 79%   2 agents        Control Room
+◆   Context ━━━━━━━─── 69%   $78.35   CPU ▂▃▅▃▂▃ 23%   RAM ▇▇▇▇▇▇ 79%   2 agents        Control Room
 ```
 
 The panel answers one question per section. This is Overview:
 
 ```
-◆ Control Room                                   Normal · edited
+◆ Control Room                                            Normal
 
 Overview   Context   Behavior   Guardrails   Activity   Setup
 ━━━━━━━━────────────────────────────────────────────────────────
 
-Context                                                        —
-────────────────────────────────────────────┃───────────────────
-Waiting for the first response                 hands off at 700k
+Context   ━━──────────────────────────────────────────────    5%
+          52k of 1M tokens
+Cost      $0.41 this session
+Machine   CPU 16%   Memory 72%
 
-Cost                                                       $0.00
-This session
+╭──────────────────────────────────────────────────────────────╮
+│ Profile                                             Normal ▾ │
+│ Claude Code as usual, quieter                                │
+╰──────────────────────────────────────────────────────────────╯
 
-Profile                 Normal ▾  edited
+CONTEXT                                                   Open ›
+╭──────────────────────────────────────────────────────────────╮
+│ Autopilot                                              ○ Off │
+╰──────────────────────────────────────────────────────────────╯
 
-SYSTEMS
-Autopilot               ● On  Hands off at 70%
-Frontier Max            ● On  Maximum effort
-Lazy-exit guard         ● On  Watching for early stops
-Release check           ○ Off
-Focus view              ● On  Compact transcript
-Machine load            ● On  Medium · CPU 16% · Memory 80%
-Subagents               No limit ›
-Model router            Off ›
+BEHAVIOR                                                  Open ›
+╭──────────────────────────────────────────────────────────────╮
+│ Frontier Max                                           ○ Off │
+│ Lazy-exit guard                                        ○ Off │
+│ Release check                                          ○ Off │
+│ Model router                                           Off › │
+╰──────────────────────────────────────────────────────────────╯
 ```
 
-Choices open in place, each with one line on what it means. They work with a click or with Tab
-and Enter:
+Guardrails and Activity follow below. Choices open in place, each with one line on what it means.
+They work with a click or with Tab and Enter:
 
 ```
-Package installs        Ask ▾
-Network access          Default ▾
-Downloads               Ask ▴  e.g. wget https://…/model.bin
-                        ○ Default  Claude Code decides
-                        ○ Allow    answers prompts for you
-                        ● Ask      always asks you first
-                        ○ Deny     never runs
-Project edits           Default ▾
+│ Package installs                                       Ask ▾ │
+│ Network access                                     Default ▾ │
+│ Downloads                                              Ask ▴ │
+│ e.g. wget https://…/model.bin                                │
+│   ○ Default  Claude Code decides                             │
+│   ○ Allow    answers prompts for you                         │
+│   ● Ask      always asks you first                           │
+│   ○ Deny     never runs                                      │
+│ Project edits                                      Default ▾ │
 ```
 
-<sub>Captured from a real 150-column terminal (Windows 11, Claude Code 2.1.292), before the first
-response. That is why context reads "—" and cost reads $0.00. The first line's meter shows how
-it looks once there is a reading. On Desktop the same controls are native buttons and popups, and
-the meters are drawn as graphics.</sub>
+<sub>Captured from a real 150-column terminal (Windows 11, Claude Code 2.1.292) after one short
+reply, with the panel docked beside the conversation. In a narrower terminal the panel opens in a
+frame above the prompt. On Desktop the same controls are native buttons and popups, and the meters
+are drawn as graphics.</sub>
 
 ---
 
@@ -93,7 +98,7 @@ Further reading: [Configuration](docs/CONFIGURATION.md) ·
 
 | System | What it does | Default |
 | --- | --- | --- |
-| **Status bar** | One line above the prompt: context (a thin meter and %), cost, Frontier Max or a non-default profile, and the Autopilot's state. Machine load, running agents and guard activity appear only when they matter. Items drop by priority as the terminal narrows. A second line appears only when something needs you. | On |
+| **Status bar** | One line above the prompt, live readings only: context (a thin meter and %), cost, CPU and memory, running agents, and Autopilot events as they happen. Items drop by priority as the terminal narrows. A second line appears only when something needs you. | On |
 | **Control Room panel** | Six sections: Overview, Context, Behavior, Guardrails, Activity, Setup. In the terminal: switches, segmented choices, choices that open in place, and − / + steppers. Every control works with a click or with Tab and Enter, and there are no popups to get stuck in. On Desktop: native buttons and popups, plus graphical meters. | `/cr` opens it |
 | **Autopilot** (Context Autopilot) | At a threshold (a % of the window, or tokens), Claude finishes the step it is on. Then it runs a handoff: it verifies the state, updates project docs, records unfinished work, runs a minimal validation and writes `NEXT_SESSION_PROMPT.md` in its own words. Control Room then runs `/clear`, seeds the fresh context, and Claude continues on its own. Compaction is only a fallback for when clearing is refused. | Off |
 | **Session chain** | Follows a run across context resets: sessions, times, peak context, cost per session as Claude Code reports it, total cost, handoffs. | On |
@@ -178,11 +183,11 @@ It shows live readings only. Settings live in the panel.
 | --- | --- |
 | `Context ━━━━──── 31%` | Live context. The meter turns amber at 85% of the Autopilot threshold and red at it (with Autopilot off: 90% of the window). The orange tick is the threshold. |
 | `$4.18` | This session's cost as Claude Code reports it. `run $9.40` is added when a run spans several sessions; `+` means some session's cost was not reported. |
-| `CPU ▂▃▅ 23%` · `RAM 79%` | Machine-wide CPU and memory, with recent history in wide terminals. Amber near a ceiling, red at it. Turn off in Setup → *Live CPU and memory*. |
+| `CPU ▂▃▅▃▂▃ 23%` · `RAM 79%` | Machine-wide CPU and memory, every 3 s. In terminals 110 columns or wider, the last six readings appear as a sparkline once there are six. Amber near a ceiling, red at it. Turn off in Setup → *Live CPU and memory*. |
 | `Handoff soon` | Autopilot events as they happen: `Handoff soon`, `Writing the handoff`, `Starting fresh`, `Resuming`, `Waiting for you`. |
 | `2 agents` | Subagents are running (`2 of 2 agents` with a limit). |
 | `Kept going ×1` | The lazy-exit guard continued this turn. |
-| `Control Room` | Opens or closes the panel. |
+| `Control Room` | Opens or closes the panel (`Open` or `Close` when the bar is narrow). |
 
 When a handoff is about to happen, a second line offers **Hand off now** and **Later**. If a
 handoff ever waits for you, it offers **Start fresh**.
@@ -190,14 +195,16 @@ handoff ever waits for you, it offers **Start fresh**.
 ### The Control Room panel
 
 `/cr` (or `/control-room`) opens or closes it, and so does the status bar's button. In the
-fullscreen terminal it docks beside the conversation. Opened by you, it seats at any width. If it
-opens on its own (*Open at session start*), it waits for 144 columns.
+fullscreen terminal from 110 columns it docks beside the conversation; otherwise it opens in a
+frame above the prompt, where a wide terminal keeps the page to 80 columns, centred. Opened by
+you, it seats at any width. If it opens on its own (*Open at session start*), it waits for 144
+columns.
 
 Click anything, or move with **Tab**, choose with **Enter**, and return to the prompt with **Esc**.
 
 | Section | Answers |
 | --- | --- |
-| **Overview** | How is this session doing? Context and cost, the profile, and every system with its switch and one line of state. Anything that needs you sits on top. |
+| **Overview** | How is this session doing? Context, cost and the machine at a glance, the profile, then one card per section with its systems, each with its switch and one line of state. Anything that needs you sits on top. |
 | **Context** | When does Claude hand off? The Autopilot's state, meter and settings, then the run's sessions and earlier runs. |
 | **Behavior** | How does Claude work? Frontier Max, Release check, the lazy-exit guard and the model router. Finer settings appear only while a system is on. |
 | **Guardrails** | What may Claude do, and how hard may it push the machine? Permissions, subagents, machine load with live meters, and Claude's background jobs. |

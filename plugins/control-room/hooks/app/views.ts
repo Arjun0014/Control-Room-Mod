@@ -285,11 +285,14 @@ export function paneOf(rt: Runtime): PaneModel {
 
 export function resourcesOf(rt: Runtime): ResourcesView {
   const ceilings = rt.effective.resources.ceilings
+  // The newest reading, as the status bar shows it. Pressure (a smoothed
+  // window) exists only under ceilings; readings alone still have values.
+  const latest = rt.monitor.status === 'live' ? rt.monitor.latest() : null
   return {
     status: rt.monitor.status,
     platform: rt.monitor.platform,
-    cpu: rt.monitor.pressure.cpu,
-    ram: rt.monitor.pressure.ram,
+    cpu: latest?.cpu ?? null,
+    ram: latest?.ram ?? null,
     level: rt.monitor.pressure.level,
     ceilings: ceilings === null ? null : { cpu: ceilings.cpu, ram: ceilings.ram, maxHeavy: ceilings.maxHeavy },
     cpuSeries: rt.monitor.cpuSeries(40),

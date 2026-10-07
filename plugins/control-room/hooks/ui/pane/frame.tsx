@@ -86,14 +86,25 @@ function page(kit: Kit, data: PaneData): RenderElement {
   }
 }
 
+/**
+ * The widest a page draws in the terminal. Beyond it a row's label and its
+ * control drift too far apart to read as one line (an inline frame in a wide
+ * terminal spans the screen), so the page keeps to the left at this width.
+ */
+export const MAX_COLUMNS = 80
+
 export function paneView(base: Kit, data: PaneData): RenderElement {
-  const kit: Kit = { ...base, openPicker: data.pane.openPicker, columns: Math.max(24, base.columns - 2) }
+  const inner = Math.max(24, base.columns - 2)
+  const columns = base.surface === 'terminal' ? Math.min(MAX_COLUMNS, inner) : inner
+  const kit: Kit = { ...base, openPicker: data.pane.openPicker, columns }
   const { Box, Text } = kit.ui
   const notes = data.pane.notes
-  return (
-    <Box flexDirection="column" paddingX={1}>
+  // A short frame above the prompt: the tabs sit right under the title, so the page starts sooner.
+  const isShort = kit.placement === 'inline' && kit.surface === 'terminal'
+  const body = (
+    <Box key="page-body" flexDirection="column" paddingX={1} width={columns === inner ? undefined : columns + 2}>
       {header(kit, data)}
-      <Box key="nav-wrap" marginTop={1} flexDirection="column">
+      <Box key="nav-wrap" marginTop={isShort ? 0 : 1} flexDirection="column">
         {navBar(kit, { tabs: TABS, current: data.pane.tab, onSelect: id => kit.actions.setTab(id) })}
       </Box>
       {notes.length === 0 ? null : (
@@ -111,6 +122,13 @@ export function paneView(base: Kit, data: PaneData): RenderElement {
           </Text>
         </Box>
       ) : null}
+    </Box>
+  )
+  // Capped in a wider frame: centred, so the margins match.
+  if (columns === inner) return body
+  return (
+    <Box flexDirection="column" alignItems="center">
+      {body}
     </Box>
   )
 }

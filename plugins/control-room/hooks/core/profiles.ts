@@ -7,6 +7,7 @@
  * as modified. Pure: no engine access.
  */
 
+import { tokens as fmtTokens } from './format'
 import {
   type CustomProfile,
   DEFAULT_PERMISSIONS,
@@ -137,29 +138,30 @@ export function profileLabel(settings: Settings): string {
 
 export type SettingChange = { path: string; label: string; from: string; to: string }
 
+/** Each setting's name, in the panel's own words. */
 const LABELS: Record<string, string> = {
   'autopilot.enabled': 'Autopilot',
-  'autopilot.thresholdMode': 'Measure by',
-  'autopilot.thresholdTokens': 'Hand off at (tokens)',
-  'autopilot.thresholdPercent': 'Hand off at (%)',
-  'autopilot.continuation': 'Then',
-  'autopilot.fallbackToCompact': 'If clearing fails',
+  'autopilot.thresholdMode': 'Measure in',
+  'autopilot.thresholdTokens': 'Hand off at',
+  'autopilot.thresholdPercent': 'Hand off at',
+  'autopilot.continuation': 'After the notes',
+  'autopilot.fallbackToCompact': 'If clearing fails, compact',
   'autopilot.handoffFile': 'Notes file',
-  'autopilot.autoContinue': 'Continue on its own',
+  'autopilot.autoContinue': 'Carry on by itself',
   'frontier.enabled': 'Frontier Max',
   'frontier.effort': 'Effort',
   'frontier.subagentEffort': 'Effort for subagents',
   'qa.enabled': 'Release check',
   'guard.enabled': 'Lazy-exit guard',
   'guard.strictness': 'Guard strictness',
-  'guard.maxPerTurn': 'Continuations per turn',
-  'guard.maxPerSession': 'Continuations per session',
+  'guard.maxPerTurn': 'Guard nudges per turn',
+  'guard.maxPerSession': 'Guard nudges per session',
   'guard.modelCheck': 'Smart check',
   'router.strategy': 'Model router',
   'router.mainLoop': 'Route main conversation',
   'router.subagents': 'Route subagents',
   'subagents.mode': 'Subagents',
-  'subagents.limit': 'Subagent limit',
+  'subagents.limit': 'Subagents at most',
   'subagents.countTeammates': 'Count teammates',
   'focus.enabled': 'Focus view',
   'focus.tools': 'Tool calls',
@@ -169,7 +171,7 @@ const LABELS: Record<string, string> = {
   'resources.level': 'Machine load',
   'resources.cpu': 'CPU ceiling',
   'resources.ram': 'Memory ceiling',
-  'resources.intervalSec': 'Sample interval',
+  'resources.intervalSec': 'Sample every',
   'resources.enforcement': 'When over',
 }
 
@@ -177,10 +179,28 @@ for (const category of PERMISSION_CATEGORIES) {
   LABELS[`permissions.${category}`] = PERMISSION_LABEL[category]
 }
 
-const show = (v: unknown): string => {
-  if (typeof v === 'boolean') return v ? 'on' : 'off'
-  if (typeof v === 'number') return v >= 10_000 ? `${Math.round(v / 1000)}k` : String(v)
-  if (typeof v === 'string') return v
+/** The panel's word for a stored value, where it is not just the value capitalised. */
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+  'autopilot.continuation': { clear: 'Start fresh', compact: 'Compact', manual: 'Wait for me' },
+  'frontier.effort': { max: 'Maximum', xhigh: 'Extra high', high: 'High', keep: 'Leave as is' },
+  'subagents.mode': { unrestricted: 'No limit', limit: 'Up to a number', ask: 'Ask each time', block: 'None' },
+  'focus.tools': { compact: 'One line', hidden: 'Hidden' },
+  'resources.enforcement': { inform: 'Just tell Claude', limit: 'Hold extra heavy jobs', strict: 'Hold all heavy jobs' },
+}
+
+const UNITS: Record<string, (n: number) => string> = {
+  'autopilot.thresholdPercent': n => `${n}%`,
+  'autopilot.thresholdTokens': n => fmtTokens(n),
+  'resources.cpu': n => `${n}%`,
+  'resources.ram': n => `${n}%`,
+  'resources.intervalSec': n => `${n} s`,
+}
+
+/** A stored value as the panel shows it: "On", "Maximum", "70%", "700k". */
+function show(path: string, v: unknown): string {
+  if (typeof v === 'boolean') return v ? 'On' : 'Off'
+  if (typeof v === 'number') return UNITS[path]?.(v) ?? String(v)
+  if (typeof v === 'string') return VALUE_LABELS[path]?.[v] ?? (/^[a-z]+$/.test(v) ? v.charAt(0).toUpperCase() + v.slice(1) : v)
   return JSON.stringify(v)
 }
 
@@ -203,7 +223,7 @@ export function diffSystems(from: SystemSettings, to: SystemSettings): SettingCh
     const prev = a.get(path)
     if (deepEqual(prev, next)) continue
     if (path.startsWith('router.custom.')) continue
-    changes.push({ path, label: LABELS[path] ?? path, from: show(prev), to: show(next) })
+    changes.push({ path, label: LABELS[path] ?? path, from: show(path, prev), to: show(path, next) })
   }
   return changes
 }

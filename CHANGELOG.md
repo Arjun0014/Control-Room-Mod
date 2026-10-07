@@ -23,6 +23,27 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 - **Behavior** gives each system its own card, with its live state in the title.
 - **Desktop:** the section buttons form an even grid (one row when wide, three per row when narrow),
   and rows are spaced so native buttons never touch.
+- **Overview** opens with a compact block of live readings: context with its meter, cost, CPU and
+  memory. The first screen now shows the systems too, even in the short frame above the prompt.
+- **No repeated titles.** A row never repeats its card's title. Behavior's cards say what each
+  system does ("Keep Claude going when it stops early"), Context's reads "Hand off before the
+  context fills up", and Subagents reads "Allowed  No limit". Overview's profile row has no title.
+- Wide controls such as segmented choices move under their label sooner, so a description never
+  wraps into a narrow column beside them.
+- **Terminal:** a page is at most 80 columns, centred in a wider frame. In the frame above the prompt
+  the tabs sit right under the title. Action buttons keep a blank line above them.
+- **Setup** lists changes in the panel's own words and units (`Effort  Maximum › High`,
+  `Hand off at  70% › 75%`). The field for saving a profile reads "Type a name".
+- The status bar's sparklines appear once there are six readings, so the bar does not shift with
+  each new sample. Guardrails' sparklines grow from the right.
+
+### Fixed
+
+- Guardrails' CPU and memory gauges read "—" while live readings were on without a machine-load
+  limit. They now show the same readings as the status bar.
+- In a narrow status bar, the panel button read "Open" while the panel was open. After a hot reload
+  Control Room also forgot that the panel was open.
+- `/control-room`'s description listed the sections of 0.1.
 
 ## [0.2.0] - 2026-10-07
 

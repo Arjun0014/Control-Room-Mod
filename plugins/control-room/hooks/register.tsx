@@ -116,13 +116,14 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export const register: Register = on => {
   const rt = new Runtime()
   const actions = actionsOf(rt)
-  const kitOf = (table: Parameters<typeof uiOf>[0], columns: number, surface: RenderSurface): Kit => ({
+  const kitOf = (table: Parameters<typeof uiOf>[0], columns: number, surface: RenderSurface, placement?: Kit['placement']): Kit => ({
     ui: uiOf(table, surface),
     actions,
     columns: Math.max(20, columns),
     surface,
     now: Date.now(),
     openPicker: null,
+    placement,
   })
 
   // -------------------------------------------------------------------------
@@ -324,7 +325,7 @@ export const register: Register = on => {
       activity: needs.includes('activity') ? await read($, activityAtom) : undefined,
       permissions: needs.includes('permissions') ? await read($, permissionsAtom) : undefined,
     }
-    return paneView(kitOf($.ui.resolve(e), e.props.bodyColumns, e.surface), data)
+    return paneView(kitOf($.ui.resolve(e), e.props.bodyColumns, e.surface, e.props.placement), data)
   })
 
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {

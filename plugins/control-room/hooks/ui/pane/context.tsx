@@ -150,8 +150,7 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
         rows: k => [
           row(k, {
             key: 'ap-enabled',
-            label: 'Autopilot',
-            subtitle: 'Hand off before the context fills up',
+            label: 'Hand off before the context fills up',
             control: switchControl(k, { key: 'ap-enabled', isOn: s.enabled, onPress: () => u(d => void (d.autopilot.enabled = !d.autopilot.enabled)) }),
           }),
           s.enabled && row(k, { key: 'ap-threshold', label: 'Hand off at', subtitle: s.thresholdMode === 'percent' ? 'Of the context window' : 'Tokens in the context', control: threshold }),

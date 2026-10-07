@@ -41,8 +41,6 @@ compact. The Context section says when this clamp applies.
 
 In the panel: **Behavior**.
 
-In the panel: **Behavior**.
-
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
 | `enabled` | on / off | off | `/cr frontier on` also turns the guard on |
@@ -108,7 +106,7 @@ In the panel: **Guardrails**.
 
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `mode` | `unrestricted` / `block` / `ask` / `limit` | `unrestricted` | `block` hides the agent types and refuses spawns. `ask` asks you each time (and refuses in headless runs). |
+| `mode` | `unrestricted` / `limit` / `ask` / `block` | `unrestricted` | *Allowed*: No limit, Up to a number, Ask each time, None. `block` (None) hides the agent types and refuses spawns. `ask` asks you each time (and refuses in headless runs). `limit` refuses a spawn while the limit is running, and Claude waits or does the work itself. |
 | `limit` | 1–16 | 2 | For `limit`: the maximum running at once |
 | `countTeammates` | on / off | on | Count agent-team teammates against the limit |
 
@@ -134,7 +132,7 @@ In the panel: **Guardrails**.
 | --- | --- | --- | --- |
 | `level` | `off` / `low` / `medium` / `high` / `custom` | `off` | |
 | `cpu`, `ram` | 10–100 (%) | 70, 85 | Used by `custom` |
-| `intervalSec` | 2–60 | 5 | Sampling interval |
+| `intervalSec` | 2–60 | 3 | Seconds between readings, for the status bar's live CPU and memory and for the ceilings |
 | `enforcement` | `inform` / `limit` / `strict` | `limit` | *When over*. `inform` (Just tell Claude): notices only. `limit` (Hold extra heavy jobs): also hold back *additional* heavy jobs over a ceiling. `strict` (Hold all heavy jobs): hold back every new heavy job while over a ceiling. |
 
 | Level | CPU ceiling | RAM ceiling | Heavy jobs at once (over a ceiling) |
@@ -179,12 +177,11 @@ Each category is `default` (shown as *Default*: Claude Code decides), `allow`, `
 
 In the panel: **Setup**.
 
-In the panel: **Setup**.
-
 | Setting | Values | Default | Notes |
 | --- | --- | --- | --- |
 | `hud` | `band` / `status` / `both` / `off` | `band` | *Status bar*: above the prompt, in Claude Code's status line, both, or hidden |
 | `toasts` | on / off | on | Brief notices on state changes |
+| `liveLoad` | on / off | on | *Live CPU and memory*: machine-wide readings in the status bar and in Guardrails, sampled every `resources.intervalSec` seconds, even with no machine-load limit. Off stops the sampler unless a limit needs it. It is not sampled while the status bar is hidden. |
 | `openOnStart` | on / off | off | Open the Control Room panel when a session starts. In the terminal it seats from 144 columns. |
 
 ## Profiles
@@ -192,5 +189,6 @@ In the panel: **Setup**.
 A profile is a complete set of the systems above (everything except Display). The built-in
 profiles are described in the [README](../README.md#profiles). Custom profiles are saved from
 Setup with a name. Saving a name again replaces that profile, and custom profiles can be
-deleted there. `profile` records which profile was applied last, and the UI adds `*` when the
-current settings differ from it ("Normal · edited"), and Setup lists each change.
+deleted there. `profile` records which profile was applied last. When the current settings differ from it, the
+panel reads "Normal · edited" and Setup lists each change in the panel's own words
+(`Effort  Maximum › High`), with *Back to Normal* and *Keep as a profile*.

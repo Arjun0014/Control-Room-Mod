@@ -94,8 +94,10 @@ export function card(
 
 /**
  * A settings row: label (and a dim description under it) on the left, the
- * control or value on the right. A control wider than about half the row
- * moves under the label. An open picker's options appear under the row.
+ * control or value on the right. A control wider than about two fifths of
+ * the row (a segmented choice) moves under the label, so the description
+ * never wraps into a narrow column beside it. An open picker's options
+ * appear under the row.
  */
 export function row(
   kit: Kit,
@@ -103,7 +105,7 @@ export function row(
 ): RenderElement {
   const { Box, Text } = kit.ui
   const control = input.control
-  const isStacked = control !== undefined && control.width > Math.max(12, Math.floor(kit.columns * 0.55))
+  const isStacked = control !== undefined && control.width > Math.max(12, Math.floor(kit.columns * 0.42))
   const subtitle = input.subtitle === undefined || input.subtitle === '' ? null : input.subtitle
   const subtitleTone = input.subtitleTone ?? 'muted'
   const subtitleEl = subtitle === null ? null : (
@@ -123,7 +125,7 @@ export function row(
     <Box key={`row-${input.key}`} flexDirection="column">
       <Box flexDirection="row" columnGap={2}>
         <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-          <Text dimColor={input.isDim === true ? true : undefined} wrap="truncate-end">
+          <Text dimColor={input.isDim === true ? true : undefined} wrap="wrap">
             {input.label}
           </Text>
           {isStacked ? null : subtitleEl}
@@ -149,19 +151,51 @@ export function row(
   )
 }
 
-/** Label left, value right, on one line; an optional dim line under it. */
-export function stat(kit: Kit, input: { key: string; label: string; value: string; tone?: Tone; under?: string; underRight?: string }): RenderElement {
+/** The width of a field's label column, in cells. */
+export const FIELD_LABEL = 10
+
+/**
+ * A readout line: a dim label in a fixed column, then its content
+ * ("Cost      $4.18 this session"). Fields stacked together line up, so a
+ * block of them reads as one calm table. `under` is a dim line aligned
+ * with the content.
+ */
+export function field(kit: Kit, input: { key: string; label: string; content: RenderElement; under?: string }): RenderElement {
   const { Box, Text } = kit.ui
   return (
-    <Box key={`stat-${input.key}`} flexDirection="column">
-      <Box flexDirection="row" justifyContent="space-between">
-        <Text dimColor>{input.label}</Text>
-        <Text bold {...toneProps(input.tone ?? 'normal')}>
-          {input.value}
-        </Text>
+    <Box key={`field-${input.key}`} flexDirection="column">
+      <Box flexDirection="row">
+        <Box width={FIELD_LABEL} flexShrink={0}>
+          <Text dimColor>{input.label}</Text>
+        </Box>
+        <Box flexGrow={1} flexShrink={1}>
+          {input.content}
+        </Box>
       </Box>
-      {input.under === undefined && input.underRight === undefined ? null : pair(kit, { key: `${input.key}-under`, left: input.under ?? '', right: input.underRight })}
+      {input.under === undefined || input.under === '' ? null : (
+        <Box key={`field-${input.key}-under`} marginLeft={FIELD_LABEL}>
+          <Text dimColor wrap="truncate-end">
+            {input.under}
+          </Text>
+        </Box>
+      )}
     </Box>
+  )
+}
+
+export type Run = { text: string; tone?: Tone; isBold?: boolean }
+
+/** One line of differently styled runs ("$4.18" bold, " this session" dim). */
+export function textRuns(kit: Kit, key: string, runs: readonly Run[]): RenderElement {
+  const { Text } = kit.ui
+  return (
+    <Text key={key} wrap="truncate-end">
+      {runs.map((r, i) => (
+        <Text key={`${key}-${i}`} {...toneProps(r.tone ?? 'normal')} bold={r.isBold === true ? true : undefined}>
+          {r.text}
+        </Text>
+      ))}
+    </Text>
   )
 }
 
@@ -194,7 +228,7 @@ export function callout(
   const { Box, Text } = kit.ui
   const color = toneProps(input.tone).color ?? 'text'
   return (
-    <Box key={`callout-${input.key}`} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} marginTop={1}>
+    <Box key={`callout-${input.key}`} flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} marginTop={1} rowGap={isNative(kit) ? 1 : 0}>
       <Text bold color={color}>
         {input.title}
       </Text>
@@ -204,13 +238,23 @@ export function callout(
   )
 }
 
-/** Explicit actions: `[ Hand off now ]` in the terminal, native buttons elsewhere. */
-export function buttons(kit: Kit, list: readonly { key: string; label: string; onPress: () => void; isPrimary?: boolean; isHidden?: boolean }[], key = 'actions'): RenderElement | null {
+/**
+ * Explicit actions: `[ Hand off now ]` in the terminal, native buttons
+ * elsewhere. In the terminal an action row keeps a blank line above it, so
+ * it never sits flush under text (native surfaces space rows themselves);
+ * `isInline` drops that for a button used as a row's control.
+ */
+export function buttons(
+  kit: Kit,
+  list: readonly { key: string; label: string; onPress: () => void; isPrimary?: boolean; isHidden?: boolean }[],
+  key = 'actions',
+  isInline = false,
+): RenderElement | null {
   const { Box, Button } = kit.ui
   const shown = list.filter(b => b.isHidden !== true)
   if (shown.length === 0) return null
   return (
-    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={isNative(kit) ? 1 : 0}>
+    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={isNative(kit) ? 1 : 0} marginTop={isInline || isNative(kit) ? 0 : 1}>
       {shown.map(b => (
         <Button key={b.key} label={b.label} variant={b.isPrimary === true ? 'primary' : 'secondary'} onPress={b.onPress} />
       ))}
@@ -501,7 +545,7 @@ export function gauge(
         </Box>
         {sparkWidth === 0 ? null : (
           <Text dimColor key={`gauge-${input.key}-spark`}>
-            {sparkline(series, sparkWidth)}
+            {sparkline(series, sparkWidth).padStart(sparkWidth)}
           </Text>
         )}
       </Box>

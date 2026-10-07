@@ -103,7 +103,22 @@ describe('profiles', () => {
     expect(paths).toContain('autopilot.enabled')
     expect(paths).toContain('resources.level')
     expect(paths).not.toContain('permissions.dangerous')
-    expect(changes.find(c => c.path === 'frontier.enabled')).toEqual({ path: 'frontier.enabled', label: 'Frontier Max', from: 'off', to: 'on' })
+    expect(changes.find(c => c.path === 'frontier.enabled')).toEqual({ path: 'frontier.enabled', label: 'Frontier Max', from: 'Off', to: 'On' })
+    // Values read as the panel shows them.
+    expect(changes.find(c => c.path === 'resources.level')).toMatchObject({ from: 'Off', to: 'Medium' })
+    const tuned: ReturnType<typeof systemsOf> = JSON.parse(JSON.stringify(systemsOf(base)))
+    tuned.autopilot.thresholdPercent = 75
+    tuned.autopilot.thresholdTokens = 1_500_000
+    tuned.resources.intervalSec = 5
+    tuned.frontier.effort = 'xhigh'
+    const units = diffSystems(systemsOf(base), tuned)
+    expect(units.find(c => c.path === 'autopilot.thresholdPercent')).toMatchObject({ label: 'Hand off at', to: '75%' })
+    expect(units.find(c => c.path === 'autopilot.thresholdTokens')?.to).toBe('1.5M')
+    expect(units.find(c => c.path === 'resources.intervalSec')?.to).toBe('5 s')
+    expect(units.find(c => c.path === 'frontier.effort')).toMatchObject({ from: 'Maximum', to: 'Extra high' })
+    const lowRes = diffSystems(systemsOf(base), findProfile(base, 'low-resource')!.systems)
+    expect(lowRes.find(c => c.path === 'resources.enforcement')).toMatchObject({ label: 'When over', from: 'Hold extra heavy jobs', to: 'Hold all heavy jobs' })
+    expect(lowRes.find(c => c.path === 'subagents.mode')).toMatchObject({ from: 'No limit', to: 'Up to a number' })
   })
 
   test('Release/QA tightens permissions but never loosens them', () => {

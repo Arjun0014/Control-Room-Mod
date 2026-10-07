@@ -32,7 +32,7 @@ const LEVELS = [
 
 const AGENT_HINT: Record<string, string> = {
   unrestricted: 'Claude may run helpers in parallel',
-  limit: 'At most this many at once',
+  limit: 'Past the limit, Claude waits or does it itself',
   ask: 'You approve each one',
   block: 'Claude works alone; agent types are hidden from it',
 }
@@ -102,16 +102,16 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
         rows: k => [
           row(k, {
             key: 'sa-mode',
-            label: 'Subagents',
+            label: 'Allowed',
             subtitle: AGENT_HINT[s.subagents.mode],
             control: picker(k, {
               key: 'sa-mode',
               value: s.subagents.mode,
               options: [
-                { value: 'unrestricted', label: 'No limit' },
-                { value: 'limit', label: 'Limit', hint: 'at most a number at once' },
-                { value: 'ask', label: 'Ask each time' },
-                { value: 'block', label: 'Off', hint: 'Claude works alone' },
+                { value: 'unrestricted', label: 'No limit', hint: 'helpers run in parallel' },
+                { value: 'limit', label: 'Up to a number', hint: 'at most a few at once' },
+                { value: 'ask', label: 'Ask each time', hint: 'you approve each one' },
+                { value: 'block', label: 'None', hint: 'Claude works alone' },
               ],
               onSelect: v => u(d => void (d.subagents.mode = (['unrestricted', 'limit', 'ask', 'block'].includes(v) ? v : 'unrestricted') as typeof d.subagents.mode)),
             }),
@@ -207,7 +207,7 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
           ...(resources === undefined
             ? []
             : resources.background.map(b => {
-                const stop = buttons(k, [{ key: `stop-${b.id}`, label: 'Stop', onPress: () => kit.actions.stopTask(b.id) }], `stop-wrap-${b.id}`)
+                const stop = buttons(k, [{ key: `stop-${b.id}`, label: 'Stop', onPress: () => kit.actions.stopTask(b.id) }], `stop-wrap-${b.id}`, true)
                 return row(k, {
                   key: `bg-${b.id}`,
                   label: b.label,

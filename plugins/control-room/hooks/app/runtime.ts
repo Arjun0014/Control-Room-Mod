@@ -186,18 +186,21 @@ export class Runtime {
     if (host === null) return
     await this.ensureLoaded()
     this.cwd = e.cwd
-    const [root, id, version, surfaces, model] = await Promise.all([
+    const [root, id, version, surfaces, model, panes] = await Promise.all([
       host.sessionRoot().catch(() => e.cwd),
       host.sessionId().catch(() => null),
       host.version().catch(() => null),
       host.surfaces().catch(() => [] as readonly RenderSurface[]),
       host.sessionModel().catch(() => ''),
+      host.panes().catch(() => []),
     ])
     this.root = root
     this.sessionId = id
     this.engineVersion = version?.version ?? null
     this.surfaces = [...surfaces]
     this.sessionModel = model
+    // A hot reload starts a fresh Runtime under a panel that is still open.
+    this.ui.isPaneOpen = panes.some(p => p.id === PANE_ID)
     if (this.engineVersion !== null && !versionAtLeast(this.engineVersion, MIN_ENGINE)) {
       this.note(`Claude Code ${this.engineVersion} is older than ${MIN_ENGINE}, the version Control Room was verified on; some features may not work.`)
     }
@@ -223,7 +226,7 @@ export class Runtime {
     try {
       await host.registerCommand({
         name: COMMAND,
-        description: 'Open the Control Room (status, autopilot, modes, resources, permissions, chain, activity, profiles)',
+        description: 'Open Control Room: context, behavior, guardrails, activity and setup',
         argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|frontier|focus|resources <level>|agents <mode>]',
       })
       this.commandsRegistered.add(COMMAND)

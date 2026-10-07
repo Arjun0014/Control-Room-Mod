@@ -14,7 +14,7 @@ import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { callout, card, link, listItem, meterBar, pair, picker, row, stat, switchControl } from '../primitives'
+import { FIELD_LABEL, callout, card, field, link, listItem, meterBar, picker, row, switchControl, textRuns } from '../primitives'
 import { ACCENT, G } from '../theme'
 import type { PaneData } from './frame'
 
@@ -71,8 +71,10 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
 
   const fraction = ctx.tokens !== null && ctx.window !== null && ctx.window > 0 ? ctx.tokens / ctx.window : 0
   const marker = ctx.threshold !== null && ctx.window !== null && ctx.window > 0 ? ctx.threshold / ctx.window : null
-  const runCost = hud.cost.runUsd !== null && hud.cost.usd !== null && hud.cost.runUsd - hud.cost.usd > 0.005 ? `${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} this run` : undefined
+  const hasRunCost = hud.cost.runUsd !== null && hud.cost.usd !== null && hud.cost.runUsd - hud.cost.usd > 0.005
   const load = hud.load
+  const pct = (n: number | null) => (n === null ? G.none : `${Math.round(n)}%`)
+  const readingTone = (t: Tone): Tone => (t === 'warn' || t === 'bad' ? t : 'normal')
 
   const toggle = (k: Kit, key: string, label: string, isOn: boolean, onPress: () => void, status: StatusView) =>
     row(k, { key, label, control: switchControl(k, { key, isOn, onPress }), ...(isOn ? subtitleOf(status) : {}) })
@@ -80,40 +82,64 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
   const profiles = listProfiles(s).map(p => ({ value: p.id, label: p.name, hint: p.tagline }))
   const activeProfile = profiles.find(p => p.value === s.profile)
 
+  // The context line: the meter across the room the label leaves, the % at its end.
+  const pctText = (ctx.pct === null ? G.none : `${ctx.pct}%`).padStart(5)
+  const meterWidth = Math.max(8, kit.columns - FIELD_LABEL - pctText.length - 1)
+  const contextLine = (
+    <Box key="ctx-line" flexDirection="row" columnGap={1}>
+      <Box flexGrow={1} flexShrink={1}>
+        {meterBar(kit, { key: 'ctx-meter', fraction, marker, tone: ctx.tone === 'muted' ? 'good' : ctx.tone, width: meterWidth, alt: `Context ${ctx.pct ?? 0}% used` })}
+      </Box>
+      {textRuns(kit, 'ctx-pct', [{ text: pctText, tone: readingTone(ctx.tone), isBold: ctx.pct !== null }])}
+    </Box>
+  )
+  const contextUnder =
+    ctx.tokens === null
+      ? 'Waiting for the first response'
+      : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`} tokens${hud.autopilot.isOn && ctx.threshold !== null ? ` · hands off at ${fmt.tokens(ctx.threshold)}` : ''}`
+
   return (
     <Box flexDirection="column">
       {alertCallout(kit, data)}
 
       <Box key="hero" flexDirection="column" marginTop={1}>
-        {stat(kit, { key: 'ctx', label: 'Context', value: ctx.pct === null ? G.none : `${ctx.pct}%`, tone: ctx.tone === 'warn' || ctx.tone === 'bad' ? ctx.tone : 'normal' })}
-        {meterBar(kit, { key: 'ctx-meter', fraction, marker, tone: ctx.tone === 'muted' ? 'good' : ctx.tone, width: kit.columns, alt: `Context ${ctx.pct ?? 0}% used` })}
-        {pair(kit, {
-          key: 'ctx-under',
-          left: ctx.tokens === null ? 'Waiting for the first response' : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`} tokens`,
-          right: hud.autopilot.isOn && ctx.threshold !== null ? `hands off at ${fmt.tokens(ctx.threshold)}` : undefined,
+        {field(kit, { key: 'ctx', label: 'Context', content: contextLine, under: contextUnder })}
+        {field(kit, {
+          key: 'cost',
+          label: 'Cost',
+          content: textRuns(
+            kit,
+            'cost-value',
+            hud.cost.usd === null
+              ? [{ text: G.none, tone: 'muted' }, { text: '  not reported by this host', tone: 'muted' }]
+              : [
+                  { text: fmt.cost(hud.cost.usd), isBold: true },
+                  { text: ' this session', tone: 'muted' },
+                  ...(hasRunCost ? [{ text: `  ·  ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} this run`, tone: 'muted' as const }] : []),
+                ],
+          ),
         })}
-        <Box key="hero-gap" height={1} />
-        {stat(kit, { key: 'cost', label: 'Cost', value: fmt.cost(hud.cost.usd), tone: hud.cost.usd === null ? 'muted' : 'normal', under: hud.cost.usd === null ? 'Not reported by this host' : 'This session', underRight: runCost })}
-        {load === null ? null : <Box key="hero-gap-2" height={1} />}
         {load === null
           ? null
-          : stat(kit, {
+          : field(kit, {
               key: 'machine',
               label: 'Machine',
-              value: `CPU ${load.cpu === null ? G.none : `${Math.round(load.cpu)}%`}  ·  RAM ${load.ram === null ? G.none : `${Math.round(load.ram)}%`}`,
-              tone: load.cpuTone === 'bad' || load.ramTone === 'bad' ? 'bad' : load.cpuTone === 'warn' || load.ramTone === 'warn' ? 'warn' : 'normal',
+              content: textRuns(kit, 'machine-value', [
+                { text: 'CPU ', tone: 'muted' },
+                { text: pct(load.cpu), tone: readingTone(load.cpuTone), isBold: load.cpuTone === 'bad' },
+                { text: '   Memory ', tone: 'muted' },
+                { text: pct(load.ram), tone: readingTone(load.ramTone), isBold: load.ramTone === 'bad' },
+              ]),
             })}
       </Box>
 
       {card(kit, {
         key: 'profile',
-        title: 'Profile',
-        accent: ACCENT.overview,
         rows: k => [
           row(k, {
             key: 'profile',
-            label: activeProfile?.label ?? 'Custom',
-            subtitle: hud.profile.isModified ? 'Edited since applied' : activeProfile?.hint,
+            label: 'Profile',
+            subtitle: hud.profile.isModified ? 'Edited since you applied it' : activeProfile?.hint,
             control: picker(k, { key: 'profile', value: s.profile, options: profiles, onSelect: v => kit.actions.applyProfile(v) }),
           }),
         ],

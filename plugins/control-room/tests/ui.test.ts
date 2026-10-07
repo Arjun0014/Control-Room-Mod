@@ -2,10 +2,46 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import type { Settings } from '../hooks/core/settings'
-import { TABS } from '../hooks/ui/pane/frame'
+import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
 import { SESSION, world } from './fixtures/world'
 
 const ENGINE_ROW = { type: 'Text' as const, props: {}, children: ['ENGINE ROW'] }
+
+type Node = { type?: unknown; props?: Record<string, unknown>; children?: unknown[] }
+const isNode = (n: unknown): n is Node => typeof n === 'object' && n !== null && !Array.isArray(n)
+const keyOf = (n: unknown): string => (isNode(n) && typeof n.props?.key === 'string' ? n.props.key : '')
+const textOf = (n: unknown): string => (typeof n === 'string' ? n : isNode(n) ? (n.children ?? []).map(textOf).join('') : '')
+function each(n: unknown, visit: (n: Node) => void): void {
+  if (!isNode(n)) return
+  visit(n)
+  for (const c of n.children ?? []) each(c, visit)
+}
+
+/** The first Text under a node (a card head's title, a row's label). Texts carry no keys once drawn; Boxes do. */
+function firstText(n: unknown): string {
+  let found: string | null = null
+  each(n, d => {
+    if (found === null && d.type === 'Text') found = textOf(d)
+  })
+  return found ?? ''
+}
+
+/** Every card in a drawn tree: its title and the labels of the rows inside it. */
+function cardsOf(tree: unknown): { title: string; labels: string[] }[] {
+  const out: { title: string; labels: string[] }[] = []
+  each(tree, n => {
+    const m = /^card-(.+)$/.exec(keyOf(n))
+    if (m === null || /-(head|box|foot)$/.test(m[1]!)) return
+    let title = ''
+    const labels: string[] = []
+    each(n, d => {
+      if (keyOf(d) === `card-${m[1]}-head`) title = firstText(d)
+      else if (keyOf(d).startsWith('row-')) labels.push(firstText(d))
+    })
+    out.push({ title, labels })
+  })
+  return out
+}
 
 const bandProps = (bodyColumns: number) => ({
   hasSurvey: false,
@@ -100,6 +136,44 @@ describe('ui', () => {
         }
         await ui.unmount()
       }
+    }
+  })
+
+  test('a row never repeats the title of its card', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    await boot($, w)
+    await $.command.run({ command: 'cr', args: 'profile frontier', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    await w.clock.advance(300)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      let checked = 0
+      for (const tab of TABS) {
+        await ui.press({ key: `tab-${tab.id}` })
+        await w.clock.advance(300)
+        for (const c of cardsOf(await ui.drawn())) {
+          if (c.title === '') continue
+          checked += 1
+          for (const label of c.labels) expect(label.toLowerCase(), `${surface} ${tab.id}: ${c.title}`).not.toBe(c.title.toLowerCase())
+        }
+      }
+      expect(checked, surface).toBeGreaterThan(10)
+      await ui.unmount()
+    }
+  })
+
+  test('a wide inline frame keeps the page to a readable width, centred; docked and desktop pages fill their room', async ($, on) => {
+    const w = world(on)
+    await boot($, w)
+    const mount = (surface: 'terminal' | 'desktop', columns: number, placement: 'dock' | 'inline') =>
+      $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement), viewport: { columns: columns + 2, rows: 50, isFullscreen: placement === 'dock' } })
+    const wide = await mount('terminal', 180, 'inline')
+    expect(await wide.drawn()).toMatchObject({ props: { alignItems: 'center' } })
+    expect((await wide.find({ key: 'page-body' }))?.props.width).toBe(MAX_COLUMNS + 2)
+    await wide.unmount()
+    for (const [surface, columns, placement] of [['terminal', 66, 'dock'], ['desktop', 180, 'inline']] as const) {
+      const ui = await mount(surface, columns, placement)
+      expect((await ui.find({ key: 'page-body' }))?.props.width, `${surface} ${columns}`).toBeUndefined()
+      await ui.unmount()
     }
   })
 

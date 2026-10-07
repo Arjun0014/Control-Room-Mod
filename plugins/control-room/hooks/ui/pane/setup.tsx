@@ -14,8 +14,6 @@ import type { Kit } from '../kit'
 import { buttons, card, isNative, note, picker, row, switchControl } from '../primitives'
 import { ACCENT, G } from '../theme'
 
-const pretty = (v: string): string => (v === 'on' ? 'On' : v === 'off' ? 'Off' : v.charAt(0).toUpperCase() + v.slice(1))
-
 export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
   const { Box, Button, Input } = kit.ui
   const s = pane.settings
@@ -62,14 +60,14 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
             accent,
             aside: changes.length > 8 ? `${changes.length} changes` : undefined,
             rows: k => [
-              ...changes.slice(0, 8).map(c => row(k, { key: `change-${c.path}`, label: c.label, value: `${pretty(c.from)} ${G.chevron} ${pretty(c.to)}` })),
+              ...changes.slice(0, 8).map(c => row(k, { key: `change-${c.path}`, label: c.label, value: `${c.from} ${G.chevron} ${c.to}` })),
               changes.length > 8 ? note(k, `and ${changes.length - 8} more`, 'changes-more') : null,
               Input === undefined
                 ? null
                 : row(k, {
                     key: 'profile-save',
                     label: 'Keep as a profile',
-                    control: { element: <Input key="profile-save" value="" placeholder="name" submitLabel="save" onSubmit={name => kit.actions.saveProfile(name)} />, width: 18 },
+                    control: { element: <Input key="profile-save" value="" placeholder="Type a name" submitLabel="save" onSubmit={name => kit.actions.saveProfile(name)} />, width: 18 },
                   }),
               buttons(k, [{ key: 'profile-revert', label: `Back to ${active.name}`, onPress: () => kit.actions.applyProfile(active.id) }], 'profile-actions'),
             ],

@@ -37,8 +37,20 @@ This page records the decisions behind the UI, so later changes keep it that way
 A page is a stack of cards. A card is a small-caps title (with an optional aside or *Open ›* link),
 a rounded box of rows, and at most a short footnote under it. A row reads like a settings list:
 the label, with a one-line dim description under it, on the left; the control on the right edge,
-at every width. A control wider than about half the row (a segmented choice) moves under the
-label. On Desktop rows are spaced so native buttons never touch.
+at every width. A control wider than about two fifths of the row (a segmented choice) moves under
+the label, so the description never wraps into a narrow column beside it. On Desktop rows are
+spaced so native buttons never touch.
+
+A row never repeats its card's title. The title names the system ("FRONTIER MAX"); the first row
+says what it does ("Hold Claude to senior-engineer standards") and holds its switch. A group of
+one row that needs no name (Overview's profile) has no title. Live readings are not rows: they are
+fields, a dim label in a fixed column and the reading after it, so a block of them reads as one
+calm table (the top of Overview).
+
+In the terminal an action row (`[ Hand off now ]`) keeps a blank line above it, so it never sits
+flush under text. A page is at most 80 columns wide: in the frame above the prompt in a wide
+terminal it is centred, because a label and its control drift apart past that. That frame is
+short, so its tabs sit right under the title.
 
 Section accents: Overview orange (`claude`), Context blue (`ide`), Behavior purple (`autoAccept`),
 Guardrails teal (`planMode`), Activity periwinkle (`suggestion`), Setup gray (`inactive`).
@@ -59,7 +71,8 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | `callout` | rounded border in the status color, title, line, actions | same, drawn natively | same |
 | `gauge` | label and %, line meter with ceiling tick, sparkline | label and %, SVG bar | SVG bar |
 | `steps` | numbered lines in the accent | same | same |
-| `card`, `row`, `stat`, `pair`, `listItem`, `note` | layout | layout | layout |
+| `field` | dim label in a 10-cell column, the reading after it | same | same |
+| `card`, `row`, `pair`, `listItem`, `note`, `textRuns` | layout | layout | layout |
 
 Every control has a stable `key`. A picker's options are keyed `<picker>:<value>`, a stepper's
 buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every surface.
@@ -76,7 +89,8 @@ Live readings and events only, from most to least important:
 2. Context, with a meter from 76 columns.
 3. Events as they happen: an Autopilot handoff in progress, or waiting for you.
 4. Cost.
-5. CPU and RAM. They have a short history from 110 columns, are amber near a ceiling and red at it.
+5. CPU and RAM. From 110 columns they show their last six readings once there are six (so the bar
+   never shifts sample by sample), are amber near a ceiling and red at it.
 6. Running agents, and the guard keeping Claude going.
 7. The run total once a run spans sessions.
 

@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import type { ResourcesView } from '../types'
 import { Runtime } from '../hooks/app/runtime'
+import * as Views from '../hooks/app/views'
 import { defaultSettings } from '../hooks/core/settings'
 import type { Settings } from '../hooks/core/settings'
 import { fakeHost, flush } from './fixtures/fake-host'
@@ -84,6 +86,26 @@ describe('runtime', () => {
     const refusal = await rt.beforeTool('Bash', { command: 'npm test' }, 'b2', undefined)
     expect(refusal).toContain('not starting another heavy job')
     expect(await rt.beforeTool('Bash', { command: 'git status' }, 'b3', undefined)).toBeNull()
+  })
+
+  test('live readings without a limit still reach the panel and the status line', async () => {
+    const { rt, kept, advance } = await started(
+      s => {
+        s.resources.level = 'off'
+        s.ui.liveLoad = true
+      },
+      { cwd: 'C:\\work', samplerLines: ['P 42 4000000000 10000000000'] },
+    )
+    await advance(500)
+    // No ceilings, so no pressure is evaluated; the readings themselves still show.
+    expect(rt.monitor.pressure.level).toBe('unknown')
+    const view = kept.published.resources as ResourcesView
+    expect(view.status).toBe('live')
+    expect(view.cpu).toBe(42)
+    expect(view.ram).toBe(60)
+    expect(view.ceilings).toBeNull()
+    expect(Views.statusLineOf(Views.hudOf(rt))).toContain('CPU 42% · RAM 60%')
+    expect(kept.appended.some(t => t.includes('Resource pressure'))).toBe(false)
   })
 
   test('a person\'s /clear rolls the chain over and resets the turn state; ours carries the continuation context', async () => {

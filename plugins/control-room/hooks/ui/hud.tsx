@@ -40,8 +40,11 @@ function meterSpans(fraction: number, marker: number | null, tone: Tone, width: 
 
 const valueTone = (tone: Tone): Tone | undefined => (tone === 'good' || tone === 'normal' || tone === 'muted' ? undefined : tone)
 
+/** Readings of history a status-bar sparkline waits for, so the bar does not shift with each new sample. */
+export const SPARK_CELLS = 6
+
 function reading(key: string, label: string, value: number | null, tone: Tone, series: readonly number[], hasSpark: boolean, priority: number): Segment {
-  const spark = hasSpark && series.length > 1 ? [{ text: `${sparkline(series, 6)} `, isDim: true }] : []
+  const spark = hasSpark && series.length >= SPARK_CELLS ? [{ text: `${sparkline(series, SPARK_CELLS)} `, isDim: true }] : []
   return {
     key,
     priority,
@@ -113,7 +116,8 @@ function spanEl(kit: Kit, key: string, span: Span): RenderElement {
 
 export function hudView(kit: Kit, hud: HudModel): RenderElement {
   const { Box, Text, Button } = kit.ui
-  const label = kit.columns >= 70 ? 'Control Room' : 'Open'
+  // The button opens and closes the panel: its name when there is room, else what a press does.
+  const label = kit.columns >= 70 ? 'Control Room' : hud.isPaneOpen ? 'Close' : 'Open'
   const room = Math.max(10, kit.columns - label.length - (isNative(kit) ? 6 : 2))
   const segments = fitSegments(hudSegments(hud, kit.columns, kit.surface), room)
   const line = (

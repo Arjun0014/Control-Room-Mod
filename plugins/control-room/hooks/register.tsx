@@ -192,7 +192,7 @@ export const register: Register = on => {
 
   on('prompt.compose', async ($, e, next) => {
     const answer = await next(e)
-    const section = rt.composeSection()
+    const section = rt.composeSection(e.outputStyle)
     if (section === null) return answer
     return { sections: [...answer.sections.filter(s => s.id !== POLICY_SECTION_ID), section] }
   }).catch(($, e, next) => next(e))

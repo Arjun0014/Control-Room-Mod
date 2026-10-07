@@ -22,6 +22,8 @@ export const STORE_KEYS = {
   runsIndex: 'runs.index.v1',
   runCounter: 'runs.counter.v1',
   runPrefix: 'run.v1.',
+  /** Quest log: lifetime XP, achievements and the latest awards. */
+  quest: 'quest.v1',
 } as const
 
 /** The handoff file Context Autopilot asks Claude to create or update. */

@@ -22,7 +22,25 @@ import type { RenderElement } from 'claude-code'
 
 import type { Tone } from '../../types'
 import type { Kit } from './kit'
-import { G, meterCells, sparkline, svgBar, svgSegments, svgSpark, toneProps, workCells } from './theme'
+import {
+  CHECK_DOT,
+  G,
+  TIMELINE,
+  type TimelineSpan,
+  diffCells,
+  meterCells,
+  sparkline,
+  svgBar,
+  svgColumns,
+  svgDiff,
+  svgRing,
+  svgSegments,
+  svgSpark,
+  svgTimeline,
+  timelineCells,
+  toneProps,
+  workCells,
+} from './theme'
 
 /** Desktop and VS Code draw native controls; the terminal and mobile get the in-place forms. */
 export const isNative = (kit: Kit): boolean => kit.surface === 'desktop' || kit.surface === 'vscode'
@@ -624,6 +642,139 @@ export function gauge(
         )}
       </Box>
     </Box>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Charts: where time, context and changes went
+
+/**
+ * Parts of one line set apart: three spaces in the terminal, " · " where the
+ * surface lays text out like a browser. Desktop draws a text with spaced-out
+ * runs of blanks in a monospace face (it reads them as a table), so padding
+ * never separates words there.
+ */
+export const spaced = (kit: Kit, parts: readonly (string | null | undefined | false)[]): string =>
+  parts.filter((p): p is string => typeof p === 'string' && p !== '').join(kit.surface === 'terminal' ? '   ' : ' · ')
+
+/**
+ * Where a turn's time went: a strip across the turn, each call a stretch in
+ * its kind's color (read, edit, run, check, web, agent), a failed one red,
+ * and the gaps where Claude was thinking. SVG on the remote surfaces.
+ */
+export function timelineStrip(kit: Kit, input: { key: string; spans: readonly TimelineSpan[]; from: number; to: number; width: number }): RenderElement {
+  const { Text, Svg } = kit.ui
+  const width = Math.max(8, input.width)
+  if (Svg !== undefined) {
+    return <Svg key={input.key} source={svgTimeline({ spans: input.spans, from: input.from, to: input.to, width: width * 8, height: 12 })} alt={`${input.spans.length} tool calls over the turn`} height={12} />
+  }
+  const cells = timelineCells(input.spans, input.from, input.to, width)
+  const runs: { text: string; color?: string; isDim: boolean }[] = []
+  for (const c of cells) {
+    const color = c === null ? undefined : c.isFailed ? 'error' : TIMELINE[c.kind].key
+    const glyph = c === null ? G.idle : G.busy
+    const last = runs[runs.length - 1]
+    if (last !== undefined && last.color === color && last.isDim === (c === null)) last.text += glyph
+    else runs.push({ text: glyph, color, isDim: c === null })
+  }
+  return (
+    <Text key={input.key} wrap="truncate-end">
+      {runs.map((r, i) => (
+        <Text key={`${input.key}-${i}`} color={r.color} dimColor={r.isDim ? true : undefined}>
+          {r.text}
+        </Text>
+      ))}
+    </Text>
+  )
+}
+
+/** A legend of colored marks and words, set apart by gaps rather than padding. */
+export function legend(kit: Kit, key: string, items: readonly { label: string; color: string }[]): RenderElement {
+  const { Box, Text } = kit.ui
+  return (
+    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={2}>
+      {items.map(item => (
+        <Text key={`${key}-${item.label}`}>
+          <Text color={item.color}>{G.square}</Text>
+          <Text dimColor>{` ${item.label}`}</Text>
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
+/**
+ * Columns of 0–1 values side by side (a run's sessions, each its peak
+ * context), the current one bright; SVG with a dashed line at `marker` on
+ * the remote surfaces, block glyphs two cells wide in the terminal.
+ */
+export function columns(kit: Kit, input: { key: string; values: readonly number[]; marker?: number | null; current?: number; alt: string }): RenderElement {
+  const { Text, Svg } = kit.ui
+  if (Svg !== undefined) {
+    const width = Math.min(kit.columns * 8, input.values.length * 32 + 8)
+    return <Svg key={input.key} source={svgColumns({ values: input.values, marker: input.marker, current: input.current, width, height: 36 })} alt={input.alt} height={36} />
+  }
+  return (
+    <Text key={input.key} wrap="truncate-end">
+      {input.values.map((v, i) => {
+        const glyph = G.spark[Math.min(7, Math.max(0, Math.round(Math.max(0, Math.min(1, v)) * 7)))]
+        const isOver = input.marker !== undefined && input.marker !== null && v >= input.marker
+        return (
+          <Text key={`${input.key}-${i}`} color={isOver ? 'warning' : 'ide'} dimColor={i === input.current ? undefined : true}>
+            {`${i > 0 ? ' ' : ''}${glyph}${glyph}`}
+          </Text>
+        )
+      })}
+    </Text>
+  )
+}
+
+/** A change's size and balance as five squares, green for added and red for removed. */
+export function diffSquares(kit: Kit, input: { key: string; added: number; removed: number }): RenderElement {
+  const { Text, Svg } = kit.ui
+  if (Svg !== undefined) {
+    return <Svg key={input.key} source={svgDiff({ added: input.added, removed: input.removed })} alt={`${input.added} lines added, ${input.removed} removed`} height={8} />
+  }
+  const c = diffCells(input.added, input.removed)
+  return (
+    <Text key={input.key}>
+      {c.added > 0 ? <Text color="diffAdded">{G.square.repeat(c.added)}</Text> : null}
+      {c.removed > 0 ? <Text color="diffRemoved">{G.square.repeat(c.removed)}</Text> : null}
+      {c.empty > 0 ? <Text dimColor>{G.square.repeat(c.empty)}</Text> : null}
+    </Text>
+  )
+}
+
+/** A check's runs as colored dots, oldest first. */
+export function dots(kit: Kit, input: { key: string; statuses: readonly string[] }): RenderElement {
+  const { Text } = kit.ui
+  return (
+    <Text key={input.key}>
+      {input.statuses.map((s, i) => (
+        <Text key={`${input.key}-${i}`} {...toneProps(CHECK_DOT[s] ?? 'muted')}>
+          {G.dot}
+        </Text>
+      ))}
+    </Text>
+  )
+}
+
+/** A level's progress: a ring on the remote surfaces, a star in the terminal. */
+export function levelBadge(kit: Kit, input: { key: string; level: number; fraction: number }): RenderElement {
+  const { Box, Text, Svg } = kit.ui
+  if (Svg !== undefined) {
+    return (
+      <Box key={input.key} flexDirection="row" alignItems="center" columnGap={1}>
+        <Svg key={`${input.key}-ring`} source={svgRing({ fraction: input.fraction, size: 28 })} alt={`Level ${input.level}, ${Math.round(input.fraction * 100)}% of the way to the next`} height={28} />
+        <Text bold>{`Level ${input.level}`}</Text>
+      </Box>
+    )
+  }
+  return (
+    <Text key={input.key}>
+      <Text color="claude">{`${G.star} `}</Text>
+      <Text bold>{`Level ${input.level}`}</Text>
+    </Text>
   )
 }
 

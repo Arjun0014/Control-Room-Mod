@@ -174,6 +174,7 @@ const LABELS: Record<string, string> = {
   'resources.intervalSec': 'Sample every',
   'resources.enforcement': 'When over',
   'progress.milestones': 'Milestones',
+  'answers.style': 'Answer style',
 }
 
 for (const category of PERMISSION_CATEGORIES) {
@@ -187,6 +188,7 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   'subagents.mode': { unrestricted: 'No limit', limit: 'Up to a number', ask: 'Ask each time', block: 'None' },
   'focus.tools': { compact: 'One line', hidden: 'Hidden' },
   'resources.enforcement': { inform: 'Just tell Claude', limit: 'Hold extra heavy jobs', strict: 'Hold all heavy jobs' },
+  'answers.style': { standard: 'Standard', brief: 'Brief', ste: 'Plain technical', mission: 'Mission control', quest: 'Quest log' },
 }
 
 const UNITS: Record<string, (n: number) => string> = {

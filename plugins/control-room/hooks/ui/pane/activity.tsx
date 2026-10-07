@@ -10,11 +10,41 @@
 
 import type { RenderElement } from 'claude-code'
 
-import type { ActivityItemView, ActivityView, AttentionView, ChangeGroupView, FileChangeView, PaneModel, Tone, ValidationView } from '../../../types'
+import type {
+  ActivityItemView,
+  ActivityView,
+  AttentionView,
+  ChangeGroupView,
+  FileChangeView,
+  PaneModel,
+  QuestView,
+  Tone,
+  TurnTimelineView,
+  ValidationView,
+} from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
-import { buttons, card, clip, emptyState, field, listItem, note, row, segmented, switchControl, workStrip } from '../primitives'
-import { ACCENT, G, toneProps } from '../theme'
+import {
+  buttons,
+  card,
+  clip,
+  diffSquares,
+  dots,
+  emptyState,
+  field,
+  legend,
+  levelBadge,
+  link,
+  listItem,
+  meterBar,
+  note,
+  row,
+  segmented,
+  switchControl,
+  timelineStrip,
+  workStrip,
+} from '../primitives'
+import { ACCENT, G, TIMELINE, toneProps } from '../theme'
 
 const CALL_STATUS: Record<string, { glyph: string; tone: Tone }> = {
   running: { glyph: G.run, tone: 'info' },
@@ -124,26 +154,76 @@ function runCard(kit: Kit, view: ActivityView): RenderElement {
 }
 
 // ---------------------------------------------------------------------------
+// Quest log
+
+function questCard(kit: Kit, quest: QuestView): RenderElement {
+  const { Box, Text } = kit.ui
+  const fraction = quest.levelSpan > 0 ? quest.intoLevel / quest.levelSpan : 0
+  const toNext = quest.levelSpan - quest.intoLevel
+  return card(kit, {
+    key: 'quest',
+    title: 'Quest',
+    accent: ACCENT.activity,
+    aside: quest.runXp > 0 ? `+${quest.runXp} XP this run` : undefined,
+    footer: 'XP counts verified progress only: milestones done, checks turning green, finished plans and clean handoffs. Never lines written or tools used.',
+    rows: k => [
+      <Box key="quest-level" flexDirection="row" columnGap={2} alignItems="center">
+        <Box flexShrink={0}>{levelBadge(k, { key: 'quest-badge', level: quest.level, fraction })}</Box>
+        <Box flexGrow={1} flexShrink={1} {...clip(k)}>
+          {meterBar(k, { key: 'quest-meter', fraction, tone: 'accent', width: Math.max(8, k.columns - 34), alt: `${quest.intoLevel} of ${quest.levelSpan} XP into level ${quest.level}` })}
+        </Box>
+        <Box flexShrink={0}>
+          <Text dimColor>{`${toNext} XP to ${quest.level + 1}`}</Text>
+        </Box>
+      </Box>,
+      ...quest.recent.map((r, i) => listItem(k, { key: `quest-award-${i}`, glyph: '+', tone: 'accent', text: r.text, right: `${r.xp} XP`, rightTone: 'muted' })),
+      quest.recent.length === 0 ? emptyState(k, 'No XP yet. Finish a milestone or turn a check green.', 'quest-empty') : null,
+      <Box key="quest-achievements" flexDirection="row" flexWrap="wrap" columnGap={2}>
+        {quest.achievements.map(a => (
+          <Text key={`quest-ach-${a.id}`} dimColor={a.unlockedAt === null ? true : undefined}>
+            <Text color={a.unlockedAt === null ? undefined : 'claude'}>{`${a.unlockedAt === null ? G.starOpen : G.star} `}</Text>
+            {a.name}
+          </Text>
+        ))}
+      </Box>,
+    ],
+  })
+}
+
+// ---------------------------------------------------------------------------
 // This turn
+
+/** The legend under a turn's time strip: the kinds of work that appear in it. */
+function timelineLegend(kit: Kit, timeline: TurnTimelineView): RenderElement {
+  const kinds = (['read', 'edit', 'run', 'check', 'web', 'agent', 'other'] as const).filter(kind => timeline.spans.some(s => s.kind === kind))
+  const items = kinds.map(kind => ({ label: TIMELINE[kind].label, color: TIMELINE[kind].key }))
+  if (timeline.spans.some(s => s.isFailed)) items.push({ label: 'failed', color: 'error' })
+  return legend(kit, 'turn-legend', items)
+}
 
 function turnCard(kit: Kit, view: ActivityView): RenderElement {
   const { Text } = kit.ui
   const t = view.turnSummary
   const time = t.durationMs === null ? null : fmt.duration(t.durationMs)
   const aside = view.turn === 0 ? undefined : t.isRunning ? `Running${time === null ? '' : ` · ${time}`}` : `${time === null ? '' : `${time} · `}${fmt.plural(t.tools, 'tool call')}`
+  const timeline = view.timeline
   return card(kit, {
     key: 'turn',
     title: 'This turn',
     accent: ACCENT.activity,
     aside,
-    rows: k =>
-      t.lines.length === 0
+    rows: k => [
+      ...(timeline === null
+        ? []
+        : [timelineStrip(k, { key: 'turn-strip', spans: timeline.spans, from: timeline.from, to: timeline.to, width: k.columns }), timelineLegend(k, timeline)]),
+      ...(t.lines.length === 0
         ? [emptyState(k, view.turn === 0 ? 'Nothing yet. Claude’s work shows here as it happens.' : 'No tool calls in this turn.', 'turn-empty')]
         : t.lines.map((line, i) => (
             <Text key={`turn-line-${i}`} wrap="wrap">
               {line}
             </Text>
-          )),
+          ))),
+    ],
   })
 }
 
@@ -172,11 +252,12 @@ function attentionRow(kit: Kit, a: AttentionView): RenderElement {
 function attentionCard(kit: Kit, view: ActivityView): RenderElement | null {
   if (view.attention.length === 0) return null
   const open = view.attention.filter(a => (a.kind === 'failed' && a.state === 'unresolved') || a.kind === 'blocked' || a.kind === 'held').length
+  const running = view.attention.filter(a => a.kind === 'running').length
   return card(kit, {
     key: 'attention',
     title: 'Attention',
     accent: ACCENT.activity,
-    aside: open > 0 ? `${open} open` : 'all clear',
+    aside: open > 0 ? `${open} open` : running > 0 ? `${running} still running` : 'all clear',
     rows: k => view.attention.map(a => attentionRow(k, a)),
   })
 }
@@ -207,16 +288,30 @@ function checkRow(kit: Kit, v: ValidationView): RenderElement {
             ? 'in the background'
             : v.status
   const history = v.runs > 1 ? (v.isRecovered ? `passed after ${fmt.plural(v.failures, 'failure')}` : `${v.runs} runs`) : null
-  return listItem(kit, {
-    key: `check-${v.kind}`,
-    glyph: s.glyph,
-    tone: s.tone,
-    text: v.label,
-    isBold: true,
-    detail: [v.command, history].filter((x): x is string => x !== null).join(' · '),
-    right,
-    rightTone: v.status === 'failed' ? 'bad' : v.status === 'running' ? 'info' : 'muted',
-  })
+  const { Box, Text } = kit.ui
+  const rightTone: Tone = v.status === 'failed' ? 'bad' : v.status === 'running' ? 'info' : 'muted'
+  return (
+    <Box key={`check-${v.kind}`} flexDirection="row" columnGap={1}>
+      <Box width={2} flexShrink={0}>
+        <Text {...toneProps(s.tone)}>{s.glyph}</Text>
+      </Box>
+      <Box flexGrow={1} flexShrink={1} flexDirection="column" {...clip(kit)}>
+        <Text bold wrap="truncate-end">
+          {v.label}
+        </Text>
+        <Text dimColor wrap="truncate-end">
+          {[v.command, history].filter((x): x is string => x !== null).join(' · ')}
+        </Text>
+      </Box>
+      {/* Every run of this check, oldest first: how the fixes went. */}
+      {v.history.length > 1 ? <Box flexShrink={0}>{dots(kit, { key: `check-${v.kind}-dots`, statuses: v.history })}</Box> : null}
+      <Box flexShrink={0}>
+        <Text {...toneProps(rightTone)} dimColor={rightTone === 'muted' ? true : undefined}>
+          {right}
+        </Text>
+      </Box>
+    </Box>
+  )
 }
 
 function validationCard(kit: Kit, view: ActivityView): RenderElement | null {
@@ -259,6 +354,11 @@ function fileRow(kit: Kit, f: FileChangeView, view: ActivityView, isDim: boolean
             onPress={() => kit.actions.selectFile(isSelected ? null : f.path)}
           />
         </Box>
+        {f.hasDiff && !f.isDeleted ? (
+          <Box flexShrink={0} alignItems="center">
+            {diffSquares(kit, { key: `file-${f.path}-squares`, added: f.added, removed: f.removed })}
+          </Box>
+        ) : null}
         <Box flexShrink={0}>
           <Text>
             {parts.map((p, i) => (
@@ -416,6 +516,12 @@ export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | und
     footer: 'Focus view changes what you see, never what Claude reads. Press ▸ on a row to open it.',
     rows: k => [
       row(k, {
+        key: 'act-answers',
+        label: 'Answer style',
+        subtitle: 'How Claude writes to you',
+        control: link(k, { key: 'act-answers', label: pane.status.answers.text, onPress: () => kit.actions.setTab('behavior') }),
+      }),
+      row(k, {
         key: 'act-focus',
         label: 'Focus view',
         subtitle: 'One quiet line per tool call',
@@ -450,6 +556,7 @@ export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | und
   return (
     <Box flexDirection="column">
       {switcher}
+      {view.quest === null ? null : questCard(kit, view.quest)}
       {runCard(kit, view)}
       {turnCard(kit, view)}
       {attentionCard(kit, view)}

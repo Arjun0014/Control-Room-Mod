@@ -100,7 +100,7 @@ describe('ui', () => {
         expect(await ui.find({ text: /Run/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open' }), `${surface} ${columns}`).toBeDefined()
         // Labels only where there is room for them.
-        expect((await ui.find({ text: /Context/ })) !== undefined, `${surface} ${columns}`).toBe(columns >= (surface === 'terminal' ? 120 : 100))
+        expect((await ui.find({ text: /Context/ })) !== undefined, `${surface} ${columns}`).toBe(columns >= (surface === 'terminal' ? 100 : 70))
         await ui.unmount()
       }
     }
@@ -480,12 +480,15 @@ describe('ui', () => {
     await w.clock.advance(300)
     const wide = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const line = textOf(await wide.drawn())
+    // Two layers: what Claude is doing on top, with the milestone it serves; the readings below.
+    expect(line).toContain('Running regression tests')
+    expect(line).toContain('C · 3 of 4')
+    expect(line.indexOf('Running regression tests')).toBeLessThan(line.indexOf('Context'))
     expect(line).toContain('Context ━')
     expect(line).toContain('Work ■■■□ 2/4')
-    expect(line).toContain('▸ Running regression tests')
     expect(line).toContain('Run $1.25')
     await wide.unmount()
-    // Narrow: no labels, the meters stay apart by shape, and the work line yields first.
+    // Narrow: no labels, the meters stay apart by shape.
     const narrow = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(48) })
     const small = textOf(await narrow.drawn())
     expect(small).not.toContain('Context')
@@ -495,6 +498,35 @@ describe('ui', () => {
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     expect(await desktop.find({ type: 'Svg' })).toBeDefined()
     expect(textOf(await desktop.drawn())).toContain('2/4')
+    expect(textOf(await desktop.drawn())).toContain('Context')
+    await desktop.unmount()
+  })
+
+  test('once a turn ends, the top line says what it did, and checks show by name', async ($, on) => {
+    on('tool.call', { tool: 'Bash' }, ($, e) =>
+      e.command === 'npm run lint' ? { isError: true as const, result: 'Exit code 1', text: 'Exit code 1\nnpm error Missing script: "lint"' } : { result: { stdout: 'ok', stderr: '', interrupted: false } },
+    )
+    const w = world(on, { tokens: 300_000 })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await boot($, w)
+    const before = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    // Before the first turn there is nothing to say on top: the readings alone.
+    expect(textOf(await before.drawn())).not.toContain('Ran ')
+    await before.unmount()
+    await $.turn.start({ text: 'check it', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'npm test' })
+    await $.tool.call({ tool: 'Bash', command: 'npm run lint' })
+    await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+    await w.clock.advance(300)
+    const after = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const text = textOf(await after.drawn())
+    expect(text).toContain('Ran tests once, passing · lint once, failing')
+    expect(text).toContain('Checks')
+    expect(text).toContain('✓ Tests')
+    expect(text).toContain('✗ Lint')
+    expect(text).toContain('▲ 1 issue')
   })
 
   test('the spinner carries the activity summary while a turn runs', async ($, on) => {
@@ -512,5 +544,138 @@ describe('ui', () => {
     const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Spinner', requestId: 'main', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } })
     await ui.drawn()
     expect(seen.at(-1)).toContain('Working · 1 tool')
+  })
+
+  test('Behavior offers the answer styles on every surface, with a line written in the chosen one', async ($, on) => {
+    const w = world(on)
+    await boot($, w)
+    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    await ui.press({ key: 'tab-behavior' })
+    await w.clock.advance(300)
+    const cards = cardsOf(await ui.drawn())
+    expect(cards[0]?.title).toBe('ANSWER STYLE')
+    await ui.press({ key: 'an-style' })
+    await w.clock.advance(300)
+    expect(textOf(await ui.drawn())).toContain('Short, simple sentences (Simplified Technical English)')
+    await ui.press({ key: 'an-style:mission' })
+    await w.clock.advance(2000)
+    expect(saved(w).answers.style).toBe('mission')
+    const text = textOf(await ui.drawn())
+    expect(text).toContain('For example')
+    expect(text).toContain('GO · tests pass, 3 of 3')
+    expect(text).toContain('GO only for what was verified')
+    await ui.unmount()
+    for (const surface of ['desktop', 'mobile'] as const) {
+      const other = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(90) })
+      expect(textOf(await other.drawn()), surface).toContain('How Claude writes to you')
+      await other.unmount()
+    }
+  })
+
+  test('Quest log: Activity shows the level, the awards and the achievements; the status bar the level', async ($, on) => {
+    const w = world(on, { settings: { answers: { style: 'quest' } } })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await boot($, w)
+    await $.turn.start({ text: 'Build the parser and test it.', turnId: 't1' })
+    await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building' }] } as never)
+    await w.clock.advance(300)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      await ui.press({ key: 'tab-activity' })
+      await w.clock.advance(300)
+      const text = textOf(await ui.drawn())
+      for (const expected of ['QUEST', 'Level 1', '+50 XP this run', 'Milestone: Sketch', '50 XP', 'First green', 'Comeback', 'Full clear', 'XP counts verified progress only']) {
+        expect(text, `${surface}: ${expected}`).toContain(expected)
+      }
+      await ui.unmount()
+    }
+    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    expect(textOf(await band.drawn())).toContain('★ Lv 1 50 XP')
+  })
+
+  test('Context draws the run as columns, one per session, against the handoff line', async ($, on) => {
+    const run = {
+      v: 1,
+      id: 'r1',
+      number: 7,
+      startedAt: 900_000,
+      updatedAt: 990_000,
+      root: '/work',
+      profile: 'normal',
+      status: 'active',
+      sessions: [
+        { id: 'earlier', index: 1, startedAt: 900_000, endedAt: 950_000, start: 'startup', end: 'handoff', peakTokens: 720_000, lastTokens: 718_000, window: 1_000_000, costUsd: 20, turns: 9, model: null, endNote: 'handoff at 700k tokens', transitions: [] },
+        { id: 'session-1', index: 2, startedAt: 950_000, endedAt: null, start: 'handoff', end: null, peakTokens: 300_000, lastTokens: 300_000, window: 1_000_000, costUsd: 4, turns: 2, model: null, endNote: null, transitions: [] },
+      ],
+    }
+    const w = world(on, { tokens: 300_000, settings: { autopilot: { enabled: true, thresholdMode: 'percent', thresholdPercent: 70 } } })
+    w.store['run.v1.r1'] = run
+    w.store['runs.index.v1'] = ['r1']
+    await boot($, w)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      await ui.press({ key: 'tab-context' })
+      await w.clock.advance(300)
+      const text = textOf(await ui.drawn())
+      expect(text, surface).toContain('Peak context per session · hands off at 70%')
+      expect(text, surface).toContain('RUN 7')
+      if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
+      await ui.unmount()
+    }
+  })
+
+  test('on Desktop no text of the panel or the status bar trips the app’s monospace rule', async ($, on) => {
+    on('tool.call', { tool: 'Write' }, ($, e) => ({ result: { type: 'create', filePath: e.file_path, content: 'a\nb\n', structuredPatch: [], originalFile: null } }))
+    on('tool.call', { tool: 'Edit' }, ($, e) => ({ result: { filePath: e.file_path, structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: ['-a', '+b', '+c'] }] } }))
+    on('tool.call', { tool: 'Bash' }, ($, e) => (e.command === 'npm test' ? { isError: true as const, result: 'Exit code 1', text: 'Exit code 1\nFAIL a.test.ts' } : { result: { stdout: 'ok', stderr: '', interrupted: false } }))
+    const w = world(on, { tokens: 300_000, settings: { answers: { style: 'quest' }, autopilot: { enabled: true } } })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    w.store['run.v1.r1'] = {
+      v: 1,
+      id: 'r1',
+      number: 3,
+      startedAt: 900_000,
+      updatedAt: 990_000,
+      root: '/work',
+      profile: 'normal',
+      status: 'active',
+      sessions: [
+        { id: 'earlier', index: 1, startedAt: 900_000, endedAt: 950_000, start: 'startup', end: 'handoff', peakTokens: 720_000, lastTokens: 718_000, window: 1_000_000, costUsd: 20, turns: 9, model: null, endNote: null, transitions: [] },
+        { id: 'session-1', index: 2, startedAt: 950_000, endedAt: null, start: 'handoff', end: null, peakTokens: 300_000, lastTokens: 300_000, window: 1_000_000, costUsd: 4, turns: 2, model: null, endNote: null, transitions: [] },
+      ],
+    }
+    w.store['runs.index.v1'] = ['r1']
+    await boot($, w)
+    await $.turn.start({ text: 'Build the parser and cover it with tests.', turnId: 't1' })
+    await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Sketch', status: 'completed', activeForm: 'Sketching' }, { content: 'Build', status: 'in_progress', activeForm: 'Building' }] })
+    await $.tool.call({ tool: 'Write', file_path: '/work/src/parser.ts', content: 'a\nb\n' })
+    await $.tool.call({ tool: 'Edit', file_path: '/work/README.md', old_string: 'a', new_string: 'b\nc' })
+    await $.tool.call({ tool: 'Bash', command: 'npm test' })
+    await w.clock.advance(300)
+    // Desktop draws a text in a monospace face when it looks like a table or a rule (the app's own test).
+    const looksTabular = (t: string): boolean => {
+      if (/[─-▟]/u.test(t) || /[-=_~]{3,}|[-=]{2,}>|<[-=]{2,}/u.test(t)) return true
+      const runs = [...t.matchAll(/\S( {2,})(?=\S)/gu)].map(m => m[1]?.length ?? 0)
+      return runs.length >= 2 || runs.some(n => n >= 3)
+    }
+    const offenders: string[] = []
+    const check = (tree: unknown, where: string) =>
+      each(tree, n => {
+        if (n.type !== 'Text' || !(n.children ?? []).every(c => typeof c === 'string')) return
+        const t = (n.children as string[]).join('')
+        if (t.trim() !== '' && looksTabular(t)) offenders.push(`${where}: ${JSON.stringify(t)}`)
+      })
+    const band = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(110) })
+    check(await band.drawn(), 'status bar')
+    await band.unmount()
+    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(90) })
+    for (const tab of TABS) {
+      await ui.press({ key: `tab-${tab.id}` })
+      await w.clock.advance(300)
+      check(await ui.drawn(), tab.id)
+    }
+    expect(offenders).toEqual([])
   })
 })

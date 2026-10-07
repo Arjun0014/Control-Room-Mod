@@ -15,7 +15,7 @@ import type { RenderElement } from 'claude-code'
 import type { ChainRunView, ChainSessionView, ChainView, HudModel, PaneModel } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
-import { buttons, card, clip, emptyState, listItem, meterBar, pair, row, segmented, steps, stepper, switchControl } from '../primitives'
+import { buttons, card, clip, columns, emptyState, listItem, meterBar, pair, row, segmented, spaced, steps, stepper, switchControl } from '../primitives'
 import { ACCENT, G, toneProps } from '../theme'
 
 const END: Record<string, string> = {
@@ -39,12 +39,11 @@ const projectOf = (root: string): string => root.split(/[\\/]/).filter(Boolean).
 
 function sessionItem(kit: Kit, s: ChainSessionView, isActive: boolean): RenderElement {
   const time = `${fmt.clock(s.startedAt)} → ${s.endedAt === null ? 'now' : fmt.clock(s.endedAt)}`
-  const peak = s.peakTokens > 0 ? `   ${fmt.tokens(s.peakTokens)} peak` : ''
   return listItem(kit, {
     key: `session-${s.id}`,
     glyph: isActive ? G.dot : s.end === 'handoff' ? G.chevron : G.ok,
     tone: isActive ? 'accent' : 'muted',
-    text: `Session ${s.index}   ${time}${peak}${isActive ? '' : `   ${END[s.end ?? 'other'] ?? 'ended'}`}`,
+    text: spaced(kit, [`Session ${s.index}`, time, s.peakTokens > 0 && `${fmt.tokens(s.peakTokens)} peak`, !isActive && (END[s.end ?? 'other'] ?? 'ended')]),
     right: fmt.cost(s.costUsd),
     isDim: !isActive,
   })
@@ -55,10 +54,34 @@ function runItem(kit: Kit, r: ChainRunView, now: number): RenderElement {
     key: `run-${r.id}`,
     glyph: G.ring,
     tone: 'muted',
-    text: `${projectOf(r.root)}   ${fmt.when(r.startedAt, now)}${r.sessions.length > 1 ? `   ${r.sessions.length} sessions` : ''}`,
+    text: spaced(kit, [projectOf(r.root), fmt.when(r.startedAt, now), r.sessions.length > 1 && `${r.sessions.length} sessions`]),
     right: `${fmt.cost(r.costUsd)}${r.isCostPartial ? '+' : ''}`,
     isDim: true,
   })
+}
+
+/**
+ * The run's shape: each session's peak context as a column, the handoff
+ * point as a dashed line. Context saws up and down across handoffs while the
+ * work carries on; this is where that shows.
+ */
+function runChart(kit: Kit, run: ChainRunView, threshold: number | null, window: number | null): RenderElement | null {
+  const { Box, Text } = kit.ui
+  if (run.sessions.length < 2) return null
+  const values = run.sessions.map(s => {
+    const w = s.window ?? window
+    return w === null || w <= 0 ? 0 : s.peakTokens / w
+  })
+  const marker = threshold !== null && window !== null && window > 0 ? threshold / window : null
+  const isActive = run.status === 'active'
+  return (
+    <Box key="run-chart" flexDirection="column">
+      {columns(kit, { key: 'run-columns', values, marker, current: isActive ? values.length - 1 : undefined, alt: `Peak context of each of the run's ${run.sessions.length} sessions` })}
+      <Text dimColor wrap="truncate-end">
+        {marker === null ? 'Peak context per session' : `Peak context per session · hands off at ${Math.round(marker * 100)}%`}
+      </Text>
+    </Box>
+  )
 }
 
 export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: ChainView | undefined): RenderElement {
@@ -214,7 +237,10 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
         rows: k =>
           current === null
             ? [emptyState(k, 'The run starts with the first response.', 'run-empty')]
-            : current.sessions.map((x, i) => sessionItem(k, x, i === current.sessions.length - 1 && current.status === 'active' && x.endedAt === null)),
+            : [
+                runChart(k, current, s.enabled ? a.threshold : null, a.window),
+                ...current.sessions.map((x, i) => sessionItem(k, x, i === current.sessions.length - 1 && current.status === 'active' && x.endedAt === null)),
+              ],
       })}
 
       {chain === undefined || chain.history.length === 0

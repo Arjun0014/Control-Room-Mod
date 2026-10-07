@@ -7,6 +7,7 @@
 import { DEFAULT_HANDOFF_FILE } from '../constants'
 
 import type {
+  AnswerStyle,
   ContinuationMethod,
   ControlRoomCustomProfile,
   ControlRoomSettings,
@@ -23,6 +24,7 @@ import type {
 } from '../../types'
 
 export type {
+  AnswerStyle,
   ContinuationMethod,
   FrontierEffort,
   GuardStrictness,
@@ -60,6 +62,8 @@ void _everyCategory
 
 export const MODEL_ALIASES: readonly ModelAlias[] = ['session', 'haiku', 'sonnet', 'opus', 'fable']
 
+export const ANSWER_STYLES: readonly AnswerStyle[] = ['standard', 'brief', 'ste', 'mission', 'quest']
+
 export const SYSTEM_KEYS = [
   'autopilot',
   'frontier',
@@ -71,6 +75,7 @@ export const SYSTEM_KEYS = [
   'resources',
   'permissions',
   'progress',
+  'answers',
 ] as const satisfies readonly (keyof SystemSettings)[]
 
 /** Categories whose loosest state is Ask: Control Room never auto-allows them. */
@@ -140,6 +145,7 @@ export function defaultSystems(): SystemSettings {
     resources: { level: 'off', cpu: 70, ram: 85, intervalSec: 3, enforcement: 'limit' },
     permissions: { ...DEFAULT_PERMISSIONS },
     progress: { milestones: true },
+    answers: { style: 'standard' },
   }
 }
 
@@ -194,6 +200,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
   const re = isRecord(r.resources) ? r.resources : {}
   const pe = isRecord(r.permissions) ? r.permissions : {}
   const pr = isRecord(r.progress) ? r.progress : {}
+  const an = isRecord(r.answers) ? r.answers : {}
 
   const permissions = {} as Record<PermissionCategory, PermissionState>
   for (const category of PERMISSION_CATEGORIES) {
@@ -260,6 +267,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
     },
     permissions,
     progress: { milestones: bool(pr.milestones, base.progress.milestones) },
+    answers: { style: pick(an.style, ANSWER_STYLES, base.answers.style) },
   }
 }
 
@@ -326,6 +334,7 @@ export function systemsOf(settings: Settings): SystemSettings {
     resources: settings.resources,
     permissions: settings.permissions,
     progress: settings.progress,
+    answers: settings.answers,
   }
 }
 

@@ -77,7 +77,11 @@ export type PolicySection = { name: string; text: string }
  * (never of live figures), so the prompt only changes when the person
  * changes a setting: one prompt-cache miss per change, none per turn.
  */
-export function policySections(settings: Settings, autopilotThreshold: number | null, live: { milestonesTool?: string | null } = {}): PolicySection[] {
+export function policySections(
+  settings: Settings,
+  autopilotThreshold: number | null,
+  live: { milestonesTool?: string | null; nativeOutputStyle?: string | null } = {},
+): PolicySection[] {
   const sections: PolicySection[] = []
   // Only where Control Room offered its milestones tool (Claude Code has no task list of its own here).
   if (settings.progress.milestones && live.milestonesTool !== undefined && live.milestonesTool !== null) {
@@ -99,6 +103,9 @@ export function policySections(settings: Settings, autopilotThreshold: number | 
     const rounded = autopilotThreshold === null ? null : Math.round(autopilotThreshold / 10_000) * 10_000
     sections.push({ name: 'Context Autopilot', text: prompts.autopilotPolicy(rounded, settings.autopilot.handoffFile) })
   }
+  // The person's own Claude Code output style is the more specific choice: it wins, and this stands down.
+  const style = live.nativeOutputStyle === undefined || live.nativeOutputStyle === null ? prompts.answerStylePolicy(settings.answers.style) : null
+  if (style !== null) sections.push({ name: 'Answer style', text: style })
   return sections
 }
 

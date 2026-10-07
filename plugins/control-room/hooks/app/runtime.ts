@@ -35,6 +35,9 @@ import { ActivityTracker } from '../features/activity'
 import * as Autopilot from '../features/autopilot'
 import * as Chain from '../features/chain'
 import * as Plan from '../features/plan'
+import * as Quest from '../features/quest'
+import { VALIDATION_LABEL } from '../features/validation'
+import { answerStyleLabel } from '../core/answers'
 import { type GuardAssessment, assessExit, isRepeat } from '../features/guard'
 import * as Guard from '../features/guard'
 import { adjustVerdict, decisionFor, denyMessage, editPathOf, findingsFor, isEditTool, isShellTool } from '../features/permissions/decide'
@@ -121,6 +124,13 @@ export class Runtime {
   notes: string[] = []
   savedAt: number | null = null
 
+  /** Quest log: lifetime XP and achievements (kept while the Quest log style is chosen). */
+  quest: Quest.QuestState = Quest.emptyQuest()
+  /** Checks of each kind that already paid XP this turn, so re-running a passing check earns nothing. */
+  private questGreen = new Set<string>()
+  /** The person's own Claude Code output style, as the last system prompt reported it; it outranks the answer style. */
+  nativeOutputStyle: string | null = null
+
   /** Milestones finished when the turn began, so the turn's summary can count its own. */
   turnStartDone = 0
 
@@ -136,11 +146,13 @@ export class Runtime {
   readonly publisher: Publisher
   private readonly saveSettings: Debounced<Settings>
   private readonly saveRunLater: Debounced<Chain.Run>
+  private readonly saveQuest: Debounced<Quest.QuestState>
 
   constructor() {
     this.publisher = new Publisher(() => this.host, this)
     this.saveSettings = new Debounced<Settings>(() => this.host, (host, value) => host.storeSet(STORE_KEYS.settings, value), LIMITS.persistDebounceMs)
     this.saveRunLater = new Debounced<Chain.Run>(() => this.host, (host, run) => saveRun(host, run), LIMITS.persistDebounceMs)
+    this.saveQuest = new Debounced<Quest.QuestState>(() => this.host, (host, value) => host.storeSet(STORE_KEYS.quest, value), LIMITS.persistDebounceMs)
     this.monitor = new ResourceMonitor(
       (pressure, previous) => this.onPressure(pressure, previous),
       () => this.publisher.mark('resources', 'hud', 'pane'),
@@ -163,6 +175,7 @@ export class Runtime {
         if (host === null) return
         const loaded = await loadSettings(host)
         this.settings = loaded.settings
+        this.quest = Quest.questOf(await host.storeGet(STORE_KEYS.quest).catch(() => undefined))
         if (loaded.wasRepaired) this.note('Some saved Control Room settings were invalid and were reset to safe defaults.')
         if (loaded.tightened.length > 0) {
           this.note(`${loaded.tightened.join(', ')} no longer offer${loaded.tightened.length === 1 ? 's' : ''} Allow, so Claude Code asks first.`)
@@ -273,19 +286,70 @@ export class Runtime {
     if (!this.settings.progress.milestones) return 'Milestone tracking is off in Control Room; there is no need to call this tool.'
     if (agentId !== undefined || this.run === null) return 'Recorded.'
     const session = Chain.currentSession(this.run)?.index ?? 1
-    const plan = Plan.fromMilestones(this.plan, input, session, Date.now())
-    if (plan !== this.plan) {
-      this.run = { ...this.run, plan }
+    // Claude's own statement of the objective, when it gives one, says it better than the request's first sentence.
+    const objective = typeof input.objective === 'string' ? clean(input.objective, 140) : ''
+    if (objective.length >= 8 && objective !== this.run.objective) {
+      this.run = { ...this.run, objective }
       this.persistRun()
-      this.publisher.mark('activity', 'hud', 'pane')
+      this.publisher.mark('activity', 'hud')
     }
+    this.setPlan(Plan.fromMilestones(this.plan, input, session, Date.now()))
     const p = this.progress
     return `Recorded: ${p.done} of ${p.total} milestones done${p.current === null ? '' : `, now: ${p.current.subject}`}.`
   }
 
+  /** A new run plan from Claude's task list: kept with the run, and in the Quest log, newly finished milestones pay. */
+  private setPlan(plan: Plan.Plan): void {
+    if (this.run === null || plan === this.plan) return
+    const before = Plan.progressOf(this.plan)
+    const wasDone = new Set(this.plan.tasks.filter(t => t.status === 'completed').map(t => t.key))
+    this.run = { ...this.run, plan }
+    const after = this.progress
+    for (const t of plan.tasks) {
+      if (t.status === 'completed' && !wasDone.has(t.key)) this.questEvent('milestone', `Milestone: ${t.subject}`, t.key)
+    }
+    if (after.total >= 3 && after.done === after.total && before.done < before.total) {
+      this.questEvent('fullClear', `Full clear: ${after.done} of ${after.total} milestones`)
+    }
+    this.persistRun()
+    this.publisher.mark('activity', 'hud', 'pane')
+  }
+
+  /**
+   * Quest log: one verified outcome. Only while the person chose the Quest log
+   * style; a milestone pays once per run (by `paidKey`).
+   */
+  private questEvent(kind: Quest.QuestEventKind, text: string, paidKey?: string): void {
+    if (this.settings.answers.style !== 'quest' || this.run === null) return
+    const share = Quest.runQuestOf(this.run.quest)
+    if (paidKey !== undefined && share.paid.includes(paidKey)) return
+    const result = Quest.award(this.quest, { kind, text }, Date.now())
+    this.quest = result.state
+    this.run = { ...this.run, quest: { xp: share.xp + result.xp, paid: paidKey === undefined ? share.paid : [...share.paid, paidKey].slice(-200) } }
+    const shape = Quest.unlockForRun(this.quest, { sessions: this.run.sessions.length, milestonesDone: Quest.runQuestOf(this.run.quest).paid.length }, Date.now())
+    this.quest = shape.state
+    this.saveQuest.schedule(this.quest)
+    this.persistRun()
+    this.publisher.mark('hud', 'activity')
+    if (!this.settings.ui.toasts) return
+    for (const id of [...result.unlocked, ...shape.unlocked]) this.host?.toast(`Achievement: ${Quest.achievementName(id)}`, 5000)
+    if (result.levelUp !== null) this.host?.toast(`Level ${result.levelUp}`, 4000)
+  }
+
+  /** Quest log: achievements a run earns by its shape (a third context), checked when it rolls over. */
+  private questForRunShape(now: number): void {
+    if (this.settings.answers.style !== 'quest' || this.run === null) return
+    const shape = Quest.unlockForRun(this.quest, { sessions: this.run.sessions.length, milestonesDone: Quest.runQuestOf(this.run.quest).paid.length }, now)
+    if (shape.unlocked.length === 0) return
+    this.quest = shape.state
+    this.saveQuest.schedule(this.quest)
+    this.publisher.mark('hud', 'activity')
+    if (this.settings.ui.toasts) for (const id of shape.unlocked) this.host?.toast(`Achievement: ${Quest.achievementName(id)}`, 5000)
+  }
+
   /** The policy sections in force, with what this session offers. */
   policies(): ReturnType<typeof policySections> {
-    return policySections(this.settings, this.autopilot.threshold, { milestonesTool: this.milestonesTool })
+    return policySections(this.settings, this.autopilot.threshold, { milestonesTool: this.milestonesTool, nativeOutputStyle: this.nativeOutputStyle })
   }
 
   private async registerCommands(): Promise<void> {
@@ -296,7 +360,7 @@ export class Runtime {
       await host.registerCommand({
         name: COMMAND,
         description: 'Open Control Room: context, behavior, guardrails, activity and setup',
-        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|frontier|focus|resources <level>|agents <mode>]',
+        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|frontier|focus|style <name>|resources <level>|agents <mode>]',
       })
       this.commandsRegistered.add(COMMAND)
     } catch (error) {
@@ -385,6 +449,7 @@ export class Runtime {
         now,
       })
       this.persistRun(true)
+      this.questForRunShape(now)
     }
     this.sessionId = input.sessionId
     this.usage = { tokens: undefined, window: this.usage.window, pct: undefined, costUsd: 0 }
@@ -427,6 +492,7 @@ export class Runtime {
       if (host !== null) await saveRun(host, this.run).catch(() => undefined)
     }
     await this.saveSettings.flush()
+    await this.saveQuest.flush()
   }
 
   // -------------------------------------------------------------------------
@@ -556,6 +622,7 @@ export class Runtime {
       }
       case 'verifyHandoff': {
         const isOk = await this.verifyHandoff()
+        if (isOk) this.questEvent('handoff', 'Clean handoff: notes verified')
         this.stepAutopilot({ kind: 'handoffVerified', isOk, now: await host.now() })
         return
       }
@@ -759,6 +826,7 @@ export class Runtime {
     this.guard.lastBlockedAnswer = ''
     this.activity.turnStarted(Date.now())
     this.turnStartDone = this.progress.done
+    this.questGreen.clear()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner')
   }
 
@@ -860,8 +928,13 @@ export class Runtime {
   // -------------------------------------------------------------------------
   // System prompt
 
-  composeSection(): { id: string; text: string; scope: 'session' } | null {
+  composeSection(outputStyle?: { name: string } | null): { id: string; text: string; scope: 'session' } | null {
     this.compose.isReached = true
+    const native = outputStyle === undefined || outputStyle === null ? null : clean(outputStyle.name, 60) || null
+    if (native !== this.nativeOutputStyle) {
+      this.nativeOutputStyle = native
+      this.publisher.mark('pane')
+    }
     const text = policyText(this.policies())
     return text === null ? null : { id: POLICY_SECTION_ID, text, scope: 'session' }
   }
@@ -1021,18 +1094,37 @@ export class Runtime {
     // Claude's own task list is the run's plan; a subagent's list is its own business.
     if (status === 'ok' && agentId === undefined && Plan.isPlanTool(tool) && this.run !== null) {
       const session = Chain.currentSession(this.run)?.index ?? 1
-      const plan = Plan.applyTool(this.plan, { tool, input, result: result?.result, session, now })
-      if (plan !== this.plan) {
-        this.run = { ...this.run, plan }
-        this.persistRun()
-      }
+      this.setPlan(Plan.applyTool(this.plan, { tool, input, result: result?.result, session, now }))
     }
+    if (agentId === undefined) this.questForCheck(id)
     if (tool === 'TaskStop' && status === 'ok') {
       const taskId = typeof input.task_id === 'string' ? input.task_id : typeof input.shell_id === 'string' ? input.shell_id : null
       if (taskId !== null) this.activity.backgroundEnded(taskId)
     }
     if (tool === 'Agent') void this.refreshAgents()
     this.publisher.mark('activity', 'spinner', 'hud', 'resources', 'pane')
+  }
+
+  /**
+   * Quest log: a check that just passed. Passing after its last run failed is
+   * a comeback; otherwise its first pass in the turn pays. Re-running a
+   * passing check earns nothing, and a background run has no outcome to count.
+   */
+  private questForCheck(id: string): void {
+    if (this.settings.answers.style !== 'quest') return
+    const item = this.activity.items.find(i => i.id === id)
+    if (item === undefined || item.validation === null || item.status !== 'ok' || item.backgroundTaskId !== null || item.isInterrupted) return
+    const kind = item.validation
+    const own = this.activity.validationRuns().filter(r => r.kind === kind)
+    const previous = own.at(-2)
+    const label = VALIDATION_LABEL[kind]
+    if (previous?.status === 'failed') {
+      this.questGreen.add(kind)
+      this.questEvent('comeback', `Comeback: ${label} pass again`)
+    } else if (!this.questGreen.has(kind)) {
+      this.questGreen.add(kind)
+      this.questEvent('green', `${label} pass`)
+    }
   }
 
   /** tool.check: the engine's verdict adjusted by the policy (never looser than allowed). */
@@ -1217,6 +1309,9 @@ export class Runtime {
     if (before.progress.milestones !== this.settings.progress.milestones) {
       void this.offerMilestones()
       if (this.milestonesTool !== null) changes.push(`milestone tracking is now ${this.settings.progress.milestones ? 'on' : 'off'}`)
+    }
+    if (before.answers.style !== this.settings.answers.style && this.nativeOutputStyle === null) {
+      changes.push(`the answer style is now ${answerStyleLabel(this.settings.answers.style)}${this.settings.answers.style === 'standard' ? ' (write as you normally would)' : ''}`)
     }
     if (changes.length > 0) {
       void host.appendForModel(`Control Room · The user changed session settings: ${changes.join('; ')}. The updated policy is in your system prompt from your next request.`)

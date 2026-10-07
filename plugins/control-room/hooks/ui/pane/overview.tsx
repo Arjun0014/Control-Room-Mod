@@ -130,7 +130,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
               : [
                   { text: fmt.cost(hud.cost.usd), isBold: true },
                   { text: ' this session', tone: 'muted' },
-                  ...(hasRunCost ? [{ text: `  ·  ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} this run`, tone: 'muted' as const }] : []),
+                  ...(hasRunCost ? [{ text: ` · ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} this run`, tone: 'muted' as const }] : []),
                 ],
           ),
         })}
@@ -142,7 +142,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
               content: textRuns(kit, 'machine-value', [
                 { text: 'CPU ', tone: 'muted' },
                 { text: pct(load.cpu), tone: readingTone(load.cpuTone), isBold: load.cpuTone === 'bad' },
-                { text: '   Memory ', tone: 'muted' },
+                { text: kit.surface === 'terminal' ? '   Memory ' : ' · Memory ', tone: 'muted' },
                 { text: pct(load.ram), tone: readingTone(load.ramTone), isBold: load.ramTone === 'bad' },
               ]),
             })}
@@ -181,6 +181,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
           toggle(k, 'sys-guard', 'Lazy-exit guard', s.guard.enabled, () => u(d => void (d.guard.enabled = !d.guard.enabled)), st.guard),
           toggle(k, 'sys-qa', 'Release check', s.qa.enabled, () => u(d => void (d.qa.enabled = !d.qa.enabled)), st.qa),
           row(k, { key: 'sys-router', label: 'Model router', control: link(k, { key: 'sys-router', label: st.router.text, onPress: () => kit.actions.setTab('behavior') }) }),
+          row(k, { key: 'sys-answers', label: 'Answer style', control: link(k, { key: 'sys-answers', label: st.answers.text, onPress: () => kit.actions.setTab('behavior') }) }),
         ],
       })}
 

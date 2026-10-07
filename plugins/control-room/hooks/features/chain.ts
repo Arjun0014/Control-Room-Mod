@@ -10,6 +10,7 @@
 
 import { LIMITS } from '../constants'
 import { type Plan, emptyPlan } from './plan'
+import type { RunQuest } from './quest'
 
 export type SessionStart = 'startup' | 'resume' | 'clear' | 'handoff'
 
@@ -54,8 +55,13 @@ export type Run = {
   sessions: SessionEntry[]
   /** Claude's milestones for the run (its task list), carried across handoffs. Absent in runs before 1.0.2. */
   plan?: Plan
-  /** What the person asked for, in their words: the latest substantial request of the run. */
+  /**
+   * The run's objective: Claude's statement of it with its milestones when it gives one, else the
+   * person's latest substantial request, in their words.
+   */
   objective?: string | null
+  /** Quest log: the run's XP and the milestones already paid for. Absent until it earns any. */
+  quest?: RunQuest
 }
 
 export function newSession(id: string, index: number, start: SessionStart, now: number): SessionEntry {

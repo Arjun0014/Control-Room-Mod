@@ -27,7 +27,8 @@ const asRecord = (v: unknown): Record<string, unknown> => (typeof v === 'object'
 export function compactToolRow(kit: Kit, props: ToolRowProps): RenderElement {
   const { Box, Text, Button } = kit.ui
   const label = clean(labelOf(props.tool, asRecord(props.input)), Math.max(10, kit.columns - props.tool.length - 12))
-  const status = props.isRunning ? { glyph: G.run, color: 'permission' } : props.isInterrupted ? { glyph: G.stop, color: 'warning' } : props.isErrored ? { glyph: G.fail, color: 'error' } : { glyph: G.ok, color: 'success' }
+  // A ring while it runs: the row's own ▸ is the control that opens it.
+  const status = props.isRunning ? { glyph: G.ring, color: 'permission' } : props.isInterrupted ? { glyph: G.stop, color: 'warning' } : props.isErrored ? { glyph: G.fail, color: 'error' } : { glyph: G.ok, color: 'success' }
   const tool = props.tool.startsWith('mcp__') ? props.tool.split('__').slice(1).join('·') : props.tool
   return (
     <Box flexDirection="row" key={`row-${props.tool_use_id}`}>

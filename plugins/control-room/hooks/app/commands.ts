@@ -6,9 +6,10 @@
 
 import type { CommandRunResult } from 'claude-code'
 
+import { ANSWER_STYLE_INFO, answerStyleLabel } from '../core/answers'
 import * as fmt from '../core/format'
 import { listProfiles } from '../core/profiles'
-import { defaultSettings } from '../core/settings'
+import { ANSWER_STYLES, type AnswerStyle, defaultSettings } from '../core/settings'
 import * as Chain from '../features/chain'
 import type { Runtime } from './runtime'
 import { hudOf, profileOf, runLabelOf, statusOf } from './views'
@@ -25,6 +26,7 @@ const HELP = [
   '  /cr resources off|low|medium|high|60/80',
   '  /cr agents unlimited|off|ask|<n>',
   '  /cr router off|balanced|performance|economy|custom',
+  '  /cr style standard|brief|ste|mission|quest   how Claude writes to you',
   '  /cr hud band|status|both|off',
   '  /cr reset confirm         back to Normal (custom profiles are kept)',
 ].join('\n')
@@ -50,6 +52,7 @@ export function statusText(rt: Runtime): string {
     ['Subagents', st.subagents.text],
     ['Machine load', st.load.text],
     ['Focus view', st.focus.text],
+    ['Answer style', st.answers.text],
   ]
   const head = `◆ Control Room · ${p.name}${p.isModified ? ' (edited)' : ''} · ${runLabelOf(rt)}`
   return [head, ...lines.map(([label, value]) => `${label.padEnd(17)}${value}`)].join('\n')
@@ -179,6 +182,20 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
         s.router.strategy = a1 as 'off' | 'balanced' | 'performance' | 'economy' | 'custom'
       })
       return { text: `Model router ${a1 === 'off' ? 'off' : `${a1.charAt(0).toUpperCase()}${a1.slice(1)}`}.` }
+    }
+    case 'style':
+    case 'answers': {
+      const aliases: Record<string, AnswerStyle> = { standard: 'standard', default: 'standard', normal: 'standard', brief: 'brief', short: 'brief', ste: 'ste', plain: 'ste', simplified: 'ste', mission: 'mission', quest: 'quest', game: 'quest' }
+      const style = a1 === undefined ? undefined : aliases[a1]
+      if (style === undefined) {
+        const list = ANSWER_STYLES.map(s => `  ${s.padEnd(10)} ${ANSWER_STYLE_INFO[s].label}: ${ANSWER_STYLE_INFO[s].hint}`)
+        return { text: `Answer style: ${answerStyleLabel(rt.settings.answers.style)}\n${list.join('\n')}\nUsage: /cr style ${ANSWER_STYLES.join('|')}` }
+      }
+      rt.update(s => {
+        s.answers.style = style
+      })
+      const native = rt.nativeOutputStyle === null ? '' : ` Claude Code's own output style, ${rt.nativeOutputStyle}, is in use and takes precedence until you set it back to Default.`
+      return { text: `Answer style ${answerStyleLabel(style)}.${native}` }
     }
     case 'hud': {
       const valid = ['band', 'status', 'both', 'off']

@@ -1,33 +1,39 @@
 /**
- * The status bar: the run at a glance, one line above the prompt.
+ * The status bar: the run at a glance, in two layers above the prompt.
  *
- *   ◆   Context ━━━━━━━┃── 62%   Work ■■■■□□□ 4/7   ▸ Running regression tests       Run $115.93   Control Room
+ *   ▸ Downloading the kernel outputs · 4m 51s                     Fetch E-008 outputs · 2 of 5
+ *   ◆   Context ━━━━━┃── 62%   Work ■■□□□ 2/5   Checks ✓ Tests ✗ Lint   Run $115.93   Control Room
  *
- * Two meters that cannot be confused. Context is a continuous line with the
- * handoff tick: how much of the reasoning window is used, which starts over
- * after a handoff. Work is one square per milestone with "done/total": how
- * much of the run's objective is finished, which carries across handoffs.
- * Then what Claude is doing right now, which takes the room that is left,
- * and the whole run's cost. States appear only while they matter: a handoff,
- * a failing check, calls that need a look, a busy machine, agents, the guard.
+ * The top line is what is happening: while a turn runs, what Claude is doing
+ * (in its own words when the milestone under way has them), how long a slow
+ * call has run, and the milestone it serves; once the turn ends, what it did,
+ * in counted words. It appears with the first turn of a context, and a
+ * handoff that needs the person takes its place, with its actions.
  *
- * Wide: labelled meters. Medium: the meters alone. Narrow: shorter meters,
- * then the least important items drop. Desktop draws both meters as SVG.
- * A second line appears only when something needs the person.
+ * The bottom line holds the readings, each a name and a graphic. Context is
+ * a continuous line with the handoff tick (how much of the window is used;
+ * it starts over after a handoff). Work is one square per milestone with
+ * "done/total" (how much of the objective is finished; it carries across
+ * handoffs). Checks are their latest outcomes. Then states only while they
+ * matter (a handoff under way, calls that need a look, a busy machine,
+ * agents, the guard), the Quest log's level, and the whole run's cost.
+ *
+ * Width decides the detail: names and long meters when wide, shorter meters
+ * and fewer items when narrow. Desktop draws the meters as SVG.
  */
 
 import type { RenderElement } from 'claude-code'
 
-import type { HudModel, Tone } from '../../types'
+import type { HudActivity, HudModel, Tone } from '../../types'
 import * as fmt from '../core/format'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
-import { G, meterCells, svgBar, svgSegments, toneProps, workCells } from './theme'
+import { CHECK_DOT, G, meterCells, svgBar, svgRing, svgSegments, toneProps, workCells } from './theme'
 
 type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean }
 
 /** A meter drawn as SVG on the remote surfaces, in place of its glyphs: `cells` wide. */
-type Graphic = { source: string; cells: number; alt: string }
+type Graphic = { source: string; cells: number; alt: string; height: number }
 
 export type Segment = {
   key: string
@@ -49,15 +55,15 @@ const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).
 
 export const widthOf = (s: Segment): number => spanWidth(s.spans) + (s.graphic?.cells ?? 0) + spanWidth(s.after)
 
-/** How much the bar shows at a width: labels, and the cells of each meter. */
-export type Tier = { labels: boolean; meter: number; squares: number }
+/** How much the readings line shows at a width: names, check names, and the cells of each meter. */
+export type Tier = { labels: boolean; names: boolean; meter: number; squares: number }
 
 export function tierOf(columns: number, surface: Kit['surface'] = 'terminal'): Tier {
-  const wide = surface === 'terminal' ? 120 : 100
-  if (columns >= wide) return { labels: true, meter: 10, squares: 10 }
-  if (columns >= 90) return { labels: false, meter: 8, squares: 8 }
-  if (columns >= 64) return { labels: false, meter: 6, squares: 6 }
-  return { labels: false, meter: 4, squares: 4 }
+  const wide = surface === 'terminal' ? 100 : 70
+  if (columns >= wide) return { labels: true, names: true, meter: 10, squares: 10 }
+  if (columns >= 80) return { labels: false, names: true, meter: 8, squares: 8 }
+  if (columns >= 60) return { labels: false, names: false, meter: 6, squares: 6 }
+  return { labels: false, names: false, meter: 4, squares: 4 }
 }
 
 function meterSpans(fraction: number, marker: number | null, tone: Tone, width: number): Span[] {
@@ -90,14 +96,17 @@ const isHigh = (tone: Tone): boolean => tone === 'warn' || tone === 'bad'
 
 const EVENT_STATES = new Set(['pending', 'requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming', 'awaiting'])
 
+const CHECK_GLYPH: Record<string, string> = { passed: G.ok, failed: G.fail, running: G.run, blocked: G.stop, background: G.ring, stopped: G.stop }
+
+/** The readings line's segments, in display order, each with its priority for when room runs short. */
 export function hudSegments(hud: HudModel, columns: number, surface: Kit['surface'] = 'terminal'): Segment[] {
   const tier = tierOf(columns, surface)
   const isSvg = surface !== 'terminal'
+  const label = (text: string): Span[] => (tier.labels ? [{ text: `${text} `, isDim: true }] : [])
   const segments: Segment[] = [{ key: 'brand', priority: 0, side: 'left', spans: [{ text: G.brand, tone: 'accent', isBold: true }] }]
 
   // Context: a line with the handoff tick.
   const ctx = hud.ctx
-  const ctxLabel: Span[] = tier.labels ? [{ text: 'Context ', isDim: true }] : []
   if (ctx.pct === null || ctx.tokens === null || ctx.window === null || ctx.window <= 0) {
     segments.push({ key: 'ctx', priority: 0, side: 'left', spans: [{ text: 'Context ', isDim: true }, { text: ctx.pct === null ? G.none : `${ctx.pct}%`, isDim: ctx.pct === null }] })
   } else {
@@ -111,18 +120,17 @@ export function hudSegments(hud: HudModel, columns: number, surface: Kit['surfac
             key: 'ctx',
             priority: 0,
             side: 'left',
-            spans: ctxLabel,
-            graphic: { source: svgBar({ fraction, marker, tone, width: tier.meter * CELL_PX, height: 10 }), cells: tier.meter, alt: `Context ${ctx.pct}% used` },
+            spans: label('Context'),
+            graphic: { source: svgBar({ fraction, marker, tone, width: tier.meter * CELL_PX, height: 10 }), cells: tier.meter, alt: `Context ${ctx.pct}% used`, height: 10 },
             after: [pct],
           }
-        : { key: 'ctx', priority: 0, side: 'left', spans: [...ctxLabel, ...meterSpans(fraction, marker, tone, tier.meter), pct] },
+        : { key: 'ctx', priority: 0, side: 'left', spans: [...label('Context'), ...meterSpans(fraction, marker, tone, tier.meter), pct] },
     )
   }
 
   // Work: one square per milestone, as Claude's own task list counts them.
   const work = hud.work
   if (work !== null && work.total > 0) {
-    const label: Span[] = tier.labels ? [{ text: 'Work ', isDim: true }] : []
     const isDone = work.done === work.total
     const count: Span = { text: ` ${work.done}/${work.total}`, tone: isDone ? 'good' : undefined }
     const hasCurrent = work.current !== null
@@ -132,39 +140,66 @@ export function hudSegments(hud: HudModel, columns: number, surface: Kit['surfac
             key: 'work',
             priority: 1,
             side: 'left',
-            spans: label,
+            spans: label('Work'),
             graphic: {
               source: svgSegments({ done: work.done, total: work.total, hasCurrent, max: tier.squares, width: Math.min(work.total, tier.squares) * CELL_PX + 8, height: 10 }),
               cells: Math.min(work.total, tier.squares) + 1,
               alt: `Work: ${work.done} of ${work.total} milestones done`,
+              height: 10,
             },
             after: [count],
           }
-        : { key: 'work', priority: 1, side: 'left', spans: [...label, ...squareSpans(work.done, work.total, tier.squares, hasCurrent), count] },
+        : { key: 'work', priority: 1, side: 'left', spans: [...label('Work'), ...squareSpans(work.done, work.total, tier.squares, hasCurrent), count] },
     )
+  }
+
+  // Checks: each kind's latest outcome, named when there is room.
+  if (hud.checks.length > 0) {
+    const spans: Span[] = [...label('Checks')]
+    hud.checks.forEach((c, i) => {
+      const tone = CHECK_DOT[c.status] ?? 'muted'
+      spans.push({ text: `${i > 0 && tier.names ? ' ' : ''}${CHECK_GLYPH[c.status] ?? G.ring}`, tone })
+      if (tier.names) spans.push({ text: ` ${c.label}`, tone: c.status === 'failed' ? 'bad' : undefined, isDim: c.status !== 'failed' ? true : undefined })
+    })
+    segments.push({ key: 'checks', priority: hud.checks.some(c => c.status === 'failed') ? 1 : 2, side: 'left', spans })
   }
 
   if (hud.autopilot.isOn && EVENT_STATES.has(hud.autopilot.state)) {
     segments.push({ key: 'event', priority: 0, side: 'left', spans: [{ text: hud.autopilot.text, tone: hud.autopilot.tone === 'normal' ? 'accent' : hud.autopilot.tone, isBold: true }] })
   }
 
-  // Right: states while they matter, then the run's cost.
-  if (hud.failing.length > 0) {
-    const names = hud.failing.join(', ')
-    segments.push({ key: 'failing', priority: 1, side: 'right', spans: [{ text: `${G.fail} ${tier.labels ? `${names} failing` : names}`, tone: 'bad' }] })
-  }
+  // Right: states while they matter, the level, then the run's cost.
   if (hud.attention > 0) segments.push({ key: 'attention', priority: 2, side: 'right', spans: [{ text: `${G.warn} ${fmt.plural(hud.attention, 'issue')}`, tone: 'warn' }] })
-  if (hud.load !== null && isHigh(hud.load.cpuTone)) {
-    segments.push({ key: 'cpu', priority: 3, side: 'right', spans: [{ text: 'CPU ', isDim: true }, { text: `${Math.round(hud.load.cpu ?? 0)}%`, tone: hud.load.cpuTone, isBold: hud.load.cpuTone === 'bad' }] })
-  }
-  if (hud.load !== null && isHigh(hud.load.ramTone)) {
-    segments.push({ key: 'ram', priority: 3, side: 'right', spans: [{ text: 'RAM ', isDim: true }, { text: `${Math.round(hud.load.ram ?? 0)}%`, tone: hud.load.ramTone, isBold: hud.load.ramTone === 'bad' }] })
+  for (const which of ['cpu', 'ram'] as const) {
+    const load = hud.load
+    if (load === null) continue
+    const value = which === 'cpu' ? load.cpu : load.ram
+    const tone = which === 'cpu' ? load.cpuTone : load.ramTone
+    if (!isHigh(tone)) continue
+    const name = which === 'cpu' ? 'CPU' : 'RAM'
+    const reading: Span = { text: `${isSvg ? ' ' : ''}${Math.round(value ?? 0)}%`, tone, isBold: tone === 'bad' }
+    segments.push(
+      isSvg
+        ? { key: which, priority: 3, side: 'right', spans: [{ text: `${name} `, isDim: true }], graphic: { source: svgBar({ fraction: (value ?? 0) / 100, tone, width: 4 * CELL_PX, height: 10 }), cells: 4, alt: `${name} ${Math.round(value ?? 0)}%`, height: 10 }, after: [reading] }
+        : { key: which, priority: 3, side: 'right', spans: [{ text: `${name} `, isDim: true }, reading] },
+    )
   }
   if (hud.agents.running > 0) {
     const text = hud.agents.limit === null ? fmt.plural(hud.agents.running, 'agent') : `${hud.agents.running} of ${hud.agents.limit} agents`
     segments.push({ key: 'agents', priority: 3, side: 'right', spans: [{ text, tone: 'info' }] })
   }
   if (hud.guard.isOn && hud.guard.continued > 0) segments.push({ key: 'guard', priority: 4, side: 'right', spans: [{ text: `Kept going ×${hud.guard.continued}`, tone: 'warn' }] })
+
+  const quest = hud.quest
+  if (quest !== null) {
+    const level: Span = { text: `Lv ${quest.level}`, isBold: true }
+    const xp: Span = { text: ` ${quest.xp} XP`, isDim: true }
+    segments.push(
+      isSvg
+        ? { key: 'quest', priority: 3, side: 'right', spans: [], graphic: { source: svgRing({ fraction: quest.levelSpan > 0 ? quest.intoLevel / quest.levelSpan : 0, size: 14 }), cells: 2, alt: `Level ${quest.level}`, height: 14 }, after: [level, xp] }
+        : { key: 'quest', priority: 3, side: 'right', spans: [{ text: `${G.star} `, tone: 'accent' }, level, ...(tier.labels ? [xp] : [])] },
+    )
+  }
 
   const run = hud.cost.runUsd ?? hud.cost.usd
   segments.push({
@@ -188,9 +223,6 @@ export function fitSegments(segments: readonly Segment[], width: number, gap = G
   return kept
 }
 
-/** The least room the work line needs to be worth drawing. */
-const NOW_MIN = 14
-
 function spanEl(kit: Kit, key: string, span: Span): RenderElement {
   const { Text } = kit.ui
   const props = span.tone === undefined ? {} : toneProps(span.tone)
@@ -213,51 +245,58 @@ function segmentEl(kit: Kit, s: Segment): RenderElement {
     )
   }
   return (
-    <Box key={`seg-${s.key}`} flexDirection="row" alignItems="center" flexShrink={0}>
+    <Box key={`seg-${s.key}`} flexDirection="row" alignItems="center" flexShrink={0} columnGap={s.spans.length === 0 ? 1 : 0}>
       {text(s.spans, 'before')}
-      <Svg key={`seg-${s.key}-svg`} source={s.graphic.source} alt={s.graphic.alt} height={10} />
+      <Svg key={`seg-${s.key}-svg`} source={s.graphic.source} alt={s.graphic.alt} height={s.graphic.height} />
       {text(s.after, 'after')}
     </Box>
   )
 }
 
-export function hudView(kit: Kit, hud: HudModel): RenderElement {
-  const { Box, Text, Button } = kit.ui
-  // The button opens and closes the panel: its name when there is room, else what a press does.
-  const label = kit.columns >= 70 ? 'Control Room' : hud.isPaneOpen ? 'Close' : 'Open'
-  const room = Math.max(10, kit.columns - label.length - GAP - (isNative(kit) ? 4 : 0))
-  const all = hudSegments(hud, kit.columns, kit.surface)
-  const now = hud.now
-  // The work line takes what the meters leave; it yields first when room is short.
-  let kept = fitSegments(all, room - (now === null ? 0 : NOW_MIN + GAP))
-  const used = kept.reduce((n, s) => n + widthOf(s), 0) + Math.max(0, kept.length - 1) * GAP
-  const isNowShown = now !== null && room - used - GAP >= NOW_MIN
-  if (now !== null && !isNowShown) kept = fitSegments(all, room)
-  const left = kept.filter(s => s.side === 'left')
-  const right = kept.filter(s => s.side === 'right')
-  const line = (
-    <Box flexDirection="row" key="hud-line" alignItems="center">
-      <Box flexDirection="row" columnGap={GAP} flexShrink={0} alignItems="center">
-        {left.map(s => segmentEl(kit, s))}
-      </Box>
-      <Box key="hud-now" flexGrow={1} flexShrink={1} marginLeft={GAP} {...clip(kit)}>
-        {isNowShown && now !== null ? (
-          <Text wrap="truncate-end">
-            <Text color="suggestion">{`${G.arrow} `}</Text>
-            <Text dimColor={now.source === 'thinking' ? true : undefined}>{now.text}</Text>
+/** "Fetch E-008 outputs · 2 of 5", or just "2 of 5" when the room is short. */
+function milestoneText(m: NonNullable<HudActivity['milestone']>, room: number): string | null {
+  const position = `${m.index} of ${m.total}`
+  const subject = m.subject.length > 40 ? `${m.subject.slice(0, 39)}…` : m.subject
+  const full = `${subject} · ${position}`
+  if (full.length <= room) return full
+  return position.length <= room ? position : null
+}
+
+/**
+ * The top line: what Claude is doing now, or what the last turn did. The
+ * text is one plain string, so it cuts with an ellipsis on every surface.
+ */
+function activityLine(kit: Kit, a: HudActivity): RenderElement {
+  const { Box, Text } = kit.ui
+  const isWorking = a.state === 'working'
+  const glyphTone: Tone = isWorking ? (a.source === 'thinking' ? 'muted' : 'info') : 'good'
+  const left = isWorking && a.runningMs !== null ? `${a.text} · ${fmt.duration(a.runningMs)}` : a.text
+  const room = Math.max(0, kit.columns - left.length - 2 - GAP - 8)
+  const right = isWorking ? (a.milestone === null ? null : milestoneText(a.milestone, Math.max(room, 12))) : a.durationMs === null ? null : fmt.duration(a.durationMs)
+  return (
+    <Box flexDirection="row" key="hud-activity" alignItems="center" columnGap={GAP}>
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} {...clip(kit)}>
+        <Box width={2} flexShrink={0}>
+          <Text {...toneProps(glyphTone)}>{isWorking ? G.run : G.ok}</Text>
+        </Box>
+        <Box flexShrink={1} {...clip(kit)}>
+          <Text wrap="truncate-end" dimColor={isWorking && a.source !== 'thinking' ? undefined : true}>
+            {left}
           </Text>
-        ) : null}
+        </Box>
       </Box>
-      <Box flexDirection="row" columnGap={GAP} flexShrink={0} marginLeft={right.length > 0 ? GAP : 0} alignItems="center">
-        {right.map(s => segmentEl(kit, s))}
-      </Box>
-      <Box marginLeft={GAP} flexShrink={0}>
-        <Button key="open" label={label} plain dimColor onPress={kit.actions.togglePane} />
-      </Box>
+      {right === null ? null : (
+        <Box flexShrink={0}>
+          <Text dimColor>{right}</Text>
+        </Box>
+      )}
     </Box>
   )
-  const alert = hud.alert
-  if (alert === null) return line
+}
+
+/** A handoff that needs the person, in the top line's place, with its actions. */
+function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderElement {
+  const { Box, Text, Button } = kit.ui
   const actions =
     alert.kind === 'pending'
       ? [
@@ -271,21 +310,58 @@ export function hudView(kit: Kit, hud: HudModel): RenderElement {
           ]
         : []
   return (
-    <Box flexDirection="column">
-      {line}
-      <Box flexDirection="row" key="hud-alert" alignItems="center" columnGap={2}>
-        <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
-          <Text wrap="truncate-end">
-            <Text {...toneProps(alert.tone)}>{`${alert.kind === 'awaiting' ? G.dot : G.warn} `}</Text>
-            <Text>{alert.text}</Text>
-          </Text>
+    <Box flexDirection="row" key="hud-alert" alignItems="center" columnGap={2}>
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} {...clip(kit)}>
+        <Box width={2} flexShrink={0}>
+          <Text {...toneProps(alert.tone)}>{alert.kind === 'awaiting' ? G.dot : G.warn}</Text>
         </Box>
-        <Box flexDirection="row" columnGap={1} flexShrink={0}>
-          {actions.map(a => (
-            <Button key={a.key} label={a.label} variant={a.isPrimary === true ? 'primary' : 'secondary'} onPress={a.onPress} />
-          ))}
+        <Box flexShrink={1} {...clip(kit)}>
+          <Text wrap="truncate-end">{alert.text}</Text>
         </Box>
       </Box>
+      <Box flexDirection="row" columnGap={1} flexShrink={0}>
+        {actions.map(a => (
+          <Button key={a.key} label={a.label} variant={a.isPrimary === true ? 'primary' : 'secondary'} onPress={a.onPress} />
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+/** The readings line: each a name and a graphic, then the run's cost and the panel's button. */
+function readingsLine(kit: Kit, hud: HudModel): RenderElement {
+  const { Box, Button } = kit.ui
+  // The button opens and closes the panel: its name when there is room, else what a press does.
+  const label = kit.columns >= 70 ? 'Control Room' : hud.isPaneOpen ? 'Close' : 'Open'
+  const room = Math.max(10, kit.columns - label.length - GAP - (isNative(kit) ? 4 : 0))
+  const kept = fitSegments(hudSegments(hud, kit.columns, kit.surface), room)
+  const left = kept.filter(s => s.side === 'left')
+  const right = kept.filter(s => s.side === 'right')
+  return (
+    <Box flexDirection="row" key="hud-line" alignItems="center">
+      <Box flexDirection="row" columnGap={GAP} flexShrink={0} alignItems="center">
+        {left.map(s => segmentEl(kit, s))}
+      </Box>
+      <Box key="hud-gap" flexGrow={1} flexShrink={1} />
+      <Box flexDirection="row" columnGap={GAP} flexShrink={0} marginLeft={right.length > 0 ? GAP : 0} alignItems="center">
+        {right.map(s => segmentEl(kit, s))}
+      </Box>
+      <Box marginLeft={GAP} flexShrink={0}>
+        <Button key="open" label={label} plain dimColor onPress={kit.actions.togglePane} />
+      </Box>
+    </Box>
+  )
+}
+
+export function hudView(kit: Kit, hud: HudModel): RenderElement {
+  const { Box } = kit.ui
+  const readings = readingsLine(kit, hud)
+  const top = hud.alert !== null ? alertLine(kit, hud.alert) : hud.activity !== null ? activityLine(kit, hud.activity) : null
+  if (top === null) return readings
+  return (
+    <Box flexDirection="column" rowGap={isNative(kit) && hud.alert !== null ? 1 : 0}>
+      {top}
+      {readings}
     </Box>
   )
 }

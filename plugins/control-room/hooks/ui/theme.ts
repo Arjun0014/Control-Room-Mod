@@ -8,7 +8,7 @@
  * reserved for state that needs a look.
  */
 
-import type { TabId, Tone } from '../../types'
+import type { TabId, TimelineKind, Tone } from '../../types'
 
 export type ColorProps = { color?: string; dimColor?: boolean; bold?: boolean }
 
@@ -76,11 +76,18 @@ export const G = {
   ok: '✓',
   fail: '✗',
   stop: '⊘',
-  run: '…',
+  /** Under way: a call running, a milestone in progress. */
+  run: '▸',
   warn: '▲',
   minus: '−',
   plus: '+',
   none: '—',
+  /** The Quest log: a level, an achievement earned and one still to earn. */
+  star: '★',
+  starOpen: '☆',
+  /** A turn's time strip: a cell with a call running, and one where Claude was thinking. */
+  busy: '▅',
+  idle: '▁',
   spark: ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const,
 } as const
 
@@ -181,6 +188,146 @@ export function svgSpark(values: readonly number[], input: { tone: Tone; width: 
     `</svg>`
   )
 }
+
+// ---------------------------------------------------------------------------
+// Charts: where time, context and changes went. Each draws as SVG on the
+// remote surfaces and as glyphs in the terminal, from the same pure cells.
+
+
+/** The kinds of work in a turn: a theme key for the terminal, a color for SVG, a word for the legend. */
+export const TIMELINE: Record<TimelineKind, { key: string; svg: string; label: string }> = {
+  read: { key: 'ide', svg: '#5A9BF6', label: 'read' },
+  edit: { key: 'autoAccept', svg: '#A27CF2', label: 'edit' },
+  run: { key: 'planMode', svg: '#3BB7A8', label: 'run' },
+  check: { key: 'success', svg: '#30B158', label: 'check' },
+  web: { key: 'suggestion', svg: '#7C95F5', label: 'web' },
+  agent: { key: 'claude', svg: '#D97757', label: 'agent' },
+  other: { key: 'inactive', svg: '#8E8E93', label: 'other' },
+}
+
+export type TimelineSpan = { kind: TimelineKind; start: number; end: number; isFailed: boolean }
+
+/**
+ * A turn's time in `width` cells: each cell takes the kind of work that
+ * filled most of it, failed if any failed call ran in it, or null where
+ * Claude was thinking between calls.
+ */
+export function timelineCells(spans: readonly TimelineSpan[], from: number, to: number, width: number): ({ kind: TimelineKind; isFailed: boolean } | null)[] {
+  const w = Math.max(1, Math.floor(width))
+  const span = Math.max(1, to - from)
+  const cells: ({ kind: TimelineKind; isFailed: boolean } | null)[] = []
+  for (let c = 0; c < w; c++) {
+    const a = from + (span * c) / w
+    const b = from + (span * (c + 1)) / w
+    const share = new Map<TimelineKind, number>()
+    let isFailed = false
+    for (const s of spans) {
+      const overlap = Math.min(b, s.end) - Math.max(a, s.start)
+      if (overlap <= 0) continue
+      share.set(s.kind, (share.get(s.kind) ?? 0) + overlap)
+      if (s.isFailed) isFailed = true
+    }
+    let best: TimelineKind | null = null
+    for (const [kind, ms] of share) if (best === null || ms > (share.get(best) ?? 0)) best = kind
+    // A call shorter than a cell still shows: anything at all in the cell marks it.
+    cells.push(best === null ? null : { kind: best, isFailed })
+  }
+  return cells
+}
+
+/** The same turn as SVG: one rounded bar per call on a quiet track, a failed one in red. */
+export function svgTimeline(input: { spans: readonly TimelineSpan[]; from: number; to: number; width: number; height?: number }): string {
+  const w = Math.max(40, Math.round(input.width))
+  const h = input.height ?? 12
+  const span = Math.max(1, input.to - input.from)
+  const xOf = (t: number) => ((Math.min(input.to, Math.max(input.from, t)) - input.from) / span) * w
+  const bars = input.spans
+    .map(s => {
+      const x = xOf(s.start)
+      const width = Math.max(2, xOf(s.end) - x)
+      const fill = s.isFailed ? SVG_COLOR.bad : TIMELINE[s.kind].svg
+      return `<rect x="${x.toFixed(1)}" y="1" width="${width.toFixed(1)}" height="${h - 2}" rx="2" fill="${fill}"/>`
+    })
+    .join('')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<rect x="0" y="${Math.round(h / 2) - 1}" width="${w}" height="2" rx="1" fill="#8E8E93" fill-opacity="0.3"/>` +
+    bars +
+    `</svg>`
+  )
+}
+
+/** Columns of 0–1 values (a run's sessions, each its peak context) with a dashed line at `marker`. */
+export function svgColumns(input: { values: readonly number[]; marker?: number | null; current?: number; width: number; height?: number }): string {
+  const h = input.height ?? 36
+  const n = Math.max(1, input.values.length)
+  const gap = 4
+  const w = Math.max(40, Math.round(input.width))
+  const col = Math.max(4, Math.min(28, (w - gap * (n - 1)) / n))
+  const yOf = (f: number) => (h - 1 - Math.max(0, Math.min(1, f)) * (h - 2)).toFixed(1)
+  const cols = input.values
+    .map((v, i) => {
+      const x = (i * (col + gap)).toFixed(1)
+      const top = yOf(v)
+      const isCurrent = i === input.current
+      const over = input.marker !== undefined && input.marker !== null && v >= input.marker
+      const fill = over ? SVG_COLOR.warn : SVG_COLOR.info
+      return `<rect x="${x}" y="${top}" width="${col.toFixed(1)}" height="${(h - Number(top)).toFixed(1)}" rx="2" fill="${fill}" fill-opacity="${isCurrent ? 1 : 0.55}"/>`
+    })
+    .join('')
+  const used = Math.min(w, n * col + gap * (n - 1))
+  const line =
+    input.marker === undefined || input.marker === null
+      ? ''
+      : `<line x1="0" x2="${used.toFixed(1)}" y1="${yOf(input.marker)}" y2="${yOf(input.marker)}" stroke="${SVG_COLOR.accent}" stroke-width="1" stroke-dasharray="3 3"/>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${cols}${line}</svg>`
+}
+
+/**
+ * A diffstat as `cells` squares, as GitHub draws one: as many filled as the
+ * change is large (one per doubling of the lines changed), shared between
+ * added and removed by their ratio, the rest empty.
+ */
+export function diffCells(added: number, removed: number, cells = 5): { added: number; removed: number; empty: number } {
+  const total = Math.max(0, added) + Math.max(0, removed)
+  if (total === 0) return { added: 0, removed: 0, empty: cells }
+  const filled = Math.min(cells, Math.max(1, Math.ceil(Math.log2(total + 1))))
+  let plus = Math.round((filled * Math.max(0, added)) / total)
+  if (added > 0 && plus === 0) plus = 1
+  if (removed > 0 && plus === filled) plus = filled - 1
+  return { added: plus, removed: filled - plus, empty: cells - filled }
+}
+
+export function svgDiff(input: { added: number; removed: number; cells?: number; size?: number }): string {
+  const cells = input.cells ?? 5
+  const size = input.size ?? 8
+  const gap = 2
+  const c = diffCells(input.added, input.removed, cells)
+  const w = cells * size + (cells - 1) * gap
+  const rects = Array.from({ length: cells }, (_, i) => {
+    const fill = i < c.added ? `fill="${SVG_COLOR.good}"` : i < c.added + c.removed ? `fill="${SVG_COLOR.bad}"` : `fill="#8E8E93" fill-opacity="0.3"`
+    return `<rect x="${i * (size + gap)}" y="0" width="${size}" height="${size}" rx="2" ${fill}/>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${size}" viewBox="0 0 ${w} ${size}">${rects}</svg>`
+}
+
+/** A progress ring (the Quest log's level), as SVG. */
+export function svgRing(input: { fraction: number; size?: number; tone?: Tone }): string {
+  const s = input.size ?? 28
+  const r = s / 2 - 3
+  const c = 2 * Math.PI * r
+  const f = Number.isFinite(input.fraction) ? Math.min(1, Math.max(0, input.fraction)) : 0
+  const color = SVG_COLOR[input.tone ?? 'accent']
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">` +
+    `<circle cx="${s / 2}" cy="${s / 2}" r="${r.toFixed(1)}" fill="none" stroke="#8E8E93" stroke-opacity="0.3" stroke-width="4"/>` +
+    `<circle cx="${s / 2}" cy="${s / 2}" r="${r.toFixed(1)}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${s / 2} ${s / 2})"/>` +
+    `</svg>`
+  )
+}
+
+/** A check's runs as dots: how the fixes went (✗ ✗ ✓ reads as "passed after two failures"). */
+export const CHECK_DOT: Record<string, Tone> = { passed: 'good', failed: 'bad', running: 'info', blocked: 'warn', background: 'muted', stopped: 'muted' }
 
 /**
  * How a live reading reads: against the governor's ceilings when it is on

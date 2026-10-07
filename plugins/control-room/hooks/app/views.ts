@@ -18,11 +18,14 @@ import type {
   HudModel,
   PaneModel,
   PermissionsView,
+  QuestView,
   ResourcesView,
   SpinnerModel,
   StatusView,
   SystemId,
+  TimelineKind,
   Tone,
+  TurnTimelineView,
 } from '../../types'
 import { MIN_ENGINE } from '../constants'
 import * as fmt from '../core/format'
@@ -34,7 +37,9 @@ import type { ActivityItem, FileChange } from '../features/activity'
 import { isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
 import { type Attention, GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
+import { ACHIEVEMENTS, levelOf, runQuestOf } from '../features/quest'
 import { type ValidationSummary, summarize } from '../features/validation'
+import { answerStyleLabel } from '../core/answers'
 import type { Runtime } from './runtime'
 
 function contextTone(rt: Runtime): Tone {
@@ -152,6 +157,13 @@ export function qaStatus(rt: Runtime): StatusView {
   return rt.settings.qa.enabled ? { text: 'Verify before done', tone: 'normal' } : { text: 'Off', tone: 'muted' }
 }
 
+/** The answer style in force: the person's own Claude Code output style outranks it. */
+export function answersStatus(rt: Runtime): StatusView {
+  if (rt.nativeOutputStyle !== null) return { text: `Claude Code style: ${rt.nativeOutputStyle}`, tone: 'muted' }
+  const style = rt.settings.answers.style
+  return { text: answerStyleLabel(style), tone: style === 'standard' ? 'muted' : 'normal' }
+}
+
 export function statusOf(rt: Runtime): Record<SystemId, StatusView> {
   const load = loadStatus(rt)
   return {
@@ -163,6 +175,7 @@ export function statusOf(rt: Runtime): Record<SystemId, StatusView> {
     subagents: subagentStatus(rt),
     load: load.isOn ? { text: `${load.level} · ${load.text}`, tone: load.tone } : { text: 'Off', tone: 'muted' },
     focus: focusStatus(rt),
+    answers: answersStatus(rt),
   }
 }
 
@@ -220,6 +233,8 @@ export function hudOf(rt: Runtime): HudModel {
   if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: awaitingTone(rt) }
   else if (rt.monitor.pressure.level === 'critical' && s.resources.level !== 'off') alert = { kind: 'load', text: 'Your machine is under heavy load. Claude was asked to ease off.', tone: 'bad' }
   else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Finishing this step, then handing off', tone: 'warn' }
+  const now = Date.now()
+  const validation = validationNow(rt, now)
   return {
     isVisible: s.ui.hud === 'band' || s.ui.hud === 'both',
     isPaneOpen: rt.ui.isPaneOpen,
@@ -235,11 +250,61 @@ export function hudOf(rt: Runtime): HudModel {
     alert,
     work: workOf(rt),
     now: nowLine(rt),
-    failing: validationNow(rt, Date.now())
-      .filter(v => v.isFailing)
-      .map(v => v.label),
-    attention: attentionNow(rt, Date.now()).filter(isOpen).length,
+    failing: validation.filter(v => v.isFailing).map(v => v.label),
+    attention: attentionNow(rt, now).filter(isOpen).length,
+    activity: hudActivityOf(rt, now),
+    checks: validation.map(v => ({ label: v.label, status: v.status })),
+    quest: questHudOf(rt),
   }
+}
+
+/** A running call is worth timing in the status bar after this long. */
+const LONG_CALL_MS = 20_000
+
+/**
+ * The status bar's top line. While a turn runs: what Claude is doing, the
+ * milestone it serves, and how long a slow call has been running. Once it
+ * ends: what the turn did, in counted words. Nothing before the first turn.
+ */
+function hudActivityOf(rt: Runtime, now: number): HudModel['activity'] {
+  const turn = rt.activity.turn
+  if (turn.index === 0 && !rt.turn.isRunning) return null
+  const p = rt.progress
+  const tasks = rt.plan.tasks
+  const milestone = p.current === null ? null : { subject: p.current.subject, index: tasks.indexOf(p.current) + 1, total: tasks.length }
+  if (rt.turn.isRunning) {
+    const line = nowLine(rt) ?? { text: 'Thinking', source: 'thinking' as const }
+    const longest = rt.activity
+      .runningItems()
+      .filter(i => i.agentId === null)
+      .reduce((ms, i) => Math.max(ms, now - i.startedAt), 0)
+    return { state: 'working', text: line.text, source: line.source, milestone, runningMs: longest >= LONG_CALL_MS ? longest : null, durationMs: null }
+  }
+  const items = turnItemsOf(rt)
+  const files = rt.activity.changeList()
+  const ctx = { root: rt.root, handoffFile: rt.settings.autopilot.handoffFile }
+  const lines = turnSummaryOf({
+    items,
+    changed: files.filter(f => turn.files.has(f.path)),
+    groupOf: path => groupOf(path, ctx),
+    validation: validationNow(rt, now),
+    attention: attentionOf(items, now),
+    milestonesDone: Math.max(0, p.done - rt.turnStartDone),
+  })
+  return {
+    state: 'done',
+    text: lines.length === 0 ? 'Replied, no tools used' : lines.slice(0, 2).join(' · '),
+    source: 'summary',
+    milestone,
+    runningMs: null,
+    durationMs: turn.startedAt === null || turn.endedAt === null ? null : turn.endedAt - turn.startedAt,
+  }
+}
+
+function questHudOf(rt: Runtime): HudModel['quest'] {
+  if (rt.settings.answers.style !== 'quest') return null
+  const l = levelOf(rt.quest.xp)
+  return { level: l.level, xp: rt.quest.xp, intoLevel: rt.quest.xp - l.floor, levelSpan: l.next - l.floor, runXp: runQuestOf(rt.run?.quest).xp }
 }
 
 function workOf(rt: Runtime): HudModel['work'] {
@@ -323,6 +388,7 @@ export function paneOf(rt: Runtime): PaneModel {
     notes: rt.notes,
     savedAt: rt.savedAt,
     planSource: rt.planSource,
+    nativeOutputStyle: rt.nativeOutputStyle,
   }
 }
 
@@ -440,7 +506,8 @@ export function activityOf(rt: Runtime): ActivityView {
   const group = (path: string) => groupOf(path, ctx)
   const turnItems = turnItemsOf(rt)
   const attention = attentionOf(turnItems, now)
-  const validation = validationNow(rt, now)
+  const runs = rt.activity.validationRuns()
+  const validation = summarize(runs, now)
   const turn = rt.activity.turn
   return {
     summary: rt.activity.summaryLine({ subagentsRunning: rt.runningSubagents }),
@@ -460,8 +527,20 @@ export function activityOf(rt: Runtime): ActivityView {
       durationMs: turn.startedAt === null ? null : (turn.endedAt ?? now) - turn.startedAt,
       tools: turn.tools,
     },
+    timeline: timelineOf(turnItems, turn.startedAt, turn.endedAt ?? now, now),
+    quest: questOf(rt),
     attention: attention.slice(0, 12).map(a => ({ id: a.id, kind: a.kind, title: a.title, reason: a.reason, state: a.state, attempts: a.attempts, durationMs: a.durationMs, since: a.since })),
-    validation: validation.map(v => ({ kind: v.kind, label: v.label, command: v.command, status: v.status, durationMs: v.durationMs, runs: v.runs, failures: v.failures, isRecovered: v.isRecovered })),
+    validation: validation.map(v => ({
+      kind: v.kind,
+      label: v.label,
+      command: v.command,
+      status: v.status,
+      durationMs: v.durationMs,
+      runs: v.runs,
+      failures: v.failures,
+      isRecovered: v.isRecovered,
+      history: runs.filter(r => r.kind === v.kind).map(r => r.status).slice(-12),
+    })),
     groups: GROUP_ORDER.map(id => ({ id, label: GROUP_LABEL[id], files: files.filter(f => group(f.path) === id).slice(0, 40).map(f => fileView(rt, f)) })).filter(g => g.files.length > 0),
     showGenerated: rt.ui.showGenerated,
     items: rt.activity.items
@@ -482,6 +561,40 @@ export function activityOf(rt: Runtime): ActivityView {
     totals: rt.activity.totals(),
     selectedPath: selected?.path ?? null,
     selectedHunks: selected?.hunks ?? '',
+  }
+}
+
+const TIMELINE_KIND: Record<string, TimelineKind> = { read: 'read', search: 'read', edit: 'edit', shell: 'run', web: 'web', agent: 'agent' }
+
+/** Where the turn's time went: one span per call of the main conversation, by kind, a check apart from other commands. */
+export function timelineOf(items: readonly ActivityItem[], from: number | null, to: number, now: number): TurnTimelineView | null {
+  if (from === null || items.length === 0) return null
+  return {
+    from,
+    to: Math.max(to, from + 1),
+    spans: items
+      .filter(i => i.kind !== 'task')
+      .map(i => ({
+        kind: i.validation !== null ? 'check' : (TIMELINE_KIND[i.kind] ?? 'other'),
+        start: Math.max(from, i.startedAt),
+        end: i.endedAt ?? now,
+        isFailed: i.status === 'error' || i.status === 'denied' || i.status === 'held',
+      })),
+  }
+}
+
+function questOf(rt: Runtime): QuestView | null {
+  if (rt.settings.answers.style !== 'quest') return null
+  const q = rt.quest
+  const l = levelOf(q.xp)
+  return {
+    level: l.level,
+    xp: q.xp,
+    intoLevel: q.xp - l.floor,
+    levelSpan: l.next - l.floor,
+    runXp: runQuestOf(rt.run?.quest).xp,
+    recent: q.recent.slice(0, 5),
+    achievements: ACHIEVEMENTS.map(a => ({ id: a.id, name: a.name, hint: a.hint, unlockedAt: q.unlocked[a.id] ?? null })),
   }
 }
 

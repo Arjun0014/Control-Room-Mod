@@ -5,7 +5,7 @@
  */
 
 import * as fmt from '../core/format'
-import type { FrontierEffort, ResourceEnforcement, SubagentMode } from '../core/settings'
+import type { AnswerStyle, FrontierEffort, ResourceEnforcement, SubagentMode } from '../core/settings'
 
 // ---------------------------------------------------------------------------
 // System prompt sections (stable text; delivered by prompt.compose).
@@ -78,6 +78,10 @@ export const MILESTONES_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
+      objective: {
+        type: 'string',
+        description: 'The objective of the work in a few words, as the user would put it ("Fix the failing ISS test and document the helpers"). Send it with the first list, and again when it changes.',
+      },
       milestones: {
         type: 'array',
         description: 'Every milestone of the work, in order.',
@@ -99,8 +103,64 @@ export const MILESTONES_TOOL = {
 export function milestonesPolicy(tool: string): string {
   return [
     '## Run progress',
-    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin (the whole list, 3 to 10 real steps), and send the list again each time a milestone starts or finishes. Give the one in progress a short present-tense \`doing\` line. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
+    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin (the whole list, 3 to 10 real steps, and the objective in a few words), and send the list again each time a milestone starts or finishes. Give the one in progress a short present-tense \`doing\` line. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
   ].join('\n')
+}
+
+/**
+ * How Claude writes to the person, as they chose in Behavior → Answer style.
+ * Only for its messages: code, commands, files and commit messages keep the
+ * project's own style. Standard adds nothing.
+ */
+export function answerStylePolicy(style: AnswerStyle): string | null {
+  const scope = 'This governs your messages to the user, not code, commands, file contents or commit messages.'
+  switch (style) {
+    case 'standard':
+      return null
+    case 'brief':
+      return [
+        '## Answer style: Brief (Control Room)',
+        `The user chose brief answers. ${scope}`,
+        '- Put the bottom line first: the answer, the result, or the decision you need from the user, in the first sentence.',
+        '- Then give only what the user needs to act on it: a few short lines or a short list. No preamble, no restating the request, no step-by-step recap of what you did, no filler.',
+        '- While you work, keep progress notes to one short line, or leave them out.',
+        '- Keep exact anything the user may copy: code, commands, paths, numbers and error text.',
+        '- Brevity never drops what matters: say plainly what failed, what you could not verify, and what you need from the user.',
+      ].join('\n')
+    case 'ste':
+      return [
+        '## Answer style: Simplified Technical English (Control Room)',
+        `The user chose Simplified Technical English (STE), after the writing rules of ASD-STE100. ${scope} Use STE for files only when the user asks.`,
+        '- Procedures: write each instruction as one sentence in the imperative, with at most 20 words. Put the steps of a procedure in a numbered list, one step per item.',
+        '- Descriptions: write sentences of at most 25 words. Write about one topic in a paragraph, with at most six sentences.',
+        '- Use the active voice. Use only simple tenses (present, past, future). Do not use -ing forms, except in technical names.',
+        '- Use one word for one meaning, and use the same word each time. Prefer short, common words ("use", not "utilize"; "start", not "initiate"; "help", not "facilitate").',
+        '- Keep the articles ("the", "a"). Do not leave out words to make the text shorter.',
+        '- Write technical names exactly as they are: code, commands, file paths, error text, and numbers with their units.',
+        '- Write a condition before its instruction: "If the test fails, read the log."',
+        '- Start a warning or a caution with a clear command, then give the risk: "Do not push before the tests pass. The build can fail."',
+      ].join('\n')
+    case 'mission':
+      return [
+        '## Answer style: Mission control (Control Room)',
+        `The user chose mission-control status calls, as a flight controller reports on the voice loop. ${scope}`,
+        '- Open a report with one call and its reason: GO (done and verified), NO-GO (failing or blocked), or HOLD (waiting for a decision, or not yet verified). Example: "GO · tests pass, 42 of 42".',
+        '- Follow with a short status board: one line per area you touched, each with GO, NO-GO or HOLD and the fact behind it. Example: "Build · GO · compiles in 12 s".',
+        '- End with one line, "NEXT:", that names the next action and who owns it: you or the user.',
+        '- Call GO only for what you verified. Something you did not check is HOLD, never GO.',
+        '- A quick answer to a quick question needs no board: one call and one sentence.',
+      ].join('\n')
+    case 'quest':
+      return [
+        '## Answer style: Quest log (Control Room)',
+        `The user chose a quest log: a light game frame around real work. ${scope}`,
+        "- Treat the objective as the quest and its milestones as the quest's steps.",
+        '- Report in short log entries: the step, the obstacle, and the outcome. A failing test or a hard bug is a boss; say when it is beaten. Example: "Step done: fix the ISS speed. Boss beaten: the orbit test passes."',
+        '- End with the next step, as "Next quest step:".',
+        '- Control Room awards experience points (XP) for verified progress and shows them to the user. Never state XP, levels, scores or rewards yourself, and never claim progress you did not verify.',
+        '- Keep the frame light: the facts first, the flavour second, and no padding.',
+      ].join('\n')
+  }
 }
 
 export function subagentPolicy(mode: SubagentMode, limit: number): string | null {

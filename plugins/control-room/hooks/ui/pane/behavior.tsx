@@ -1,15 +1,18 @@
 /**
- * Behavior: how Claude works. One card per system, so each reads on its
- * own: the card title names the system and carries its live state, the
- * first row says what it does and holds its switch, and its finer settings
- * follow only while it is on. A row never repeats its card's title.
+ * Behavior: how Claude works, and how it writes to you. One card per system,
+ * so each reads on its own: the card title names the system and carries its
+ * live state, the first row says what it does and holds its switch, and its
+ * finer settings follow only while it is on. A row never repeats its card's
+ * title.
  */
 
 import type { RenderElement } from 'claude-code'
 
 import type { ModelAlias, PaneModel } from '../../../types'
+import { ANSWER_STYLE_INFO } from '../../core/answers'
+import { ANSWER_STYLES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { card, picker, row, segmented, stepper, switchControl } from '../primitives'
+import { card, link, picker, row, segmented, stepper, switchControl } from '../primitives'
 import { ACCENT } from '../theme'
 
 const MODELS: readonly { value: ModelAlias; label: string; hint: string }[] = [
@@ -56,8 +59,40 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
   const u = kit.actions.update
   const accent = ACCENT.behavior
 
+  const style = s.answers.style
+  const info = ANSWER_STYLE_INFO[style]
+  const native = pane.nativeOutputStyle
+
   return (
     <Box flexDirection="column">
+      {card(kit, {
+        key: 'answers',
+        title: 'Answer style',
+        accent,
+        aside: native === null && style !== 'standard' ? info.label : undefined,
+        footer:
+          native !== null
+            ? `Claude Code’s own output style, ${native}, is in use and takes precedence. Set it back to Default in Claude Code (/config) to use these.`
+            : (info.note ?? undefined),
+        rows: k => [
+          row(k, {
+            key: 'an-style',
+            label: 'How Claude writes to you',
+            subtitle: info.hint,
+            control: picker(k, {
+              key: 'an-style',
+              value: style,
+              options: ANSWER_STYLES.map(v => ({ value: v, label: ANSWER_STYLE_INFO[v].label, hint: ANSWER_STYLE_INFO[v].hint })),
+              onSelect: v => u(d => void (d.answers.style = ANSWER_STYLES.find(x => x === v) ?? 'standard')),
+            }),
+          }),
+          native === null && info.sample !== null && row(k, { key: 'an-sample', label: 'For example', subtitle: `“${info.sample}”` }),
+          native === null &&
+            style === 'quest' &&
+            row(k, { key: 'an-quest', label: 'Your progress', control: link(k, { key: 'an-quest', label: 'Activity', onPress: () => kit.actions.setTab('activity') }) }),
+        ],
+      })}
+
       {card(kit, {
         key: 'frontier',
         title: 'Frontier Max',

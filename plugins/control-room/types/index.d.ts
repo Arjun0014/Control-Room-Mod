@@ -29,6 +29,12 @@ export type GuardStrictness = 'lenient' | 'standard' | 'strict'
 export type ContinuationMethod = 'clear' | 'compact' | 'manual'
 export type FrontierEffort = 'max' | 'xhigh' | 'high' | 'keep'
 export type HudPlacement = 'band' | 'status' | 'both' | 'off'
+/**
+ * How Claude writes to the person: Claude Code's own way, bottom line first,
+ * Simplified Technical English (after ASD-STE100's writing rules), mission-control
+ * status calls, or a quest log with XP for verified progress.
+ */
+export type AnswerStyle = 'standard' | 'brief' | 'ste' | 'mission' | 'quest'
 
 export type ControlRoomSettings = {
   version: 1
@@ -69,6 +75,8 @@ export type ControlRoomSettings = {
    * milestones tool and ask it to keep the run's milestones, so run progress has something to count.
    */
   progress: { milestones: boolean }
+  /** How Claude writes its messages to the person (never code, files or commit messages). */
+  answers: { style: AnswerStyle }
   /** `liveLoad`: machine-wide CPU and memory in the status bar (runs the sampler). */
   ui: { hud: HudPlacement; toasts: boolean; openOnStart: boolean; liveLoad: boolean }
   customProfiles: ControlRoomCustomProfile[]
@@ -76,7 +84,7 @@ export type ControlRoomSettings = {
 
 export type ControlRoomSystems = Pick<
   ControlRoomSettings,
-  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress'
+  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress' | 'answers'
 >
 
 export type ControlRoomCustomProfile = { id: string; name: string; createdAt: number; systems: ControlRoomSystems }
@@ -110,7 +118,33 @@ export type HudModel = {
   failing: string[]
   /** This turn's calls that still need a look: unresolved failures and refusals. */
   attention: number
+  /**
+   * The status bar's top line: what Claude is doing while a turn runs, or what
+   * the last turn did once it ends; null before the first turn of a context.
+   */
+  activity: HudActivity | null
+  /** The latest run of each kind of check in this context, strongest first ("Tests" passed). */
+  checks: { label: string; status: ValidationStatus }[]
+  /** Quest log only: the level and XP earned from verified progress; null otherwise. */
+  quest: QuestHud | null
 }
+
+export type ValidationStatus = 'passed' | 'failed' | 'running' | 'blocked' | 'background' | 'stopped'
+
+export type HudActivity = {
+  state: 'working' | 'done'
+  /** Working: what Claude is doing. Done: the last turn in counted words ("Changed 4 files · tests passing"). */
+  text: string
+  source: 'plan' | 'tool' | 'thinking' | 'summary'
+  /** The milestone under way and where it sits in the plan ("2 of 5"). */
+  milestone: { subject: string; index: number; total: number } | null
+  /** Working: how long the longest running call has run, once it passes 20 s; null otherwise. */
+  runningMs: number | null
+  /** Done: how long the turn took. */
+  durationMs: number | null
+}
+
+export type QuestHud = { level: number; xp: number; intoLevel: number; levelSpan: number; runXp: number }
 
 export type TabId = 'overview' | 'context' | 'behavior' | 'guardrails' | 'activity' | 'setup'
 
@@ -133,7 +167,7 @@ export type AutopilotView = {
   canSnooze: boolean
 }
 
-export type SystemId = 'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'load' | 'focus'
+export type SystemId = 'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'load' | 'focus' | 'answers'
 
 export type StatusView = { text: string; tone: Tone }
 
@@ -160,6 +194,8 @@ export type PaneModel = {
   savedAt: number | null
   /** Where run progress comes from: Claude Code's own task list, Control Room's milestones tool, or nothing. */
   planSource: 'tasks' | 'milestones' | 'none'
+  /** The person's own Claude Code output style when one is chosen; it takes precedence over the answer style. */
+  nativeOutputStyle: string | null
 }
 
 export type ResourcesView = {
@@ -271,11 +307,36 @@ export type ValidationView = {
   kind: string
   label: string
   command: string
-  status: 'passed' | 'failed' | 'running' | 'blocked' | 'background' | 'stopped'
+  status: ValidationStatus
   durationMs: number | null
   runs: number
   failures: number
   isRecovered: boolean
+  /** Each run of this kind in this context, oldest first (the last 12): how the fixes went. */
+  history: ValidationStatus[]
+}
+
+/** Where a turn's time went: one span per tool call of the main conversation, by kind. */
+export type TimelineKind = 'read' | 'edit' | 'run' | 'check' | 'web' | 'agent' | 'other'
+
+export type TurnTimelineView = {
+  from: number
+  /** The turn's end, or now while it runs. */
+  to: number
+  spans: { kind: TimelineKind; start: number; end: number; isFailed: boolean }[]
+}
+
+/** Quest log: XP for verified progress only, levels, and achievements. */
+export type QuestView = {
+  level: number
+  xp: number
+  /** XP into the current level, and the level's span (to the next one). */
+  intoLevel: number
+  levelSpan: number
+  runXp: number
+  /** The latest awards, newest first ("+50 · Milestone: Fix the renderer"). */
+  recent: { at: number; xp: number; text: string }[]
+  achievements: { id: string; name: string; hint: string; unlockedAt: number | null }[]
 }
 
 export type ChangeGroupView = { id: string; label: string; files: FileChangeView[] }
@@ -288,6 +349,10 @@ export type ActivityView = {
   mission: MissionView
   /** What Claude did in the current (or last) turn, in a few counted lines. */
   turnSummary: { lines: string[]; isRunning: boolean; durationMs: number | null; tools: number }
+  /** Where the turn's time went; null before the first tool call. */
+  timeline: TurnTimelineView | null
+  /** Quest log only; null otherwise. */
+  quest: QuestView | null
   attention: AttentionView[]
   validation: ValidationView[]
   /** Changed files by kind, real project changes first; `generated` last. */

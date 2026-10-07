@@ -49,8 +49,11 @@ import { activeAgents, decideSpawn, isOffered } from '../features/subagents'
 import type { Host } from '../host'
 import { ResourceMonitor } from './monitor'
 import { Debounced, findRunBySession, loadHistory, loadSettings, nextRunNumber, saveRun } from './persist'
+import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
 import { Publisher } from './publisher'
+import * as CacheModel from '../features/cache'
+import * as fmt from '../core/format'
 
 type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'other'
 
@@ -134,6 +137,11 @@ export class Runtime {
   /** Milestones finished when the turn began, so the turn's summary can count its own. */
   turnStartDone = 0
 
+  /** The prompt cache: telemetry, the miss doctor, Keep warm and stable policies. */
+  readonly cache: CacheGuardian
+  /** What the last settings change was, in words, for a policy-caused cache miss. */
+  private policyReason: string | null = null
+
   /** What the next plugin-submitted turn is, so turn.start can label it. */
   private expecting: TurnKind | null = null
   private startSource: { source: string; sessionId: string } | null = null
@@ -157,6 +165,71 @@ export class Runtime {
       (pressure, previous) => this.onPressure(pressure, previous),
       () => this.publisher.mark('resources', 'hud', 'pane'),
     )
+    this.cache = new CacheGuardian({
+      host: () => this.host,
+      now: () => this.host?.time?.() ?? Date.now(),
+      settings: () => this.settings,
+      isTurnRunning: () => this.turn.isRunning,
+      contextTokens: () => this.usage.tokens ?? 0,
+      standDown: () => this.keepWarmStandDown(),
+      changed: () => this.publisher.mark('hud', 'pane'),
+      missed: miss => this.onCacheMiss(miss),
+      verdict: verdict => this.onKeepWarmVerdict(verdict),
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // The prompt cache
+
+  /**
+   * Keep warm stands down while the context is about to be cleared: a
+   * handoff under way or due, whose /clear throws the cache away. A compact
+   * fallback keeps it (compaction re-reads the whole conversation).
+   */
+  keepWarmStandDown(): string | null {
+    const a = this.settings.autopilot
+    if (!a.enabled) return null
+    const state = this.autopilot.state
+    if (state === 'compacting' || a.continuation === 'compact') return null
+    if (['pending', 'requested', 'handoff', 'verifying', 'clearing', 'resuming', 'awaiting'].includes(state)) {
+      return 'A handoff will start a fresh context, so this cache is about to be discarded'
+    }
+    const threshold = this.autopilot.threshold
+    if (threshold !== null && (this.usage.tokens ?? 0) >= threshold) return 'Past the handoff point: the next turn hands off'
+    return null
+  }
+
+  private onCacheMiss(miss: CacheModel.CacheMiss): void {
+    this.publisher.mark('hud', 'pane')
+    const host = this.host
+    if (host === null || !this.settings.ui.toasts || miss.kind === 'lifecycle' || miss.severity !== 'warn') return
+    host.toast(`Cache rebuilt: ${fmt.tokens(miss.recached)} tokens · ${CacheModel.CAUSE_LABEL[miss.cause]}`, 6000)
+  }
+
+  private onKeepWarmVerdict(verdict: 'yes' | 'no'): void {
+    const host = this.host
+    if (verdict === 'no') this.note('Keep warm did not keep the prompt cache warm on this setup, so it stopped. Context → Cache has the details.')
+    if (host !== null && this.settings.ui.toasts) {
+      host.toast(verdict === 'yes' ? 'Keep warm verified: the cache stayed warm past its old expiry' : 'Keep warm stopped: it did not keep the cache warm here', 6000)
+    }
+  }
+
+  /**
+   * Before a model switch the person makes: with a large warm cache, Claude
+   * Code is asked to confirm, with what the switch re-sends uncached.
+   */
+  onPreModelSwitch(e: { from_model: string; to_model: string; source: string; context_tokens: number; prompt_cache_warm: boolean; cache_ttl: '5m' | '1h'; estimated_cache_write_usd: number }): string | null {
+    this.cache.noteTtl(e.cache_ttl)
+    const s = this.settings.cache
+    if (!s.guardModelSwitch || !e.prompt_cache_warm || e.from_model === e.to_model || e.context_tokens < LIMITS.guardSwitchTokens) return null
+    if (e.source !== 'command' && e.source !== 'picker') return null
+    const cost = Number.isFinite(e.estimated_cache_write_usd) && e.estimated_cache_write_usd > 0 ? ` (about ${fmt.cost(e.estimated_cache_write_usd)}, as Claude Code estimates it)` : ''
+    return `Control Room: the prompt cache holds ${fmt.tokens(e.context_tokens)} tokens of this conversation for ${CacheModel.shortModel(e.from_model)}. Switching to ${CacheModel.shortModel(e.to_model)} sends them again uncached${cost}. Switching at the start of a fresh context avoids that.`
+  }
+
+  onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h' }): void {
+    this.cache.noteModelSwitch({ from: e.from_model, to: e.to_model, ttl: e.cache_ttl, now: Date.now() })
+    if (e.to_model !== '') this.sessionModel = e.to_model
   }
 
   // -------------------------------------------------------------------------
@@ -238,6 +311,7 @@ export class Runtime {
     const policy = await host.settings('policy').catch(() => ({}))
     this.compose.isLikelyBypassed = Object.keys(policy).length > 0
     await this.attachRun()
+    await this.cache.load()
     await this.refreshUsage(true)
     this.reconfigure({ isStartup: true })
     await this.recoverAutopilot()
@@ -456,6 +530,7 @@ export class Runtime {
     }
     this.sessionId = input.sessionId
     this.usage = { tokens: undefined, window: this.usage.window, pct: undefined, costUsd: 0 }
+    this.cache.resetForContext()
     this.activity.reset()
     this.guard = { turnBlocks: 0, sessionBlocks: 0, lastBlockedAnswer: '', last: null }
     this.compose = { ...this.compose, isReached: false, deliveredFallback: false }
@@ -558,10 +633,13 @@ export class Runtime {
   }
 
   private applyAutopilot(result: Autopilot.Step): void {
+    const before = this.autopilot.state
     this.autopilot = result.model
     this.saveAutopilotRecord()
     this.publisher.mark('hud', 'pane')
     for (const effect of result.effects) void this.runEffect(effect)
+    // A handoff coming or going changes whether the cache is worth keeping.
+    if (before !== this.autopilot.state && !this.turn.isRunning) this.cache.schedule()
   }
 
   /** The last record written, so an unchanged machine writes nothing. */
@@ -806,6 +884,7 @@ export class Runtime {
       isFrontier: eff.frontier.isActive,
       unavailable: this.router.unavailable,
       known: this.router.known,
+      cache: { isWarm: CacheModel.warmthOf(this.cache.state, Date.now()) === 'warm', cachedTokens: this.cache.state.lastPrefix },
     })
     this.router.turnModel = decision.model
     this.router.lastDecision = decision.why
@@ -825,6 +904,9 @@ export class Runtime {
       pressureNoticeSent: false,
     }
     if (kind !== 'person') this.router.turnModel = null
+    this.cache.turnStarted()
+    const host = this.host
+    if (host !== null) void host.listTools().then(tools => this.cache.noteTools(tools.map(t => t.name))).catch(() => undefined)
     this.guard.turnBlocks = 0
     this.guard.lastBlockedAnswer = ''
     this.activity.turnStarted(Date.now())
@@ -856,6 +938,10 @@ export class Runtime {
     } else if (isMain && typeof e.effort === 'string') {
       this.frontier.lastEffort = e.effort
     }
+    if (isMain) {
+      const effort = out.effort ?? e.effort
+      this.cache.stepStarted(`${e.turnId}:${e.index}`, typeof effort === 'string' ? effort : typeof effort === 'number' ? String(effort) : null)
+    }
     return out
   }
 
@@ -879,6 +965,7 @@ export class Runtime {
     }
     if (result.usage === null) return
     const u = result.usage
+    this.cache.stepAnswered(`${e.turnId}:${e.index}`, u)
     const tokens = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
     this.usage = { ...this.usage, tokens, pct: this.usage.window ? Math.round((100 * tokens) / this.usage.window) : this.usage.pct }
     if (this.run !== null) this.run = Chain.measure(this.run, { tokens, window: this.usage.window, costUsd: undefined }, Date.now())
@@ -903,6 +990,7 @@ export class Runtime {
     if (this.autopilot.state === 'armed' && input.reason !== 'aborted' && this.usage.tokens !== undefined) {
       this.stepAutopilot({ kind: 'context', tokens: this.usage.tokens, window: this.usage.window, isInTurn: false, now })
     }
+    this.cache.turnEnded(now)
     this.persistRun()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain')
   }
@@ -925,6 +1013,7 @@ export class Runtime {
     }
     this.compose.deliveredFallback = false
     this.usage = { ...this.usage, tokens: result.tokensAfter ?? undefined }
+    this.cache.noteCompact(Date.now())
     this.publisher.mark('hud', 'chain')
   }
 
@@ -938,7 +1027,8 @@ export class Runtime {
       this.nativeOutputStyle = native
       this.publisher.mark('pane')
     }
-    const text = policyText(this.policies())
+    // While the cache is warm, the section the system prompt already carries is sent again (stable policies).
+    const text = this.cache.policyText(policyText(this.policies()), native, this.policyReason)
     return text === null ? null : { id: POLICY_SECTION_ID, text, scope: 'session' }
   }
 
@@ -1287,6 +1377,7 @@ export class Runtime {
     const host = this.host
     const before = input.before
     this.configureAutopilot()
+    if (!this.turn.isRunning) this.cache.schedule()
     if (host !== null) {
       const ceilings = this.effective.resources.ceilings
       const isLiveWanted = this.settings.ui.liveLoad && this.settings.ui.hud !== 'off'
@@ -1316,7 +1407,12 @@ export class Runtime {
     if (before.answers.style !== this.settings.answers.style && this.nativeOutputStyle === null) {
       changes.push(`the answer style is now ${answerStyleLabel(this.settings.answers.style)}${this.settings.answers.style === 'standard' ? ' (write as you normally would)' : ''}`)
     }
-    if (changes.length > 0) {
+    if (changes.length > 0) this.policyReason = changes.join('; ')
+    const policy = policyText(this.policies())
+    if (this.cache.isHoldingPolicies() && this.cache.isPolicyHeld(policy)) {
+      // The system prompt keeps its cached section: the policies now in force come as a note.
+      void host.appendForModel(prompts.heldPoliciesNotice(changes, policy))
+    } else if (changes.length > 0) {
       void host.appendForModel(`Control Room · The user changed session settings: ${changes.join('; ')}. The updated policy is in your system prompt from your next request.`)
     }
   }

@@ -77,14 +77,25 @@ export type ControlRoomSettings = {
   progress: { milestones: boolean }
   /** How Claude writes its messages to the person (never code, files or commit messages). */
   answers: { style: AnswerStyle }
-  /** `liveLoad`: machine-wide CPU and memory in the status bar (runs the sampler). */
-  ui: { hud: HudPlacement; toasts: boolean; openOnStart: boolean; liveLoad: boolean }
+  /**
+   * The prompt cache. `keepWarm`: refresh it before it lapses while the person is away (a fork of
+   * the last request), for at most `maxIdleMinutes` of idle time and only from `minTokens` of
+   * context. `guardModelSwitch`: ask before a model switch forfeits a large warm cache.
+   * `stablePolicies`: while the cache is warm, keep Control Room's system-prompt section as it was
+   * and tell Claude of setting changes as notes.
+   */
+  cache: { keepWarm: boolean; maxIdleMinutes: number; minTokens: number; guardModelSwitch: boolean; stablePolicies: boolean }
+  /**
+   * `liveLoad`: machine-wide CPU and memory in the status bar (runs the sampler). `companion`: the
+   * pixel companion on the status bar. `reducedMotion`: still drawings instead of animation.
+   */
+  ui: { hud: HudPlacement; toasts: boolean; openOnStart: boolean; liveLoad: boolean; companion: boolean; reducedMotion: boolean }
   customProfiles: ControlRoomCustomProfile[]
 }
 
 export type ControlRoomSystems = Pick<
   ControlRoomSettings,
-  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress' | 'answers'
+  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress' | 'answers' | 'cache'
 >
 
 export type ControlRoomCustomProfile = { id: string; name: string; createdAt: number; systems: ControlRoomSystems }
@@ -127,6 +138,66 @@ export type HudModel = {
   checks: { label: string; status: ValidationStatus }[]
   /** Quest log only: the level and XP earned from verified progress; null otherwise. */
   quest: QuestHud | null
+  /** The prompt cache at a glance; null before the first request of a context. */
+  cache: HudCache | null
+}
+
+export type CacheWarmth = 'none' | 'warm' | 'cold' | 'unknown'
+
+export type HudCache = {
+  warmth: CacheWarmth
+  ttl: '5m' | '1h' | null
+  /** Derived: the last request's time plus the TTL. */
+  expiresAt: number | null
+  cachedTokens: number
+  keepWarm: boolean
+  nextRefreshAt: number | null
+  /** A miss in the last few minutes that was not an expected rebuild. */
+  recentMiss: { label: string; recached: number; severity: 'info' | 'warn'; at: number } | null
+}
+
+export type CacheMissView = {
+  at: number
+  cause: string
+  label: string
+  kind: 'preventable' | 'lifecycle' | 'unavoidable'
+  severity: 'info' | 'warn'
+  recached: number
+  detail: string
+  advice: string
+  isRefresh: boolean
+}
+
+/** The prompt cache in full, for Context: derived figures are named as such where they are drawn. */
+export type CacheView = {
+  warmth: CacheWarmth
+  ttl: '5m' | '1h' | null
+  ttlSource: 'engine' | 'observed' | 'probe' | 'stored' | null
+  expiresAt: number | null
+  lastRequestAt: number | null
+  cachedTokens: number
+  requests: number
+  hitRatio: number | null
+  read: number
+  written: number
+  model: string | null
+  keepWarm: {
+    isOn: boolean
+    nextAt: number | null
+    isProbe: boolean
+    reason: string | null
+    refreshes: number
+    lastAt: number | null
+    lastRead: number | null
+    lastHit: boolean | null
+    verified: 'unknown' | 'yes' | 'no'
+    maxIdleMinutes: number
+    isRefreshing: boolean
+    error: string | null
+  }
+  misses: CacheMissView[]
+  policies: { isStable: boolean; isHolding: boolean }
+  guardModelSwitch: boolean
 }
 
 export type ValidationStatus = 'passed' | 'failed' | 'running' | 'blocked' | 'background' | 'stopped'
@@ -196,6 +267,7 @@ export type PaneModel = {
   planSource: 'tasks' | 'milestones' | 'none'
   /** The person's own Claude Code output style when one is chosen; it takes precedence over the answer style. */
   nativeOutputStyle: string | null
+  cache: CacheView
 }
 
 export type ResourcesView = {

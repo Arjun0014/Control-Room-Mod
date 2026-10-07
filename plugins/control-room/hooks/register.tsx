@@ -81,6 +81,7 @@ function hostOf($: EngineInterface): Host {
     registerTool: spec => $.tool.register(spec).then(r => r.tool),
     stopTask: taskId => $.tool.call({ tool: 'TaskStop', task_id: taskId }),
     classify: (text, labels, model) => $.model.classify(text, labels, model === undefined ? undefined : { model }),
+    fork: prompt => $.model.fork({ prompt }),
 
     toast: (text, timeoutMs) => $.ui.toast(text, timeoutMs === undefined ? undefined : { timeoutMs }),
     status: text => $.ui.status(text),
@@ -218,6 +219,20 @@ export const register: Register = on => {
     await rt.onTurnComplete({ agentId: e.agentId, reason: e.reason, answer: e.answer })
     return answer
   })
+
+  // Model switches: the engine reports the cache's state and lifetime. With a large
+  // warm cache, a switch the person makes is confirmed first (Cache Guardian).
+  on('classic.PreModelSwitch', async ($, e, next) => {
+    const answer = await next(e)
+    if (answer.permissionDecision === 'deny' || answer.permissionDecision === 'ask') return answer
+    const reason = rt.onPreModelSwitch(e)
+    return reason === null ? answer : { ...answer, permissionDecision: 'ask' as const, permissionDecisionReason: reason }
+  }).catch(($, e, next) => next(e))
+
+  on('classic.PostModelSwitch', ($, e, next) => {
+    rt.onPostModelSwitch(e)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('classic.Stop', async ($, e, next) => {
     const answer = await next(e)

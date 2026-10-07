@@ -27,6 +27,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     compacted: 0,
     scrolledToTop: 0,
     registeredTools: [] as string[],
+    /** Keep warm's forks, by the time they went out. */
+    forks: [] as number[],
     /** `$.state`'s autopilot record: kept across a new Runtime (a reload), as the engine keeps it. */
     autopilotRecord: null as import('../../types').AutopilotRecord | null,
   }
@@ -35,6 +37,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     sessionId: 'S1',
     /** The tools the session offers: no task list tool by default, as in Claude Code 2.1.29x. */
     tools: ['Bash', 'Read', 'Edit', 'Write'] as string[],
+    /** What a fork reads from the cache: the whole prompt by default (a hit). */
+    forkRead: 300_000,
   }
   const schedule = (ms: number, fn: () => void, every: number | null) => {
     const t = { id: ++seq, at: time + ms, every, fn, isCancelled: false }
@@ -43,6 +47,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
   }
 
   const host: Host = {
+    time: () => time,
     pluginRoot: '/plugin',
     now: async () => time,
     after: (ms, fn) => schedule(ms, fn, null),
@@ -80,6 +85,10 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     },
     stopTask: async () => ({ result: 'stopped' }),
     classify: async () => 'premature',
+    fork: async () => {
+      kept.forks.push(time)
+      return { isAnswered: true as const, text: 'ok', usage: { input_tokens: 20, output_tokens: 2, cache_read_input_tokens: live.forkRead, cache_creation_input_tokens: live.forkRead === 0 ? 300_000 : 0 } }
+    },
     toast: text => void kept.toasts.push(text),
     status: text => void kept.statuses.push(text),
     open: async () => ({ isPlaced: true }),

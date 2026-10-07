@@ -76,6 +76,7 @@ export const SYSTEM_KEYS = [
   'permissions',
   'progress',
   'answers',
+  'cache',
 ] as const satisfies readonly (keyof SystemSettings)[]
 
 /** Categories whose loosest state is Ask: Control Room never auto-allows them. */
@@ -146,6 +147,7 @@ export function defaultSystems(): SystemSettings {
     permissions: { ...DEFAULT_PERMISSIONS },
     progress: { milestones: true },
     answers: { style: 'standard' },
+    cache: { keepWarm: false, maxIdleMinutes: 120, minTokens: 20_000, guardModelSwitch: true, stablePolicies: true },
   }
 }
 
@@ -154,7 +156,7 @@ export function defaultSettings(): Settings {
     version: 1,
     profile: 'normal',
     ...defaultSystems(),
-    ui: { hud: 'band', toasts: true, openOnStart: false, liveLoad: true },
+    ui: { hud: 'band', toasts: true, openOnStart: false, liveLoad: true, companion: false, reducedMotion: false },
     customProfiles: [],
   }
 }
@@ -201,6 +203,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
   const pe = isRecord(r.permissions) ? r.permissions : {}
   const pr = isRecord(r.progress) ? r.progress : {}
   const an = isRecord(r.answers) ? r.answers : {}
+  const ca = isRecord(r.cache) ? r.cache : {}
 
   const permissions = {} as Record<PermissionCategory, PermissionState>
   for (const category of PERMISSION_CATEGORIES) {
@@ -268,6 +271,13 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
     permissions,
     progress: { milestones: bool(pr.milestones, base.progress.milestones) },
     answers: { style: pick(an.style, ANSWER_STYLES, base.answers.style) },
+    cache: {
+      keepWarm: bool(ca.keepWarm, base.cache.keepWarm),
+      maxIdleMinutes: num(ca.maxIdleMinutes, base.cache.maxIdleMinutes, 15, 480),
+      minTokens: num(ca.minTokens, base.cache.minTokens, 5_000, 1_000_000),
+      guardModelSwitch: bool(ca.guardModelSwitch, base.cache.guardModelSwitch),
+      stablePolicies: bool(ca.stablePolicies, base.cache.stablePolicies),
+    },
   }
 }
 
@@ -317,6 +327,8 @@ export function normalizeSettings(raw: unknown): Settings {
       toasts: bool(ui.toasts, d.ui.toasts),
       openOnStart: bool(ui.openOnStart, d.ui.openOnStart),
       liveLoad: bool(ui.liveLoad, d.ui.liveLoad),
+      companion: bool(ui.companion, d.ui.companion),
+      reducedMotion: bool(ui.reducedMotion, d.ui.reducedMotion),
     },
     customProfiles: normalizeCustomProfiles(raw.customProfiles),
   }
@@ -335,6 +347,7 @@ export function systemsOf(settings: Settings): SystemSettings {
     permissions: settings.permissions,
     progress: settings.progress,
     answers: settings.answers,
+    cache: settings.cache,
   }
 }
 

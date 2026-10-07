@@ -253,6 +253,7 @@ export function hudOf(rt: Runtime): HudModel {
     activity: hudActivityOf(rt, now),
     checks: validation.map(v => ({ label: v.label, status: v.status })),
     quest: questHudOf(rt),
+    cache: rt.cache.hud(now),
   }
 }
 
@@ -399,6 +400,7 @@ export function paneOf(rt: Runtime): PaneModel {
     savedAt: rt.savedAt,
     planSource: rt.planSource,
     nativeOutputStyle: rt.nativeOutputStyle,
+    cache: rt.cache.view(Date.now()),
   }
 }
 

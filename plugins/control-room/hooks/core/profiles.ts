@@ -175,6 +175,11 @@ const LABELS: Record<string, string> = {
   'resources.enforcement': 'When over',
   'progress.milestones': 'Milestones',
   'answers.style': 'Answer style',
+  'cache.keepWarm': 'Keep warm',
+  'cache.maxIdleMinutes': 'Keep warm for',
+  'cache.minTokens': 'Keep warm from',
+  'cache.guardModelSwitch': 'Ask before a model switch',
+  'cache.stablePolicies': 'Keep policies stable',
 }
 
 for (const category of PERMISSION_CATEGORIES) {
@@ -197,6 +202,8 @@ const UNITS: Record<string, (n: number) => string> = {
   'resources.cpu': n => `${n}%`,
   'resources.ram': n => `${n}%`,
   'resources.intervalSec': n => `${n} s`,
+  'cache.maxIdleMinutes': n => (n % 60 === 0 ? `${n / 60} h` : `${n} min`),
+  'cache.minTokens': n => fmtTokens(n),
 }
 
 /** A stored value as the panel shows it: "On", "Maximum", "70%", "700k". */

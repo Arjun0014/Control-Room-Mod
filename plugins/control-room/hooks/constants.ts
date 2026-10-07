@@ -24,6 +24,8 @@ export const STORE_KEYS = {
   runPrefix: 'run.v1.',
   /** Quest log: lifetime XP, achievements and the latest awards. */
   quest: 'quest.v1',
+  /** The prompt cache: the lifetime learned and Keep warm's verdict on itself. */
+  cache: 'cache.v1',
 } as const
 
 /** The handoff file Context Autopilot asks Claude to create or update. */
@@ -64,6 +66,8 @@ export const LIMITS = {
   guardTextChars: 6000,
   /** Model classification timeout for the guard and router. */
   classifyTimeoutMs: 12_000,
+  /** From this much warm cached context, a model switch the person makes is confirmed first. */
+  guardSwitchTokens: 100_000,
 } as const
 
 /** The plugin's version, as in .claude-plugin/plugin.json (kept in step on release). */

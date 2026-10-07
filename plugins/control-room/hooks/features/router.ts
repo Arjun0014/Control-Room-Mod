@@ -89,6 +89,8 @@ export type MainRouteInput = {
   /** Families whose model the engine refused this session. */
   unavailable: ReadonlySet<string>
   known: KnownModels
+  /** The main conversation's prompt cache, as Cache Guardian reads it. */
+  cache?: { isWarm: boolean; cachedTokens: number }
 }
 
 export type RouteDecision = { model: string | null; why: string }
@@ -97,6 +99,8 @@ export type RouteDecision = { model: string | null; why: string }
 export const CHEAP_SWITCH_TOKENS = 60_000
 /** A smaller-window model is only chosen while the context fits it with room to spare. */
 export const SMALL_WINDOW_SAFE_TOKENS = 150_000
+/** From this much warm cached context, saving on one request never pays for re-sending it all. */
+export const WARM_KEEP_TOKENS = 20_000
 
 export function routeMain(input: MainRouteInput): RouteDecision {
   const table = tableOf(input.router)
@@ -110,6 +114,9 @@ export function routeMain(input: MainRouteInput): RouteDecision {
   const isDowngrade = target < current
   if (isDowngrade && input.isFrontier && input.router.strategy !== 'custom') {
     return { model: null, why: 'Frontier Max keeps the session model' }
+  }
+  if (isDowngrade && input.cache?.isWarm === true && input.cache.cachedTokens >= WARM_KEEP_TOKENS) {
+    return { model: null, why: `keeps the warm cache (${Math.round(input.cache.cachedTokens / 1000)}k tokens)` }
   }
   if (alias === 'haiku' && input.contextTokens > SMALL_WINDOW_SAFE_TOKENS) {
     return { model: null, why: 'context too large for a small-window model' }

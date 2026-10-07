@@ -12,6 +12,7 @@ import type {
   CommandRunResult,
   CommandSpec,
   FsStat,
+  ModelForkResult,
   PaneCloseArgs,
   PaneOpenArgs,
   ProcessSpawnChunk,
@@ -46,6 +47,8 @@ export type SpawnStream = AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> 
 
 export type Host = {
   pluginRoot: string
+  /** A synchronous clock for tests (a manual one); absent, the system clock. Not an engine call. */
+  time?: () => number
 
   now(): Promise<number>
   after(ms: number, fn: () => void): Timer
@@ -75,6 +78,8 @@ export type Host = {
   registerTool(spec: ToolSpec): Promise<string>
   stopTask(taskId: string): Promise<ToolCallResult>
   classify(text: string, labels: readonly string[], model?: string): Promise<string | undefined>
+  /** One tool-less completion over the main thread's last request (Keep warm): never added to the transcript. */
+  fork(prompt: string): Promise<ModelForkResult>
 
   toast(text: string, timeoutMs?: number): void
   status(text: string | undefined): void

@@ -185,6 +185,24 @@ export function autopilotPolicy(thresholdTokens: number | null, handoffFile: str
 }
 
 // ---------------------------------------------------------------------------
+// Cache Guardian.
+
+/** What a Keep warm refresh asks: the shortest possible answer, over the cached conversation. */
+export const KEEP_WARM_PROMPT = 'Control Room cache keep-alive (automatic, not from the user): reply with the single word ok and nothing else.'
+
+/**
+ * Settings changed while the prompt cache is warm: the system prompt keeps its
+ * earlier Control Room section (rewriting it would rebuild the whole cache),
+ * so the policies in force now come as this note, which takes precedence.
+ */
+export function heldPoliciesNotice(changes: readonly string[], policy: string | null): string {
+  const what = changes.length === 0 ? 'Control Room settings changed' : `The user changed session settings: ${changes.join('; ')}`
+  const body = policy === null ? 'No Control Room policies apply any more; disregard the Control Room sections of your system prompt.' : `These Control Room policies apply from now on and take precedence over the Control Room sections of your system prompt:
+${policy}`
+  return `Control Room · ${what}. To keep the prompt cache, your system prompt keeps its earlier Control Room sections until the next fresh context. ${body}`
+}
+
+// ---------------------------------------------------------------------------
 // Context Autopilot: mid-turn notice, handoff, continuation.
 
 export function pendingNotice(input: { tokens: number; threshold: number; window: number | undefined }): string {

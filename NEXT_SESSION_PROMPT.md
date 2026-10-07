@@ -18,8 +18,13 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
   `plugins/control-room` to a scratch folder, run
   `%APPDATA%\Claude\claude-code\2.1.289\<hash>\claude.exe plugin test <copy>`, start one 2.1.289
   session on the copy (it writes the 2.1.289 types), then run `tsc -p <copy>`.
-- The user installed the plugin from this folder (`control-room@control-room`, user scope). Their
-  sessions read it straight from here and pick up changes with `/reload-plugins`.
+- The user installed the plugin from this folder (`control-room@control-room`, user scope).
+  - **Terminal sessions** read it straight from here and pick up changes with `/reload-plugins`.
+  - **The user's Desktop sessions** load the installed copy in
+    `~/.claude/plugins/cache/control-room/control-room/<version>`. It was stuck at 0.1.0 until
+    1.0.0, and the user saw the old status bar. It now points at the 1.0.0 copy.
+  - To show a code change in Desktop, raise the version, then run
+    `claude plugin update control-room@control-room`. The user then starts a new session.
 
 ## How to release
 
@@ -125,6 +130,13 @@ $0.60). Keep them few.
   - `Svg` renders well.
 - **Plugin store.** `~/.claude/plugins/store/`. Test marketplace installs in a throwaway
   `CLAUDE_CONFIG_DIR`.
+- **Folder marketplace installs.**
+  - Desktop sessions (the host protocol) load `installPath` from
+    `~/.claude/plugins/installed_plugins.json`, a copy made at install time. They mark it with an
+    `.in_use/<pid>` file.
+  - `claude plugin list` still says `Read from: <folder>`, on both engines. The docs say a
+    folder marketplace is read in place, but Desktop sessions on 2.1.289 load the copy.
+  - Don't trust `plugin list` to tell you what Desktop loads; look at `installed_plugins.json`.
 
 ## Known edge cases (not fixed; small)
 

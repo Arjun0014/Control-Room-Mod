@@ -139,9 +139,11 @@ claude plugin install control-room@control-room
 Or do both from inside a session (Claude Code 2.1.275 or newer):
 `/plugin install control-room --marketplace Arjun0014/Control-Room-Mod`.
 
-A local clone works too: `claude plugin marketplace add /path/to/Control-Room-Mod`. An installed
-folder marketplace is read straight from the folder, so after you pull changes, run
-`/reload-plugins` in a session.
+A local clone works too: `claude plugin marketplace add /path/to/Control-Room-Mod`. The terminal
+reads an installed folder marketplace straight from the folder, so after you pull changes, run
+`/reload-plugins` in a session. Desktop's Code tab loads the copy Claude Code made when you
+installed, so it needs `claude plugin update control-room@control-room` after a new version, then a
+new session.
 
 ### Update
 

@@ -15,6 +15,9 @@ anything the engine refused, and why.
 - **Desktop:** the Code tab's local sessions load installed plugins and folders named in
   `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. Start a new session
   after changing either.
+- **Desktop shows an older version** (for example the 0.1 status bar, `CTX … | AUTO 700k`): the
+  Code tab loads the copy recorded in `~/.claude/plugins/installed_plugins.json`, not the folder.
+  Run `claude plugin update control-room@control-room`, then start a new session.
 - **Organisation policy:** managed settings can disable plugins. Control Room cannot and does not
   work around that.
 

@@ -489,7 +489,7 @@ describe('ui', () => {
     expect(line).not.toContain('C · 3 of 4')
     expect(line.indexOf('Running regression tests')).toBeLessThan(line.indexOf('Context'))
     expect(line).toContain('Context ━')
-    expect(line).toContain('Work ■■■□ 2/4')
+    expect(line).toContain('Work ●─●─◉─○ 2/4')
     expect(line).toContain('Run $1.25')
     await wide.unmount()
     // Narrow: no labels, the meters stay apart by shape.
@@ -637,6 +637,121 @@ describe('ui', () => {
     }
   })
 
+  test('Context shows the prompt cache: how long it stays warm, what it holds, Keep warm, and why it was rebuilt', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    // Every request writes its whole prompt afresh: the second, on another model, finds nothing cached.
+    on('turn.step', async function* ($, e) {
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000, model: e.model } }
+    })
+    await boot($, w)
+    for (const [turnId, model] of [['t1', 'claude-opus-5-5'], ['t2', 'claude-sonnet-5-5']] as const) {
+      await $.turn.start({ text: 'Build the parser.', turnId })
+      for await (const _ of $.turn.step({ turnId, index: 0, model, effort: 'high', messageCount: 2 })) void _
+      await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId, reason: 'answer' })
+    }
+    await w.clock.advance(300)
+    expect(w.kept.toasts).toContain('Cache rebuilt: 300k tokens · Model changed')
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      await ui.press({ key: 'tab-context' })
+      await w.clock.advance(300)
+      const text = textOf(await ui.drawn())
+      for (const expected of ['CACHE', 'Warm · lapses in about', '1-hour cache', '300k tokens cached', 'Keep warm while you are away', 'Ask before a model switch', 'Keep policies stable', 'CACHE HEALTH', '1 rebuild · 1 preventable', 'Model changed: opus-5-5 → sonnet-5-5', '300k · preventable', 'Switch models at the start of a fresh context', 'derived']) {
+        expect(text, `${surface}: ${expected}`).toContain(expected)
+      }
+      await ui.unmount()
+    }
+    // The switch and the idle limit are set right there.
+    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    await ui.press({ key: 'tab-context' })
+    await w.clock.advance(300)
+    expect(await ui.find({ key: 'cache-idle-inc' })).toBeUndefined()
+    await ui.press({ key: 'cache-keep' })
+    await w.clock.advance(300)
+    await ui.press({ key: 'cache-idle-inc' })
+    await w.clock.advance(2000)
+    expect(saved(w).cache).toMatchObject({ keepWarm: true, maxIdleMinutes: 180 })
+    expect(textOf(await ui.drawn())).toContain('Next refresh at')
+    await ui.unmount()
+    // The status bar names the costly rebuild for a few minutes, in place of the time left.
+    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    expect(textOf(await band.drawn())).toContain('Cache ● rebuilt 300k')
+    await band.unmount()
+    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    expect((await desktop.find({ type: 'Svg' }))?.props.alt).toBeDefined()
+    expect(textOf(await desktop.drawn())).toContain('rebuilt 300k')
+  })
+
+  test('the status bar: what is happening and the run cost on top, then Context, Work and Cache, each its own shape', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    on('turn.step', async function* ($, e) {
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000, model: e.model } }
+    })
+    await boot($, w)
+    // Before the first turn: the top line is quiet, and nothing is cached yet.
+    const before = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const idle = textOf(await before.drawn())
+    expect(idle).toContain('Ready')
+    expect((await before.find({ type: 'Button', key: 'open' }))?.props.label).toBe('◆ Control Room')
+    expect(idle).not.toContain('Cache')
+    await before.unmount()
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
+    await w.clock.advance(300)
+    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const text = textOf(await band.drawn())
+    expect(text).toContain('Building the parser · Milestone 2 of 3')
+    expect(text).toContain('Run $1.25')
+    expect(text).toContain('Work ●─◉─○ 1/3')
+    expect(text).toMatch(/Cache ● (1h|59m)/)
+    // Line one, then line two: what is happening sits above the lifecycles.
+    expect(text.indexOf('Building the parser')).toBeLessThan(text.indexOf('Context'))
+    expect(text.indexOf('Control Room')).toBeLessThan(text.indexOf('Context'))
+    // The button is bright while the panel is open.
+    expect((await band.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('secondary')
+    await $.command.run({ command: 'cr', args: 'open', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    await w.clock.advance(300)
+    await band.redraw()
+    expect((await band.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('primary')
+    await band.unmount()
+    // Desktop: the three graphics as SVG; the current milestone may pulse.
+    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const svgs: Node[] = []
+    each(await desktop.drawn(), n => void (n.type === 'Svg' ? svgs.push(n) : undefined))
+    expect(svgs.map(s => String(s.props?.alt))).toEqual(['Context 30% used', 'Work: 1 of 3 milestones done', expect.stringContaining('Prompt cache warm')])
+    expect(svgs[1]?.props?.isInteractive).toBe(true)
+    expect(String(svgs[1]?.props?.source)).toContain('<animate')
+    await desktop.unmount()
+  })
+
+  test('Overview leads with the run, then Work, Context and Cache, each with how it starts over', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    await boot($, w)
+    for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const text = textOf(await ui.drawn())
+      for (const expected of ['Run 1 · Session 1', '$1.25', 'WORK', 'CONTEXT', 'CACHE', 'Carries across handoffs', 'Starts over', 'Nothing cached yet', 'BEHAVIOR', 'GUARDRAILS', 'ACTIVITY']) {
+        expect(text, `${surface}: ${expected}`).toContain(expected)
+      }
+      expect(text.indexOf('WORK'), surface).toBeLessThan(text.indexOf('CONTEXT'))
+      expect(text.indexOf('CONTEXT'), surface).toBeLessThan(text.indexOf('CACHE'))
+      expect(text.indexOf('CACHE'), surface).toBeLessThan(text.indexOf('BEHAVIOR'))
+      await ui.unmount()
+    }
+    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    await ui.press({ key: 'sys-keepwarm' })
+    await w.clock.advance(2000)
+    expect(saved(w).cache.keepWarm).toBe(true)
+  })
+
   test('on Desktop no text of the panel or the status bar trips the app’s monospace rule', async ($, on) => {
     on('tool.call', { tool: 'Write' }, ($, e) => ({ result: { type: 'create', filePath: e.file_path, content: 'a\nb\n', structuredPatch: [], originalFile: null } }))
     on('tool.call', { tool: 'Edit' }, ($, e) => ({ result: { filePath: e.file_path, structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: ['-a', '+b', '+c'] }] } }))
@@ -659,8 +774,16 @@ describe('ui', () => {
       ],
     }
     w.store['runs.index.v1'] = ['r1']
+    w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }
+    // Two requests, the second on another model with nothing cached: the cache card and its health list draw too.
+    on('turn.step', async function* ($, e) {
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000, model: e.model } }
+    })
     await boot($, w)
+    await $.command.run({ command: 'cr', args: 'cache keep on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await $.turn.start({ text: 'Build the parser and cover it with tests.', turnId: 't1' })
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
+    for await (const _ of $.turn.step({ turnId: 't1', index: 1, model: 'claude-sonnet-5-5', effort: 'high', messageCount: 3 })) void _
     await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Sketch', status: 'completed', activeForm: 'Sketching' }, { content: 'Build', status: 'in_progress', activeForm: 'Building' }] })
     await $.tool.call({ tool: 'Write', file_path: '/work/src/parser.ts', content: 'a\nb\n' })
     await $.tool.call({ tool: 'Edit', file_path: '/work/README.md', old_string: 'a', new_string: 'b\nc' })

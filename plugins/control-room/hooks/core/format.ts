@@ -55,6 +55,14 @@ export function duration(ms: number | undefined | null): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
+/** A setting in minutes, as a person says it: 45 → "45 min", 120 → "2 h", 90 → "1 h 30 min". */
+export function minutes(n: number): string {
+  const m = Math.max(0, Math.round(n))
+  if (m < 60) return `${m} min`
+  const h = Math.floor(m / 60)
+  return m % 60 === 0 ? `${h} h` : `${h} h ${m % 60} min`
+}
+
 const pad2 = (n: number): string => (n < 10 ? `0${n}` : String(n))
 
 /** Local wall-clock time, "09:12". */

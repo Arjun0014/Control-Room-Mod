@@ -1,25 +1,28 @@
 /**
- * The status bar: the run at a glance, in two layers above the prompt.
+ * The status bar: the run at a glance, in two lines above the prompt.
  *
- *   ▸ Downloading the kernel outputs · 4m 51s                     Fetch E-008 outputs · 2 of 5
- *   ◆   Context ━━━━━┃── 62%   Work ■■□□□ 2/5   Checks ✓ Tests ✗ Lint   Run $115.93   Control Room
+ *   ▸ Downloading the kernel outputs · 4m 51s · Milestone 2 of 5          Run $115.93   [ ◆ Control Room ]
+ *     Context ━━━━━┃── 62%   Work ●─◉─○─○─○ 1/5   Cache ◕ 52m   ✓ Tests ✗ Lint                ▲ 2 issues
  *
  * The top line is what is happening: while a turn runs, what Claude is doing
  * (in its own words when the milestone under way has them), how long a slow
- * call has run, and the milestone it serves; once the turn ends, what it did,
- * in counted words. It appears with the first turn of a context, and a
- * handoff that needs the person takes its place, with its actions.
+ * call has run, and where the milestone sits in the plan; once the turn
+ * ends, what it did, in counted words. On its right, the whole run's cost
+ * and the Control Room button, bright while the panel is open.
  *
- * The bottom line holds the readings, each a name and a graphic. Context is
- * a continuous line with the handoff tick (how much of the window is used;
- * it starts over after a handoff). Work is one square per milestone with
- * "done/total" (how much of the objective is finished; it carries across
- * handoffs). Checks are their latest outcomes. Then states only while they
- * matter (a handoff under way, calls that need a look, a busy machine,
- * agents, the guard), the Quest log's level, and the whole run's cost.
+ * The second line holds the three lifecycles, each a name and a graphic of
+ * its own shape, so they cannot be confused. Context is a continuous line
+ * with the handoff tick (how much of the window is used; it starts over
+ * after a handoff). Work is a track of milestones, one stop each (how much of
+ * the objective is finished; it carries across handoffs). Cache is a clock
+ * face emptying as the prompt cache's lifetime runs out (it starts over with
+ * every request and is lost at a fresh context). Then the checks' latest
+ * outcomes, and on the right states only while they matter: calls that need
+ * a look, a busy machine, agents, the guard, the Quest log's level.
  *
- * Width decides the detail: names and long meters when wide, shorter meters
- * and fewer items when narrow. Desktop draws the meters as SVG.
+ * A handoff that needs the person takes a line of its own above, with its
+ * actions. Width decides the detail: names and long graphics when wide,
+ * shorter ones and fewer items when narrow. Desktop draws the graphics as SVG.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -28,12 +31,12 @@ import type { HudActivity, HudModel, Tone } from '../../types'
 import * as fmt from '../core/format'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
-import { CHECK_DOT, G, meterCells, svgBar, svgRing, svgSegments, toneProps, workCells } from './theme'
+import { CHECK_DOT, G, type Stop, clockGlyph, meterCells, svgBar, svgClock, svgRing, svgTrack, toneProps, trackStops } from './theme'
 
 type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean }
 
-/** A meter drawn as SVG on the remote surfaces, in place of its glyphs: `cells` wide. */
-type Graphic = { source: string; cells: number; alt: string; height: number }
+/** A graphic drawn as SVG on the remote surfaces, in place of its glyphs: `cells` wide. */
+type Graphic = { source: string; cells: number; alt: string; height: number; isInteractive?: boolean }
 
 export type Segment = {
   key: string
@@ -48,55 +51,67 @@ export type Segment = {
 
 const GAP = 3
 
-/** The pixels a cell of a status-bar meter takes as SVG. */
+/** The second line sits under the first line's text, past its glyph. */
+const INDENT = 2
+
+/** The pixels a cell of a status-bar graphic takes as SVG. */
 const CELL_PX = 8
 
 const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).reduce((n, p) => n + p.text.length, 0)
 
 export const widthOf = (s: Segment): number => spanWidth(s.spans) + (s.graphic?.cells ?? 0) + spanWidth(s.after)
 
-/** How much the readings line shows: names, check names, and the cells of each meter. */
-export type Tier = { labels: boolean; names: boolean; meter: number; squares: number }
+/** How much the lifecycles line shows: names, check names, the meter's cells and the track's stops. */
+export type Tier = { labels: boolean; names: boolean; meter: number; stops: number }
 
 const TIERS: readonly Tier[] = [
-  { labels: true, names: true, meter: 10, squares: 10 },
-  { labels: false, names: true, meter: 8, squares: 8 },
-  { labels: false, names: true, meter: 6, squares: 6 },
-  { labels: false, names: false, meter: 6, squares: 6 },
-  { labels: false, names: false, meter: 4, squares: 4 },
+  { labels: true, names: true, meter: 10, stops: 8 },
+  { labels: false, names: true, meter: 8, stops: 7 },
+  { labels: false, names: true, meter: 6, stops: 6 },
+  { labels: false, names: false, meter: 6, stops: 5 },
+  { labels: false, names: false, meter: 4, stops: 4 },
 ]
 
+/** From this wide (terminal columns; Desktop's are wider) the readings carry their names. */
+const NAMED_FROM: Record<'terminal' | 'other', number> = { terminal: 100, other: 70 }
+
+const namedFrom = (surface: Kit['surface']): number => (surface === 'terminal' ? NAMED_FROM.terminal : NAMED_FROM.other)
+
 /**
- * The tiers the readings line may take at a width, richest first: it takes
+ * The tiers the lifecycles line may take at a width, richest first: it takes
  * the first whose segments all fit. Names need a wide bar (100 columns in
  * the terminal, 70 on Desktop), so they do not come and go as states do.
  */
 export function tiersOf(columns: number, surface: Kit['surface'] = 'terminal'): readonly Tier[] {
-  return columns >= (surface === 'terminal' ? 100 : 70) ? TIERS : TIERS.slice(1)
+  return columns >= namedFrom(surface) ? TIERS : TIERS.slice(1)
+}
+
+/** Adjacent spans of one style become one, so a graphic is a few Texts, not one per cell. */
+function merged(spans: readonly Span[]): Span[] {
+  const out: Span[] = []
+  for (const span of spans) {
+    const last = out[out.length - 1]
+    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold) last.text += span.text
+    else out.push({ ...span })
+  }
+  return out
 }
 
 function meterSpans(fraction: number, marker: number | null, tone: Tone, width: number): Span[] {
   const c = meterCells(fraction, width, marker)
-  const out: Span[] = []
-  for (let i = 0; i < c.width; i++) {
-    const span: Span = i === c.marker ? { text: G.marker, tone: 'accent' } : i < c.filled ? { text: G.lineFull, tone } : { text: G.lineEmpty, isDim: true }
-    const last = out[out.length - 1]
-    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold) last.text += span.text
-    else out.push(span)
-  }
-  return out
+  return merged(
+    Array.from({ length: c.width }, (_, i): Span => (i === c.marker ? { text: G.marker, tone: 'accent' } : i < c.filled ? { text: G.lineFull, tone } : { text: G.lineEmpty, isDim: true })),
+  )
 }
 
-function squareSpans(done: number, total: number, max: number, hasCurrent: boolean): Span[] {
-  const c = workCells(done, total, max, hasCurrent)
+/** The track of milestones: ●─●─◉─○, done in blue, the one under way bright, the rest dim. */
+export function trackSpans(stops: readonly Stop[]): Span[] {
   const out: Span[] = []
-  for (let i = 0; i < c.width; i++) {
-    const span: Span = i < c.done ? { text: G.square, tone: 'info' } : i === c.current ? { text: G.square, isBold: true } : { text: G.squareOpen, isDim: true }
-    const last = out[out.length - 1]
-    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold) last.text += span.text
-    else out.push(span)
-  }
-  return out
+  stops.forEach((s, i) => {
+    if (i > 0) out.push({ text: G.stepJoin, isDim: true })
+    out.push(s === 'done' ? { text: G.stepDone, tone: 'info' } : s === 'now' ? { text: G.stepNow, isBold: true } : { text: G.stepOpen, isDim: true })
+  })
+  return merged(out)
 }
 
 const valueTone = (tone: Tone): Tone | undefined => (tone === 'good' || tone === 'normal' || tone === 'muted' ? undefined : tone)
@@ -107,11 +122,11 @@ const EVENT_STATES = new Set(['pending', 'requested', 'handoff', 'verifying', 'c
 
 const CHECK_GLYPH: Record<string, string> = { passed: G.ok, failed: G.fail, running: G.run, blocked: G.stop, background: G.ring, stopped: G.stop }
 
-/** The readings line's segments at a tier, in display order, each with its priority for when room runs short. */
+/** The lifecycles line's segments at a tier, in display order, each with its priority for when room runs short. */
 export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] = 'terminal'): Segment[] {
   const isSvg = surface !== 'terminal'
   const label = (text: string): Span[] => (tier.labels ? [{ text: `${text} `, isDim: true }] : [])
-  const segments: Segment[] = [{ key: 'brand', priority: 0, side: 'left', spans: [{ text: G.brand, tone: 'accent', isBold: true }] }]
+  const segments: Segment[] = []
 
   // Context: a line with the handoff tick.
   const ctx = hud.ctx
@@ -136,12 +151,18 @@ export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] =
     )
   }
 
-  // Work: one square per milestone, as Claude's own task list counts them.
+  // A handoff under way belongs to the context: it says so beside the meter.
+  if (hud.autopilot.isOn && EVENT_STATES.has(hud.autopilot.state)) {
+    segments.push({ key: 'event', priority: 0, side: 'left', spans: [{ text: hud.autopilot.text, tone: hud.autopilot.tone === 'normal' ? 'accent' : hud.autopilot.tone, isBold: true }] })
+  }
+
+  // Work: a track of milestones, as Claude's own task list counts them.
   const work = hud.work
   if (work !== null && work.total > 0) {
     const isDone = work.done === work.total
     const count: Span = { text: ` ${work.done}/${work.total}`, tone: isDone ? 'good' : undefined }
-    const hasCurrent = work.current !== null
+    const stops = trackStops(work.done, work.total, tier.stops, work.current !== null)
+    const alt = `Work: ${work.done} of ${work.total} milestones done`
     segments.push(
       isSvg
         ? {
@@ -150,14 +171,39 @@ export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] =
             side: 'left',
             spans: label('Work'),
             graphic: {
-              source: svgSegments({ done: work.done, total: work.total, hasCurrent, max: tier.squares, width: Math.min(work.total, tier.squares) * CELL_PX + 8, height: 10 }),
-              cells: Math.min(work.total, tier.squares) + 1,
-              alt: `Work: ${work.done} of ${work.total} milestones done`,
+              source: svgTrack({ stops, width: stops.length * 10 + 2, height: 10, isAnimated: hud.isAnimated }),
+              cells: Math.ceil((stops.length * 10 + 2) / CELL_PX),
+              alt,
               height: 10,
+              isInteractive: hud.isAnimated && stops.includes('now') ? true : undefined,
             },
             after: [count],
           }
-        : { key: 'work', priority: 1, side: 'left', spans: [...label('Work'), ...squareSpans(work.done, work.total, tier.squares, hasCurrent), count] },
+        : { key: 'work', priority: 1, side: 'left', spans: [...label('Work'), ...trackSpans(stops), count] },
+    )
+  }
+
+  // Cache: a clock face emptying as the prompt cache's lifetime runs out.
+  const cache = hud.cache
+  if (cache !== null) {
+    const text: Span = { text: `${isSvg ? '' : ' '}${cache.text}`, tone: cache.tone === 'warn' ? 'warn' : undefined, isDim: cache.tone === 'muted' ? true : undefined }
+    const alt = cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
+    segments.push(
+      isSvg
+        ? {
+            key: 'cache',
+            priority: 1,
+            side: 'left',
+            spans: label('Cache'),
+            graphic: { source: svgClock({ fraction: cache.fraction, tone: cache.tone === 'normal' ? 'info' : cache.tone, size: 12 }), cells: 2, alt, height: 12 },
+            after: [text],
+          }
+        : {
+            key: 'cache',
+            priority: 1,
+            side: 'left',
+            spans: [...label('Cache'), { text: clockGlyph(cache.fraction), tone: cache.tone === 'normal' ? 'info' : cache.tone === 'warn' ? 'warn' : undefined, isDim: cache.tone === 'muted' ? true : undefined }, text],
+          },
     )
   }
 
@@ -172,11 +218,7 @@ export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] =
     segments.push({ key: 'checks', priority: hud.checks.some(c => c.status === 'failed') ? 1 : 2, side: 'left', spans })
   }
 
-  if (hud.autopilot.isOn && EVENT_STATES.has(hud.autopilot.state)) {
-    segments.push({ key: 'event', priority: 0, side: 'left', spans: [{ text: hud.autopilot.text, tone: hud.autopilot.tone === 'normal' ? 'accent' : hud.autopilot.tone, isBold: true }] })
-  }
-
-  // Right: states while they matter, the level, then the run's cost.
+  // Right: states while they matter, then the level.
   if (hud.attention > 0) segments.push({ key: 'attention', priority: 2, side: 'right', spans: [{ text: `${G.warn} ${fmt.plural(hud.attention, 'issue')}`, tone: 'warn' }] })
   for (const which of ['cpu', 'ram'] as const) {
     const load = hud.load
@@ -208,15 +250,6 @@ export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] =
         : { key: 'quest', priority: 3, side: 'right', spans: [{ text: `${G.star} `, tone: 'accent' }, level, ...(tier.labels ? [xp] : [])] },
     )
   }
-
-  const run = hud.cost.runUsd ?? hud.cost.usd
-  segments.push({
-    key: 'cost',
-    priority: 2,
-    side: 'right',
-    // A dollar figure says what it is by itself; an unknown one ("—") keeps its name.
-    spans: [...(run === null ? [{ text: 'Run ', isDim: true }] : label('Run')), { text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null }],
-  })
   return segments
 }
 
@@ -254,67 +287,91 @@ function segmentEl(kit: Kit, s: Segment): RenderElement {
     )
   }
   return (
-    <Box key={`seg-${s.key}`} flexDirection="row" alignItems="center" flexShrink={0} columnGap={s.spans.length === 0 ? 1 : 0}>
+    <Box key={`seg-${s.key}`} flexDirection="row" alignItems="center" flexShrink={0} columnGap={s.after === undefined || s.after.length === 0 || s.after[0]?.text.startsWith(' ') ? 0 : 1}>
       {text(s.spans, 'before')}
-      <Svg key={`seg-${s.key}-svg`} source={s.graphic.source} alt={s.graphic.alt} height={s.graphic.height} />
+      <Svg key={`seg-${s.key}-svg`} source={s.graphic.source} alt={s.graphic.alt} height={s.graphic.height} isInteractive={s.graphic.isInteractive} />
       {text(s.after, 'after')}
     </Box>
   )
 }
 
 /**
- * "Fetch E-008 outputs · 2 of 5", or just "2 of 5" when the room is short.
- * When the line already names the milestone, in its "doing" words, only
- * where it sits: "Milestone 2 of 5".
+ * Where the milestone sits: "Milestone 2 of 5" when the line already names
+ * it in its "doing" words, else its name and place; shorter when room is short.
  */
 function milestoneText(m: NonNullable<HudActivity['milestone']>, isNamed: boolean, room: number): string | null {
   const position = `${m.index} of ${m.total}`
-  if (isNamed) return `Milestone ${position}`.length <= room ? `Milestone ${position}` : position.length <= room ? position : null
-  const subject = m.subject.length > 40 ? `${m.subject.slice(0, 39)}…` : m.subject
-  const full = `${subject} · ${position}`
-  if (full.length <= room) return full
-  return position.length <= room ? position : null
+  const options = isNamed ? [`Milestone ${position}`, position] : [`${m.subject.length > 40 ? `${m.subject.slice(0, 39)}…` : m.subject} · ${position}`, `Milestone ${position}`, position]
+  return options.find(o => o.length <= room) ?? null
 }
 
-/**
- * The top line: what Claude is doing now, or what the last turn did. The
- * text is one plain string, so it cuts with an ellipsis on every surface.
- */
-function activityLine(kit: Kit, a: HudActivity): RenderElement {
-  const { Box, Text } = kit.ui
+/** The top line's words: what is happening, then (dim) how long and where in the plan. */
+function topWords(hud: HudModel, room: number): { glyph: string; glyphTone: Tone; main: string; isMainDim: boolean; isMainBold: boolean; rest: string | null } {
+  const a = hud.activity
+  if (a === null) return { glyph: G.ring, glyphTone: 'muted', main: hud.objective ?? 'Ready', isMainDim: true, isMainBold: false, rest: null }
   const isWorking = a.state === 'working'
-  const glyphTone: Tone = isWorking ? (a.source === 'thinking' ? 'muted' : 'info') : 'good'
-  const left = isWorking && a.runningMs !== null ? `${a.text} · ${fmt.duration(a.runningMs)}` : a.text
-  const room = Math.max(0, kit.columns - left.length - 2 - GAP - 8)
-  const right = isWorking
-    ? a.milestone === null
-      ? null
-      : milestoneText(a.milestone, a.source === 'plan', Math.max(room, 12))
-    : a.durationMs === null
-      ? null
-      : fmt.duration(a.durationMs)
+  const main = a.text
+  const parts: string[] = []
+  if (isWorking && a.runningMs !== null) parts.push(fmt.duration(a.runningMs))
+  if (!isWorking && a.durationMs !== null) parts.push(fmt.duration(a.durationMs))
+  const fixed = parts.join(' · ')
+  // The milestone's place, when the line has room for it after the words.
+  const spare = room - main.length - (fixed === '' ? 0 : fixed.length + 3) - 3
+  const where = isWorking && a.milestone !== null ? milestoneText(a.milestone, a.source === 'plan', spare) : null
+  if (where !== null) parts.push(where)
+  return {
+    glyph: isWorking ? G.run : G.ok,
+    glyphTone: isWorking ? (a.source === 'thinking' ? 'muted' : 'info') : 'good',
+    main,
+    isMainDim: isWorking && a.source === 'thinking',
+    isMainBold: isWorking && a.source !== 'thinking',
+    rest: parts.length === 0 ? null : parts.join(' · '),
+  }
+}
+
+/** The Control Room button's words: its name with the brand mark, or a short verb in a narrow bar. */
+const pillLabel = (hud: HudModel, columns: number): string => (columns >= 70 ? `${G.brand} Control Room` : `${G.brand} ${hud.isPaneOpen ? 'Close' : 'Open'}`)
+
+/** The top line: what is happening, then the run's cost and the Control Room button. */
+function topLine(kit: Kit, hud: HudModel): RenderElement {
+  const { Box, Text, Button } = kit.ui
+  const run = hud.cost.runUsd ?? hud.cost.usd
+  const isNamed = kit.columns >= namedFrom(kit.surface)
+  const cost = `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`
+  const costWidth = (isNamed || run === null ? 4 : 0) + cost.length
+  const pill = pillLabel(hud, kit.columns)
+  const pillWidth = pill.length + (isNative(kit) ? 6 : 4)
+  const room = Math.max(8, kit.columns - INDENT - costWidth - pillWidth - 2 * GAP)
+  const w = topWords(hud, room)
   return (
-    <Box flexDirection="row" key="hud-activity" alignItems="center" columnGap={GAP}>
+    <Box flexDirection="row" key="hud-top" alignItems="center" columnGap={GAP}>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} {...clip(kit)}>
-        <Box width={2} flexShrink={0}>
-          <Text {...toneProps(glyphTone)}>{isWorking ? G.run : G.ok}</Text>
+        <Box width={INDENT} flexShrink={0}>
+          <Text {...toneProps(w.glyphTone)}>{w.glyph}</Text>
         </Box>
         <Box flexShrink={1} {...clip(kit)}>
-          <Text wrap="truncate-end" dimColor={isWorking && a.source !== 'thinking' ? undefined : true}>
-            {left}
+          <Text wrap="truncate-end">
+            <Text dimColor={w.isMainDim ? true : undefined} bold={w.isMainBold ? true : undefined}>
+              {w.main}
+            </Text>
+            {w.rest === null ? null : <Text dimColor>{` · ${w.rest}`}</Text>}
           </Text>
         </Box>
       </Box>
-      {right === null ? null : (
-        <Box flexShrink={0}>
-          <Text dimColor>{right}</Text>
-        </Box>
-      )}
+      <Box flexShrink={0}>
+        <Text>
+          {isNamed || run === null ? <Text dimColor>{'Run '}</Text> : null}
+          <Text dimColor={run === null ? true : undefined}>{cost}</Text>
+        </Text>
+      </Box>
+      <Box flexShrink={0}>
+        <Button key="open" label={pill} variant={hud.isPaneOpen ? 'primary' : 'secondary'} onPress={kit.actions.togglePane} />
+      </Box>
     </Box>
   )
 }
 
-/** A handoff that needs the person, in the top line's place, with its actions. */
+/** A handoff that needs the person, on a line of its own above, with its actions. */
 function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderElement {
   const { Box, Text, Button } = kit.ui
   const actions =
@@ -332,7 +389,7 @@ function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderEleme
   return (
     <Box flexDirection="row" key="hud-alert" alignItems="center" columnGap={2}>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} {...clip(kit)}>
-        <Box width={2} flexShrink={0}>
+        <Box width={INDENT} flexShrink={0}>
           <Text {...toneProps(alert.tone)}>{alert.kind === 'awaiting' ? G.dot : G.warn}</Text>
         </Box>
         <Box flexShrink={1} {...clip(kit)}>
@@ -348,12 +405,10 @@ function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderEleme
   )
 }
 
-/** The readings line: each a name and a graphic, then the run's cost and the panel's button. */
-function readingsLine(kit: Kit, hud: HudModel): RenderElement {
-  const { Box, Button } = kit.ui
-  // The button opens and closes the panel: its name when there is room, else what a press does.
-  const label = kit.columns >= 70 ? 'Control Room' : hud.isPaneOpen ? 'Close' : 'Open'
-  const room = Math.max(10, kit.columns - label.length - GAP - (isNative(kit) ? 4 : 0))
+/** The lifecycles line: Context, Work and Cache, the checks, then what needs a look. */
+function lifecyclesLine(kit: Kit, hud: HudModel): RenderElement {
+  const { Box } = kit.ui
+  const room = Math.max(10, kit.columns - INDENT)
   // The richest tier that shows every reading; failing that, the leanest one, least important readings dropped.
   let kept: Segment[] = []
   for (const tier of tiersOf(kit.columns, kit.surface)) {
@@ -364,30 +419,27 @@ function readingsLine(kit: Kit, hud: HudModel): RenderElement {
   const left = kept.filter(s => s.side === 'left')
   const right = kept.filter(s => s.side === 'right')
   return (
-    <Box flexDirection="row" key="hud-line" alignItems="center">
+    <Box flexDirection="row" key="hud-line" alignItems="center" marginLeft={INDENT}>
       <Box flexDirection="row" columnGap={GAP} flexShrink={0} alignItems="center">
         {left.map(s => segmentEl(kit, s))}
       </Box>
       <Box key="hud-gap" flexGrow={1} flexShrink={1} />
-      <Box flexDirection="row" columnGap={GAP} flexShrink={0} marginLeft={right.length > 0 ? GAP : 0} alignItems="center">
-        {right.map(s => segmentEl(kit, s))}
-      </Box>
-      <Box marginLeft={GAP} flexShrink={0}>
-        <Button key="open" label={label} plain dimColor onPress={kit.actions.togglePane} />
-      </Box>
+      {right.length === 0 ? null : (
+        <Box flexDirection="row" columnGap={GAP} flexShrink={0} marginLeft={GAP} alignItems="center">
+          {right.map(s => segmentEl(kit, s))}
+        </Box>
+      )}
     </Box>
   )
 }
 
 export function hudView(kit: Kit, hud: HudModel): RenderElement {
   const { Box } = kit.ui
-  const readings = readingsLine(kit, hud)
-  const top = hud.alert !== null ? alertLine(kit, hud.alert) : hud.activity !== null ? activityLine(kit, hud.activity) : null
-  if (top === null) return readings
   return (
     <Box flexDirection="column" rowGap={isNative(kit) && hud.alert !== null ? 1 : 0}>
-      {top}
-      {readings}
+      {hud.alert === null ? null : alertLine(kit, hud.alert)}
+      {topLine(kit, hud)}
+      {lifecyclesLine(kit, hud)}
     </Box>
   )
 }

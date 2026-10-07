@@ -1,10 +1,18 @@
 /**
- * Overview: how this session is doing, then a map of everything that is on.
+ * Overview: how the run is doing, then a map of everything that is on.
  *
- * The top is live (context, cost, the machine). Below it, one card per
- * section in that section's accent, each system with its switch and one
- * line of state, and a quiet "Open ›" to the section itself, so the page
- * also teaches where everything lives.
+ * It leads with the run (its number, the session, the whole run's cost),
+ * then the three lifecycles, each a card with its own graphic and one line
+ * on how it starts over:
+ *
+ *   WORK     the objective's milestones; carries across handoffs
+ *   CONTEXT  the reasoning window; starts over at each handoff
+ *   CACHE    the prompt cache; starts over with each fresh context, lapses when idle
+ *
+ * Then what is happening now and what needs a look, the profile, and one
+ * card per remaining section in that section's accent, each system with its
+ * switch and one line of state, and a quiet "Open ›" to the section itself,
+ * so the page also teaches where everything lives.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -14,8 +22,9 @@ import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { FIELD_LABEL, callout, card, clip, field, link, listItem, meterBar, picker, row, switchControl, textRuns, workStrip } from '../primitives'
+import { cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, switchControl, textRuns, workTrack } from '../primitives'
 import { ACCENT, G } from '../theme'
+import { cacheState, cacheSummary } from './cache'
 import type { PaneData } from './frame'
 
 /** A status as a row's subtitle: quiet unless it needs a look. */
@@ -60,6 +69,30 @@ function permissionSummary(p: Record<PermissionCategory, string>): string {
   return parts.length === 0 ? 'Claude Code decides' : parts.join(' · ')
 }
 
+/** The run at the top: which run and session, the whole run's cost, and what it is for. */
+function runHeader(kit: Kit, data: PaneData): RenderElement {
+  const { Box, Text } = kit.ui
+  const { hud } = data
+  const run = hud.cost.runUsd ?? hud.cost.usd
+  const s = hud.session
+  const title = s.run === null ? 'No run yet' : `Run ${s.run} · Session ${s.index}`
+  const under = [s.handoffs > 0 ? fmt.plural(s.handoffs, 'handoff') : '', s.handoffs > 0 && hud.cost.usd !== null ? `${fmt.cost(hud.cost.usd)} this session` : ''].filter(Boolean).join(' · ')
+  return (
+    <Box key="run-head" flexDirection="column" marginTop={1}>
+      <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
+        <Box flexShrink={1} {...clip(kit)}>
+          <Text bold wrap="truncate-end">
+            <Text color="claude">{`${G.brand} `}</Text>
+            {title}
+          </Text>
+        </Box>
+        <Text bold dimColor={run === null ? true : undefined}>{`${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`}</Text>
+      </Box>
+      {hud.objective === null && under === '' ? null : pair(kit, { key: 'run-under', left: hud.objective ?? '', right: under === '' ? undefined : under })}
+    </Box>
+  )
+}
+
 export function overviewPage(kit: Kit, data: PaneData): RenderElement {
   const { Box } = kit.ui
   const { pane, hud } = data
@@ -71,7 +104,6 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
 
   const fraction = ctx.tokens !== null && ctx.window !== null && ctx.window > 0 ? ctx.tokens / ctx.window : 0
   const marker = ctx.threshold !== null && ctx.window !== null && ctx.window > 0 ? ctx.threshold / ctx.window : null
-  const hasRunCost = hud.cost.runUsd !== null && hud.cost.usd !== null && hud.cost.runUsd - hud.cost.usd > 0.005
   const load = hud.load
   const pct = (n: number | null) => (n === null ? G.none : `${Math.round(n)}%`)
   const readingTone = (t: Tone): Tone => (t === 'warn' || t === 'bad' ? t : 'normal')
@@ -82,71 +114,115 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
   const profiles = listProfiles(s).map(p => ({ value: p.id, label: p.name, hint: p.tagline }))
   const activeProfile = profiles.find(p => p.value === s.profile)
 
-  // The context line: the meter across the room the label leaves, the % at its end.
-  const pctText = (ctx.pct === null ? G.none : `${ctx.pct}%`).padStart(5)
-  const meterWidth = Math.max(8, kit.columns - FIELD_LABEL - pctText.length - 1)
-  const contextLine = (
-    <Box key="ctx-line" flexDirection="row" columnGap={1}>
-      <Box flexGrow={1} flexShrink={1} {...clip(kit)}>
-        {meterBar(kit, { key: 'ctx-meter', fraction, marker, tone: ctx.tone === 'muted' ? 'good' : ctx.tone, width: meterWidth, alt: `Context ${ctx.pct ?? 0}% used` })}
-      </Box>
-      {textRuns(kit, 'ctx-pct', [{ text: pctText, tone: readingTone(ctx.tone), isBold: ctx.pct !== null }])}
-    </Box>
-  )
-  const contextUnder =
-    ctx.tokens === null
-      ? 'Waiting for the first response'
-      : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`} tokens${hud.autopilot.isOn && ctx.threshold !== null ? ` · hands off at ${fmt.tokens(ctx.threshold)}` : ''}`
+  const work = hud.work
+  const cache = pane.cache
+  const cacheNow = cacheState(cache, kit.now)
+  const ttlWords = cache.ttl === '5m' ? 'five idle minutes' : cache.ttl === '1h' ? 'an idle hour' : 'its lifetime idle'
+  const a = hud.activity
+  const isLoadHigh = load !== null && (readingTone(load.cpuTone) !== 'normal' || readingTone(load.ramTone) !== 'normal')
+  const needsLook = hud.attention + hud.failing.length
 
   return (
     <Box flexDirection="column">
       {alertCallout(kit, data)}
 
-      <Box key="hero" flexDirection="column" marginTop={1}>
-        {field(kit, { key: 'ctx', label: 'Context', content: contextLine, under: contextUnder })}
-        {hud.work === null
-          ? null
-          : field(kit, {
-              key: 'work',
-              label: 'Work',
-              content: workStrip(kit, {
-                key: 'work-strip',
-                done: hud.work.done,
-                total: hud.work.total,
-                hasCurrent: hud.work.current !== null,
-                max: Math.max(4, Math.min(12, kit.columns - FIELD_LABEL - 24)),
-                caption: `${hud.work.done} of ${fmt.plural(hud.work.total, 'milestone')}`,
-              }),
-              under: hud.now !== null ? hud.now.text : (hud.work.current ?? undefined),
-            })}
-        {field(kit, {
-          key: 'cost',
-          label: 'Cost',
-          content: textRuns(
-            kit,
-            'cost-value',
-            hud.cost.usd === null
-              ? [{ text: G.none, tone: 'muted' }, { text: '  not reported by this host', tone: 'muted' }]
-              : [
-                  { text: fmt.cost(hud.cost.usd), isBold: true },
-                  { text: ' this session', tone: 'muted' },
-                  ...(hasRunCost ? [{ text: ` · ${fmt.cost(hud.cost.runUsd)}${hud.cost.isRunPartial ? '+' : ''} this run`, tone: 'muted' as const }] : []),
-                ],
-          ),
-        })}
-        {load === null
-          ? null
-          : field(kit, {
-              key: 'machine',
-              label: 'Machine',
-              content: textRuns(kit, 'machine-value', [
-                { text: 'CPU ', tone: 'muted' },
-                { text: pct(load.cpu), tone: readingTone(load.cpuTone), isBold: load.cpuTone === 'bad' },
-                { text: kit.surface === 'terminal' ? '   Memory ' : ' · Memory ', tone: 'muted' },
-                { text: pct(load.ram), tone: readingTone(load.ramTone), isBold: load.ramTone === 'bad' },
-              ]),
-            })}
-      </Box>
+      {runHeader(kit, data)}
+
+      {card(kit, {
+        key: 'life-work',
+        title: 'Work',
+        accent: ACCENT.activity,
+        aside: work === null ? undefined : `${work.done} of ${work.total}`,
+        link: go('activity'),
+        footer: 'Carries across handoffs, counted from Claude’s own milestones.',
+        rows: k =>
+          work === null
+            ? [emptyState(k, 'Claude lists milestones when the work has several steps.', 'work-empty')]
+            : [
+                workTrack(k, {
+                  key: 'work-track',
+                  done: work.done,
+                  total: work.total,
+                  hasCurrent: work.current !== null,
+                  max: Math.max(4, Math.min(12, Math.floor((k.columns - 24) / 2))),
+                  caption: work.done === work.total ? 'All milestones done' : `${work.done} of ${fmt.plural(work.total, 'milestone')}`,
+                  isAnimated: hud.isAnimated,
+                }),
+                work.current === null ? null : listItem(k, { key: 'work-now', glyph: G.run, tone: 'info', text: work.current }),
+              ],
+      })}
+
+      {card(kit, {
+        key: 'life-context',
+        title: 'Context',
+        accent: ACCENT.context,
+        aside: ctx.pct === null ? undefined : `${ctx.pct}%`,
+        link: go('context'),
+        footer: s.autopilot.enabled ? 'Starts over at each handoff.' : 'Starts over when you clear it; Autopilot hands off before it fills.',
+        rows: k => [
+          meterBar(k, { key: 'ctx-meter', fraction, marker, tone: ctx.tone === 'muted' ? 'good' : ctx.tone, width: k.columns, alt: `Context ${ctx.pct ?? 0}% used` }),
+          pair(k, {
+            key: 'ctx-under',
+            left: ctx.tokens === null ? 'Waiting for the first response' : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`} tokens`,
+            right: hud.autopilot.isOn && ctx.threshold !== null ? `hands off at ${fmt.tokens(ctx.threshold)}` : undefined,
+          }),
+          toggle(k, 'sys-autopilot', 'Autopilot', s.autopilot.enabled, () => u(d => void (d.autopilot.enabled = !d.autopilot.enabled)), st.autopilot),
+        ],
+      })}
+
+      {card(kit, {
+        key: 'life-cache',
+        title: 'Cache',
+        accent: ACCENT.context,
+        aside: hud.cache === null ? undefined : `${hud.cache.text}`,
+        link: go('context'),
+        footer: `Starts over with each fresh context, and lapses after ${ttlWords}.${s.cache.keepWarm ? ' Keep warm holds it while you are away.' : ''}`,
+        rows: k => [
+          cacheClock(k, { key: 'cache-clock', fraction: cacheNow.fraction, tone: cacheNow.tone, text: cacheNow.text, isBold: cache.warmth === 'warm' }),
+          cache.warmth === 'none' ? null : pair(k, { key: 'cache-under', left: cacheSummary(cache, kit.now) }),
+          row(k, {
+            key: 'sys-keepwarm',
+            label: 'Keep warm',
+            control: switchControl(k, { key: 'sys-keepwarm', isOn: s.cache.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
+          }),
+        ],
+      })}
+
+      {a === null && needsLook === 0 && load === null
+        ? null
+        : card(kit, {
+            key: 'now',
+            title: 'Now',
+            accent: ACCENT.overview,
+            rows: k => [
+              a === null
+                ? null
+                : listItem(k, {
+                    key: 'now-line',
+                    glyph: a.state === 'working' ? G.run : G.ok,
+                    tone: a.state === 'working' ? 'info' : 'good',
+                    text: a.text,
+                    right: a.state === 'working' ? (a.runningMs === null ? undefined : fmt.duration(a.runningMs)) : a.durationMs === null ? undefined : fmt.duration(a.durationMs),
+                    isDim: a.state === 'working' && a.source === 'thinking',
+                  }),
+              needsLook === 0
+                ? null
+                : row(k, {
+                    key: 'now-attention',
+                    label: hud.failing.length > 0 ? `${hud.failing.join(', ')} failing` : `${fmt.plural(hud.attention, 'call')} need${hud.attention === 1 ? 's' : ''} a look`,
+                    control: link(k, { key: 'now-attention', label: 'Activity', onPress: () => kit.actions.setTab('activity') }),
+                  }),
+              load === null
+                ? null
+                : textRuns(k, 'machine-value', [
+                    { text: k.surface === 'terminal' ? 'Machine   CPU ' : 'Machine · CPU ', tone: 'muted' },
+                    { text: pct(load.cpu), tone: readingTone(load.cpuTone), isBold: load.cpuTone === 'bad' },
+                    { text: k.surface === 'terminal' ? '   Memory ' : ' · Memory ', tone: 'muted' },
+                    { text: pct(load.ram), tone: readingTone(load.ramTone), isBold: load.ramTone === 'bad' },
+                    ...(isLoadHigh ? [{ text: kit.surface === 'terminal' ? '   busy' : ' · busy', tone: 'warn' as const }] : []),
+                  ]),
+            ],
+          })}
 
       {card(kit, {
         key: 'profile',
@@ -158,14 +234,6 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
             control: picker(k, { key: 'profile', value: s.profile, options: profiles, onSelect: v => kit.actions.applyProfile(v) }),
           }),
         ],
-      })}
-
-      {card(kit, {
-        key: 'sys-context',
-        title: 'Context',
-        accent: ACCENT.context,
-        link: go('context'),
-        rows: k => [toggle(k, 'sys-autopilot', 'Autopilot', s.autopilot.enabled, () => u(d => void (d.autopilot.enabled = !d.autopilot.enabled)), st.autopilot)],
       })}
 
       {card(kit, {
@@ -201,7 +269,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
               ? {}
               : { subtitle: data.resources?.ceilings === null || data.resources === undefined ? st.load.text : `${st.load.text.split(' · ')[0]} · CPU ${data.resources.ceilings.cpu}% · RAM ${data.resources.ceilings.ram}%` }),
           }),
-          ...pane.agents.running.map(a => listItem(k, { key: `agent-${a.id}`, glyph: G.dot, tone: 'info', text: `${a.type}  ${a.description}`, right: a.status })),
+          ...pane.agents.running.map(ag => listItem(k, { key: `agent-${ag.id}`, glyph: G.dot, tone: 'info', text: `${ag.type}  ${ag.description}`, right: ag.status })),
         ],
       })}
 

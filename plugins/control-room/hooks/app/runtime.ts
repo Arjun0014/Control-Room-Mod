@@ -230,7 +230,7 @@ export class Runtime {
    * Code is asked to confirm, with what the switch re-sends uncached.
    */
   onPreModelSwitch(e: { from_model: string; to_model: string; source: string; context_tokens: number; prompt_cache_warm: boolean; cache_ttl: '5m' | '1h'; estimated_cache_write_usd: number }): string | null {
-    this.cache.noteTtl(e.cache_ttl)
+    if (e.cache_ttl === '5m' || e.cache_ttl === '1h') this.cache.noteTtl(e.cache_ttl)
     const s = this.settings.cache
     if (!s.guardModelSwitch || !e.prompt_cache_warm || e.from_model === e.to_model || e.context_tokens < LIMITS.guardSwitchTokens) return null
     if (e.source !== 'command' && e.source !== 'picker') return null
@@ -240,7 +240,7 @@ export class Runtime {
 
   onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h'; source: string }): void {
     const by = e.source === 'auto' || e.source === 'resume' ? 'engine' : 'person'
-    this.cache.noteModelSwitch({ from: e.from_model, to: e.to_model, ttl: e.cache_ttl, now: this.clock(), by })
+    if (e.cache_ttl === '5m' || e.cache_ttl === '1h') this.cache.noteModelSwitch({ from: e.from_model, to: e.to_model, ttl: e.cache_ttl, now: this.clock(), by })
     if (e.to_model !== '') this.sessionModel = e.to_model
   }
 
@@ -446,7 +446,7 @@ export class Runtime {
       await host.registerCommand({
         name: COMMAND,
         description: 'Open Control Room: context, behavior, guardrails, activity and setup',
-        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|frontier|focus|style <name>|resources <level>|agents <mode>]',
+        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|cache|frontier|focus|style <name>|resources <level>|agents <mode>]',
       })
       this.commandsRegistered.add(COMMAND)
     } catch (error) {
@@ -574,7 +574,7 @@ export class Runtime {
     }
     this.monitor.stop()
     this.agents.poll?.cancel()
-    this.cache.cancel()
+    this.cache.stop()
     if (this.run !== null) {
       const now = Date.now()
       const end: Chain.SessionEnd = e.reason === 'resume' ? 'resume' : e.reason === 'logout' ? 'logout' : e.reason === 'prompt_input_exit' ? 'exit' : 'other'
@@ -1012,7 +1012,7 @@ export class Runtime {
     if (this.autopilot.state === 'armed' && input.reason !== 'aborted' && this.usage.tokens !== undefined) {
       this.stepAutopilot({ kind: 'context', tokens: this.usage.tokens, window: this.usage.window, isInTurn: false, now })
     }
-    this.cache.turnEnded(now)
+    this.cache.turnEnded(this.clock())
     this.persistRun()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain')
   }

@@ -119,7 +119,7 @@ export type HudModel = {
   load: { cpu: number | null; ram: number | null; cpuTone: Tone; ramTone: Tone; cpuSeries: number[]; ramSeries: number[] } | null
   agents: { running: number; limit: number | null; mode: string }
   guard: { isOn: boolean; continued: number }
-  session: { run: number | null; index: number }
+  session: { run: number | null; index: number; handoffs: number }
   alert: { kind: 'pending' | 'awaiting' | 'load'; text: string; tone: Tone } | null
   /** Run progress from Claude's own task list (milestones done of total); null until it keeps one. */
   work: { done: number; total: number; current: string | null } | null
@@ -140,6 +140,10 @@ export type HudModel = {
   quest: QuestHud | null
   /** The prompt cache at a glance; null before the first request of a context. */
   cache: HudCache | null
+  /** The run's objective, for the top line before the first turn of a context; null when none is known. */
+  objective: string | null
+  /** Whether Desktop may animate (the current milestone's pulse); off under reduced motion. */
+  isAnimated: boolean
 }
 
 export type CacheWarmth = 'none' | 'warm' | 'cold' | 'unknown'
@@ -149,10 +153,17 @@ export type HudCache = {
   ttl: '5m' | '1h' | null
   /** Derived: the last request's time plus the TTL. */
   expiresAt: number | null
+  /** Time left when published (republished each minute while it counts down), and as a share of the TTL. */
+  leftMs: number | null
+  fraction: number | null
+  /** What the status bar says beside the clock: "52m", "warm", "cold", "rebuilt 300k". */
+  text: string
+  /** Quiet while warm; amber near the expiry with no refresh coming, or after a costly rebuild. */
+  tone: Tone
   cachedTokens: number
   keepWarm: boolean
   nextRefreshAt: number | null
-  /** A miss in the last few minutes that was not an expected rebuild. */
+  /** A costly miss in the last few minutes that was not an expected rebuild. */
   recentMiss: { label: string; recached: number; severity: 'info' | 'warn'; at: number } | null
 }
 

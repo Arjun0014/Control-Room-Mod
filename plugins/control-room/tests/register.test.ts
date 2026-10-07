@@ -49,6 +49,41 @@ describe('register', () => {
     expect((w.store['settings.v1'] as Settings).frontier.enabled).toBe(true)
   })
 
+  test('/cr cache tells the cache in words and sets Keep warm, its idle limit and the other cache settings', async ($, on) => {
+    const w = world(on)
+    await $.session.start(SESSION)
+    const status = await $.command.run(cmd('cr', 'cache'))
+    expect(status.text).toContain('◆ Prompt cache')
+    expect(status.text).toContain('Nothing cached yet')
+    expect(status.text).toContain('derived')
+    expect((await $.command.run(cmd('cr', 'cache keep on'))).text).toContain('Keep warm on.')
+    expect((await $.command.run(cmd('cr', 'cache idle 45m'))).text).toBe('Keep warm stops after 45 min idle.')
+    expect((await $.command.run(cmd('cr', 'cache stable off'))).text).toBe('Keep policies stable off.')
+    expect((await $.command.run(cmd('cr', 'cache guard off'))).text).toBe('Ask before a model switch off.')
+    expect((await $.command.run(cmd('cr', 'cache sideways'))).text).toContain('Usage: /cr cache')
+    await w.clock.advance(2000)
+    expect((w.store['settings.v1'] as Settings).cache).toMatchObject({ keepWarm: true, maxIdleMinutes: 45, stablePolicies: false, guardModelSwitch: false })
+    expect((await $.command.run(cmd('cr', 'status'))).text).toContain('Prompt cache')
+  })
+
+  test('a model switch that would lose a large warm cache is put to the person first, with what it re-sends', async ($, on) => {
+    world(on)
+    on('classic.PreModelSwitch', () => ({}))
+    on('classic.PostModelSwitch', () => ({}))
+    await $.session.start(SESSION)
+    const input = { from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-5-5', requested_model: 'sonnet', source: 'command' as const, context_tokens: 412_000, prompt_cache_warm: true, cache_ttl: '1h' as const, estimated_cache_write_usd: 2.06, pricing: 'catalog' as const }
+    const asked = await $.classic.PreModelSwitch(input)
+    expect(asked.permissionDecision).toBe('ask')
+    expect(asked.permissionDecisionReason).toContain('412k tokens')
+    expect(asked.permissionDecisionReason).toContain('about $2.06')
+    const cold = await $.classic.PreModelSwitch({ ...input, prompt_cache_warm: false })
+    expect(cold.permissionDecision).toBeUndefined()
+    const scripted = await $.classic.PreModelSwitch({ ...input, source: 'sdk' as const })
+    expect(scripted.permissionDecision).toBeUndefined()
+    await $.classic.PostModelSwitch({ ...input, source: 'command' as const })
+    expect((await $.command.run(cmd('cr', 'cache'))).text).toContain('1 hour (as Claude Code reports it)')
+  })
+
   test('Deny categories are refused before anything runs', async ($, on) => {
     world(on)
     await $.session.start(SESSION)

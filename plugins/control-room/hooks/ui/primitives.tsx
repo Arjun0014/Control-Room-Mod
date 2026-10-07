@@ -27,19 +27,21 @@ import {
   G,
   TIMELINE,
   type TimelineSpan,
+  clockGlyph,
   diffCells,
   meterCells,
   sparkline,
   svgBar,
+  svgClock,
   svgColumns,
   svgDiff,
   svgRing,
-  svgSegments,
   svgSpark,
   svgTimeline,
+  svgTrack,
   timelineCells,
   toneProps,
-  workCells,
+  trackStops,
 } from './theme'
 
 /** Desktop and VS Code draw native controls; the terminal and mobile get the in-place forms. */
@@ -93,7 +95,16 @@ export function card(
           <Text bold color={input.accent} dimColor={input.accent === undefined ? true : undefined}>
             {(input.title ?? '').toUpperCase()}
           </Text>
-          {input.link !== undefined ? (
+          {input.link !== undefined && input.aside !== undefined && input.aside !== '' ? (
+            <Box flexDirection="row" columnGap={2} flexShrink={1} alignItems="center" {...clip(kit)}>
+              <Box flexShrink={1} {...clip(kit)}>
+                <Text dimColor wrap="truncate-start">
+                  {input.aside}
+                </Text>
+              </Box>
+              <Button key={`${input.key}-link`} label={`${input.link.label} ${G.chevron}`} plain dimColor onPress={input.link.onPress} />
+            </Box>
+          ) : input.link !== undefined ? (
             <Button key={`${input.key}-link`} label={`${input.link.label} ${G.chevron}`} plain dimColor onPress={input.link.onPress} />
           ) : input.aside === undefined || input.aside === '' ? null : (
             <Box flexShrink={1} {...clip(kit)}>
@@ -358,42 +369,68 @@ export function listItem(
 }
 
 /**
- * Milestone progress: one square per milestone in the terminal (■ done,
- * the current one bright, □ to come), separate rounded segments as SVG
- * elsewhere, and "4 of 7" beside it. Never a line, so it never reads as
- * the context meter.
+ * Milestone progress as a track: one stop per milestone (● done, ◉ the one
+ * under way, ○ to come) joined by a thin line in the terminal, SVG circles
+ * on a line elsewhere (the current one pulses while motion is allowed), and
+ * "4 of 7" beside it. A track of stops, never a filling bar, so it never
+ * reads as the context meter.
  */
-export function workStrip(kit: Kit, input: { key: string; done: number; total: number; hasCurrent: boolean; max: number; caption?: string }): RenderElement {
+export function workTrack(kit: Kit, input: { key: string; done: number; total: number; hasCurrent: boolean; max: number; caption?: string; isAnimated?: boolean }): RenderElement {
   const { Box, Text, Svg } = kit.ui
   const caption = input.caption ?? `${input.done} of ${input.total}`
-  const cells = Math.min(input.total, input.max)
+  const stops = trackStops(input.done, input.total, input.max, input.hasCurrent)
   if (Svg !== undefined) {
+    const isAnimated = input.isAnimated === true && stops.includes('now')
     return (
       <Box key={input.key} flexDirection="row" alignItems="center" columnGap={1}>
-        <Svg key={`${input.key}-svg`} source={svgSegments({ done: input.done, total: input.total, hasCurrent: input.hasCurrent, max: input.max, width: cells * 12 + 12, height: 12 })} alt={`${input.done} of ${input.total} milestones done`} height={12} />
+        <Svg key={`${input.key}-svg`} source={svgTrack({ stops, width: stops.length * 14 + 2, height: 12, isAnimated })} alt={`${input.done} of ${input.total} milestones done`} height={12} isInteractive={isAnimated ? true : undefined} />
         <Text>{caption}</Text>
       </Box>
     )
   }
-  const c = workCells(input.done, input.total, input.max, input.hasCurrent)
+  const parts: { text: string; style: { color?: string; bold?: boolean; dimColor?: boolean } }[] = []
+  stops.forEach((s, i) => {
+    if (i > 0) parts.push({ text: G.stepJoin, style: { dimColor: true } })
+    parts.push(s === 'done' ? { text: G.stepDone, style: { color: 'suggestion' } } : s === 'now' ? { text: G.stepNow, style: { bold: true } } : { text: G.stepOpen, style: { dimColor: true } })
+  })
+  const runs: typeof parts = []
+  for (const p of parts) {
+    const last = runs[runs.length - 1]
+    if (last !== undefined && JSON.stringify(last.style) === JSON.stringify(p.style)) last.text += p.text
+    else runs.push({ ...p })
+  }
   return (
     <Text key={input.key} wrap="truncate-end">
-      {c.done > 0 ? (
-        <Text key={`${input.key}-done`} color="suggestion">
-          {G.square.repeat(c.done)}
+      {runs.map((r, i) => (
+        <Text key={`${input.key}-${i}`} {...r.style}>
+          {r.text}
         </Text>
-      ) : null}
-      {c.current >= 0 ? (
-        <Text key={`${input.key}-current`} bold>
-          {G.square}
-        </Text>
-      ) : null}
-      {c.width - c.done - (c.current >= 0 ? 1 : 0) > 0 ? (
-        <Text key={`${input.key}-open`} dimColor>
-          {G.squareOpen.repeat(c.width - c.done - (c.current >= 0 ? 1 : 0))}
-        </Text>
-      ) : null}
+      ))}
       <Text key={`${input.key}-caption`}>{`  ${caption}`}</Text>
+    </Text>
+  )
+}
+
+/** The prompt cache's time left: a clock face emptying (SVG on the remote surfaces), and its words beside it. */
+export function cacheClock(kit: Kit, input: { key: string; fraction: number | null; tone: Tone; text: string; isBold?: boolean }): RenderElement {
+  const { Box, Text, Svg } = kit.ui
+  const textTone: Tone = input.tone === 'warn' ? 'warn' : input.tone === 'muted' ? 'muted' : 'normal'
+  if (Svg !== undefined) {
+    return (
+      <Box key={input.key} flexDirection="row" alignItems="center" columnGap={1}>
+        <Svg key={`${input.key}-svg`} source={svgClock({ fraction: input.fraction, tone: input.tone === 'normal' ? 'info' : input.tone, size: 14 })} alt={input.text} height={14} />
+        <Text {...toneProps(textTone)} bold={input.isBold === true ? true : undefined}>
+          {input.text}
+        </Text>
+      </Box>
+    )
+  }
+  return (
+    <Text key={input.key} wrap="truncate-end">
+      <Text {...toneProps(input.tone === 'normal' ? 'info' : input.tone)}>{`${clockGlyph(input.fraction)} `}</Text>
+      <Text {...toneProps(textTone)} bold={input.isBold === true ? true : undefined}>
+        {input.text}
+      </Text>
     </Text>
   )
 }

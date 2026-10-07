@@ -89,6 +89,13 @@ export const G = {
   busy: '▅',
   idle: '▁',
   spark: ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const,
+  /** Work as a track of milestones: done, the one under way, to come, joined by a thin line. */
+  stepDone: '●',
+  stepNow: '◉',
+  stepOpen: '○',
+  stepJoin: '─',
+  /** The cache's time left, as a clock face emptying: full, three quarters, half, a quarter, none. */
+  clock: ['○', '◔', '◑', '◕', '●'] as const,
 } as const
 
 /** A sparkline of 0–100 values: "▁▂▄▆█". */
@@ -168,6 +175,72 @@ export function svgSegments(input: { done: number; total: number; hasCurrent: bo
     return `<rect x="${x}" y="${y}" width="${seg.toFixed(1)}" height="6" rx="2" ${fill}/>`
   }).join('')
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${rects}</svg>`
+}
+
+/** A stop on the milestone track. */
+export type Stop = 'done' | 'now' | 'open'
+
+/**
+ * The milestone track's stops: one per milestone while they fit in `max`,
+ * else scaled (the "4/31" beside it stays exact), the one under way marked.
+ */
+export function trackStops(done: number, total: number, max: number, hasCurrent: boolean): Stop[] {
+  const c = workCells(done, total, max, hasCurrent)
+  const now = c.current >= 0 ? c.current : hasCurrent && c.done < c.width ? c.done : -1
+  return Array.from({ length: c.width }, (_, i) => (i < c.done ? 'done' : i === now ? 'now' : 'open'))
+}
+
+/**
+ * The milestone track as SVG: stops joined by a line, filled up to the work
+ * done. The one under way pulses when `isAnimated` (an interactive Svg runs
+ * SMIL; drawn as an image it holds still).
+ */
+export function svgTrack(input: { stops: readonly Stop[]; width: number; height?: number; isAnimated?: boolean }): string {
+  const h = input.height ?? 10
+  const n = Math.max(1, input.stops.length)
+  const r = Math.max(2, h / 2 - 1)
+  const w = Math.max(Math.round(2 * r + 2), Math.round(input.width))
+  const gap = n > 1 ? (w - 2 * r - 2) / (n - 1) : 0
+  const x = (i: number) => (1 + r + i * gap).toFixed(1)
+  const cy = (h / 2).toFixed(1)
+  const lastDone = input.stops.lastIndexOf('done')
+  const line = n > 1 ? `<line x1="${x(0)}" x2="${x(n - 1)}" y1="${cy}" y2="${cy}" stroke="#8E8E93" stroke-opacity="0.4" stroke-width="1.5"/>` : ''
+  const filled = lastDone > 0 ? `<line x1="${x(0)}" x2="${x(lastDone)}" y1="${cy}" y2="${cy}" stroke="${SVG_COLOR.info}" stroke-width="1.5"/>` : ''
+  const stops = input.stops
+    .map((s, i) => {
+      if (s === 'done') return `<circle cx="${x(i)}" cy="${cy}" r="${(r - 0.5).toFixed(1)}" fill="${SVG_COLOR.info}"/>`
+      if (s === 'open') return `<circle cx="${x(i)}" cy="${cy}" r="${(r - 1).toFixed(1)}" fill="#FFFFFF" fill-opacity="0" stroke="#8E8E93" stroke-opacity="0.7" stroke-width="1.2"/>`
+      const pulse = input.isAnimated === true ? `<animate attributeName="fill-opacity" values="0.35;0.9;0.35" dur="1.8s" repeatCount="indefinite"/>` : ''
+      return `<circle cx="${x(i)}" cy="${cy}" r="${(r - 0.5).toFixed(1)}" fill="${SVG_COLOR.info}" fill-opacity="0.45" stroke="${SVG_COLOR.info}" stroke-width="1.2">${pulse}</circle>`
+    })
+    .join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${line}${filled}${stops}</svg>`
+}
+
+/** The cache's time left as a clock-face glyph: ● full, ◕ ◑ ◔ emptying, ○ none. */
+export function clockGlyph(fraction: number | null): string {
+  if (fraction === null || !Number.isFinite(fraction) || fraction <= 0) return G.clock[0]
+  return G.clock[Math.min(4, Math.max(1, Math.ceil(Math.min(1, fraction) * 4)))] ?? G.clock[0]
+}
+
+/** The same clock face as SVG: a ring, and a wedge from twelve o'clock for the time left. */
+export function svgClock(input: { fraction: number | null; tone: Tone; size?: number }): string {
+  const s = input.size ?? 12
+  const c = s / 2
+  const r = s / 2 - 1
+  const f = input.fraction === null || !Number.isFinite(input.fraction) ? 0 : Math.min(1, Math.max(0, input.fraction))
+  const color = SVG_COLOR[input.tone]
+  const ring = `<circle cx="${c}" cy="${c}" r="${r.toFixed(1)}" fill="none" stroke="${f > 0 ? color : '#8E8E93'}" stroke-opacity="${f > 0 ? 0.6 : 0.5}" stroke-width="1.2"/>`
+  let wedge = ''
+  if (f >= 0.999) wedge = `<circle cx="${c}" cy="${c}" r="${(r - 1.2).toFixed(1)}" fill="${color}"/>`
+  else if (f > 0) {
+    const inner = r - 1.2
+    const a = f * 2 * Math.PI
+    const ex = (c + inner * Math.sin(a)).toFixed(2)
+    const ey = (c - inner * Math.cos(a)).toFixed(2)
+    wedge = `<path d="M${c} ${c} L${c} ${(c - inner).toFixed(2)} A${inner.toFixed(2)} ${inner.toFixed(2)} 0 ${f > 0.5 ? 1 : 0} 1 ${ex} ${ey} Z" fill="${color}"/>`
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">${ring}${wedge}</svg>`
 }
 
 /** A filled sparkline as SVG (Desktop, mobile): 0–100 values. */

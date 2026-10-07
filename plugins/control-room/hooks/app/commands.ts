@@ -12,7 +12,8 @@ import { listProfiles } from '../core/profiles'
 import { ANSWER_STYLES, type AnswerStyle, defaultSettings } from '../core/settings'
 import * as Chain from '../features/chain'
 import type { Runtime } from './runtime'
-import { hudOf, profileOf, runLabelOf, statusOf } from './views'
+import { cacheState, keepWarmStatus } from '../ui/pane/cache'
+import { hudOf, paneOf, profileOf, runLabelOf, statusOf } from './views'
 
 const HELP = [
   'Control Room  (/cr or /control-room)',
@@ -27,6 +28,8 @@ const HELP = [
   '  /cr agents unlimited|off|ask|<n>',
   '  /cr router off|balanced|performance|economy|custom',
   '  /cr style standard|brief|ste|mission|quest   how Claude writes to you',
+  '  /cr cache                 the prompt cache: lifetime, Keep warm, recent rebuilds',
+  '  /cr cache keep on|off · idle 2h · stable on|off · guard on|off',
   '  /cr hud band|status|both|off',
   '  /cr reset confirm         back to Normal (custom profiles are kept)',
 ].join('\n')
@@ -53,9 +56,43 @@ export function statusText(rt: Runtime): string {
     ['Machine load', st.load.text],
     ['Focus view', st.focus.text],
     ['Answer style', st.answers.text],
+    ['Prompt cache', cacheLine(rt)],
   ]
   const head = `◆ Control Room · ${p.name}${p.isModified ? ' (edited)' : ''} · ${runLabelOf(rt)}`
   return [head, ...lines.map(([label, value]) => `${label.padEnd(17)}${value}`)].join('\n')
+}
+
+/** The prompt cache in one line, for /cr status. */
+function cacheLine(rt: Runtime): string {
+  const cache = paneOf(rt).cache
+  const state = cacheState(cache, rt.clock())
+  if (cache.warmth === 'none') return state.text
+  return `${state.text} · ${fmt.tokens(cache.cachedTokens)} cached · Keep warm ${cache.keepWarm.isOn ? 'on' : 'off'}`
+}
+
+/** /cr cache: what the cache holds, how long, Keep warm, and the recent rebuilds with what would have avoided them. */
+export function cacheText(rt: Runtime): string {
+  const cache = paneOf(rt).cache
+  const now = rt.clock()
+  const state = cacheState(cache, now)
+  const s = rt.settings.cache
+  const lifetime = cache.ttl === null ? 'not known yet' : `${cache.ttl === '1h' ? '1 hour' : '5 minutes'} (${cache.ttlSource === 'engine' ? 'as Claude Code reports it' : cache.ttlSource === 'probe' ? 'learned by Keep warm' : cache.ttlSource === 'stored' ? 'learned earlier' : 'observed'})`
+  const lines: [string, string][] = [
+    ['State', state.text],
+    ['Lifetime', lifetime],
+    ['Cached', cache.warmth === 'none' ? '—' : `${fmt.tokens(cache.cachedTokens)} tokens · ${fmt.plural(cache.requests, 'request')}${cache.hitRatio === null ? '' : ` · ${Math.round(cache.hitRatio * 100)}% read from cache`}`],
+    ['Keep warm', `${s.keepWarm ? 'On' : 'Off'} · ${keepWarmStatus(cache).text} · stops after ${fmt.minutes(s.maxIdleMinutes)} idle`],
+    ['Model switch', s.guardModelSwitch ? 'Asks first when 100k+ cached tokens would be re-sent' : 'Does not ask'],
+    ['Policies', s.stablePolicies ? (cache.policies.isHolding ? 'Held stable: changes reach Claude as notes' : 'Kept stable while the cache is warm') : 'Rewritten on every change'],
+  ]
+  const kind = (m: (typeof cache.misses)[number]) => (m.kind === 'lifecycle' ? 'expected' : m.kind === 'unavoidable' ? 'unexplained' : 'preventable')
+  const misses = cache.misses.slice(0, 5).flatMap(m => [`  ${fmt.clock(m.at)}  ${m.detail} · ${fmt.tokens(m.recached)} re-cached (${kind(m)})`, `         ${m.advice}`])
+  return [
+    '◆ Prompt cache',
+    ...lines.map(([label, value]) => `${label.padEnd(14)}${value}`),
+    ...(misses.length === 0 ? [] : ['Recent rebuilds', ...misses]),
+    'Expiry, hit ratio and causes are derived from the tokens Claude Code reports.',
+  ].join('\n')
 }
 
 export async function handleCommand(rt: Runtime, args: string): Promise<CommandRunResult> {
@@ -196,6 +233,27 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       })
       const native = rt.nativeOutputStyle === null ? '' : ` Claude Code's own output style, ${rt.nativeOutputStyle}, is in use and takes precedence until you set it back to Default.`
       return { text: `Answer style ${answerStyleLabel(style)}.${native}` }
+    }
+    case 'cache': {
+      if (a1 === undefined) return { text: cacheText(rt) }
+      const usage = 'Usage: /cr cache [keep on|off] [idle 45m|2h] [stable on|off] [guard on|off]'
+      if (a1 === 'idle' || a1 === 'stop') {
+        const m = a2 === undefined ? null : /^(\d+(?:\.\d+)?)(m|min|h)?$/.exec(a2)
+        if (m === null) return { text: usage }
+        const minutes = Math.round(Number(m[1]) * (m[2] === 'h' ? 60 : 1))
+        rt.update(s => void (s.cache.maxIdleMinutes = minutes))
+        return { text: `Keep warm stops after ${fmt.minutes(rt.settings.cache.maxIdleMinutes)} idle.` }
+      }
+      const toggle = onOff(a2 ?? (onOff(a1) !== null ? a1 : undefined))
+      const what = onOff(a1) !== null ? 'keep' : a1
+      if (toggle === null || !['keep', 'warm', 'keepwarm', 'stable', 'policies', 'guard', 'switch'].includes(what)) return { text: usage }
+      rt.update(s => {
+        if (what === 'keep' || what === 'warm' || what === 'keepwarm') s.cache.keepWarm = toggle
+        if (what === 'stable' || what === 'policies') s.cache.stablePolicies = toggle
+        if (what === 'guard' || what === 'switch') s.cache.guardModelSwitch = toggle
+      })
+      const name = what === 'stable' || what === 'policies' ? 'Keep policies stable' : what === 'guard' || what === 'switch' ? 'Ask before a model switch' : 'Keep warm'
+      return { text: `${name} ${toggle ? 'on' : 'off'}.${name === 'Keep warm' && toggle ? ` It refreshes the cache before it lapses while you are away, for up to ${fmt.minutes(rt.settings.cache.maxIdleMinutes)}, and checks that it worked.` : ''}` }
     }
     case 'hud': {
       const valid = ['band', 'status', 'both', 'off']

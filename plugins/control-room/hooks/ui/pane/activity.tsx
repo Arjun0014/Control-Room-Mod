@@ -42,7 +42,7 @@ import {
   segmented,
   switchControl,
   timelineStrip,
-  workStrip,
+  workTrack,
 } from '../primitives'
 import { ACCENT, G, TIMELINE, toneProps } from '../theme'
 
@@ -59,7 +59,7 @@ const elapsed = (kit: Kit, since: number): string => fmt.duration(Math.max(0, ki
 // ---------------------------------------------------------------------------
 // Run progress
 
-function runCard(kit: Kit, view: ActivityView): RenderElement {
+function runCard(kit: Kit, view: ActivityView, isAnimated: boolean): RenderElement {
   const { Box, Text } = kit.ui
   const m = view.mission
   const accent = ACCENT.activity
@@ -93,7 +93,7 @@ function runCard(kit: Kit, view: ActivityView): RenderElement {
             {field(k, {
               key: 'run-progress',
               label: 'Progress',
-              content: workStrip(k, { key: 'run-strip', done: plan.done, total: plan.total, hasCurrent: plan.tasks.some(t => t.isCurrent), max: strip, caption: `${plan.done} of ${fmt.plural(plan.total, 'milestone')}` }),
+              content: workTrack(k, { key: 'run-strip', done: plan.done, total: plan.total, hasCurrent: plan.tasks.some(t => t.isCurrent), max: strip, caption: `${plan.done} of ${fmt.plural(plan.total, 'milestone')}`, isAnimated }),
             })}
             <Box key="run-milestones" flexDirection="column" marginLeft={10} marginTop={1} marginBottom={1}>
               {plan.earlier > 0 ? <Text key="run-earlier" dimColor>{`${plan.earlier} earlier done`}</Text> : null}
@@ -563,7 +563,7 @@ export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | und
     <Box flexDirection="column">
       {switcher}
       {view.quest === null ? null : questCard(kit, view.quest)}
-      {runCard(kit, view)}
+      {runCard(kit, view, !pane.settings.ui.reducedMotion)}
       {turnCard(kit, view)}
       {attentionCard(kit, view)}
       {validationCard(kit, view)}

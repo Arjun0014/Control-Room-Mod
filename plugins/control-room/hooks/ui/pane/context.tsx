@@ -7,7 +7,8 @@
  * 2. What happens at the threshold, in three numbered steps, with the
  *    actions (hand off now, start fresh, later) right there.
  * 3. The Autopilot's settings, each row explaining itself.
- * 4. The run: this run's sessions, then earlier runs by project.
+ * 4. The prompt cache: how long it stays warm, Keep warm, its health.
+ * 5. The run: this run's sessions, then earlier runs by project.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -17,6 +18,7 @@ import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
 import { buttons, card, clip, columns, emptyState, listItem, meterBar, pair, row, segmented, spaced, steps, stepper, switchControl } from '../primitives'
 import { ACCENT, G, toneProps } from '../theme'
+import { cacheCards } from './cache'
 
 const END: Record<string, string> = {
   handoff: 'handed off',
@@ -227,6 +229,8 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
           s.enabled && row(k, { key: 'ap-file', label: 'Notes file', value: s.handoffFile, valueTone: 'muted' }),
         ],
       })}
+
+      {cacheCards(kit, pane.cache, pane.settings.cache)}
 
       {card(kit, {
         key: 'run',

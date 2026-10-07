@@ -146,6 +146,7 @@ export class CacheGuardian {
     const short = model === null ? null : Cache.shortModel(model)
     const isEffortMiss = result.miss !== null && result.miss.cause === 'effort' && short !== null && !this.memory.effortRebuilds.includes(short)
     this.remember(isEffortMiss && short !== null ? { effortRebuilds: [...this.memory.effortRebuilds, short].slice(-12) } : {})
+    this.keepTicking()
     this.ctx.changed()
   }
 
@@ -260,6 +261,13 @@ export class CacheGuardian {
   cancel(): void {
     this.timer?.cancel()
     this.timer = null
+  }
+
+  /** The session ends: no refresh, no countdown. */
+  stop(): void {
+    this.cancel()
+    this.ticker?.cancel()
+    this.ticker = null
   }
 
   refreshPlan(now: number): Cache.RefreshPlan {
@@ -377,17 +385,62 @@ export class CacheGuardian {
     const warmth = Cache.warmthOf(s, now)
     if (warmth === 'none') return null
     const latest = s.misses[0]
-    const recent = latest !== undefined && now - latest.at < RECENT_MISS_MS && latest.kind !== 'lifecycle' ? latest : null
+    // Only a costly rebuild is worth the status bar's attention, and only for a few minutes.
+    const recent = latest !== undefined && now - latest.at < RECENT_MISS_MS && latest.kind !== 'lifecycle' && latest.severity === 'warn' ? latest : null
+    const expiresAt = Cache.expiresAt(s)
+    const ttl = Cache.ttlMs(s)
+    const leftMs = warmth === 'warm' && expiresAt !== null ? Math.max(0, expiresAt - now) : null
+    const fraction = leftMs !== null && ttl !== null ? leftMs / ttl : warmth === 'warm' ? 1 : 0
+    // Near the expiry with no refresh coming before it: amber, worth a look.
+    const isRefreshing = this.plan.at !== null && expiresAt !== null && this.plan.at < expiresAt
+    const isNear = leftMs !== null && ttl !== null && leftMs <= Cache.leadMs(ttl) && !isRefreshing
+    const text = recent !== null ? `rebuilt ${tokensWord(recent.recached)}` : warmth === 'warm' ? (leftMs === null ? 'warm' : leftWords(leftMs)) : warmth === 'cold' ? 'cold' : 'lapsed?'
     return {
       warmth,
       ttl: s.ttl?.value ?? null,
-      expiresAt: Cache.expiresAt(s),
+      expiresAt,
+      leftMs,
+      fraction,
+      text,
+      tone: recent !== null || isNear ? 'warn' : warmth === 'warm' ? 'normal' : 'muted',
       cachedTokens: s.lastPrefix,
       keepWarm: this.ctx.settings().cache.keepWarm && s.keepWarm.verified !== 'no',
       nextRefreshAt: this.plan.at,
       recentMiss: recent === null ? null : { label: Cache.CAUSE_LABEL[recent.cause], recached: recent.recached, severity: recent.severity, at: recent.at },
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // The countdown
+
+  private ticker: Timer | null = null
+
+  /**
+   * While the cache is warm, the status bar's countdown and the panel's
+   * expiry move on once a minute (one republish; nothing is sent anywhere).
+   * The tick stops once the cache is cold.
+   */
+  private keepTicking(): void {
+    const host = this.ctx.host()
+    if (host === null || this.ticker !== null) return
+    this.ticker = host.every(60_000, () => {
+      const warmth = Cache.warmthOf(this.state, this.ctx.now())
+      this.ctx.changed()
+      if (warmth !== 'warm') {
+        this.ticker?.cancel()
+        this.ticker = null
+      }
+    })
+  }
+}
+
+const tokensWord = (n: number): string => (n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+
+/** "52m", "1h", "<1m": the time a warm cache has left, as the status bar says it. */
+export function leftWords(ms: number): string {
+  if (ms < 60_000) return '<1m'
+  const m = Math.ceil(ms / 60_000)
+  return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 === 0 ? '' : ` ${m % 60}m`}` : `${m}m`
 }
 
 export function missView(m: Cache.CacheMiss, settings: Settings['cache']): CacheMissView {

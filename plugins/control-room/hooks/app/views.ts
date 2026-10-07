@@ -244,7 +244,7 @@ export function hudOf(rt: Runtime): HudModel {
     load: liveLoadOf(rt),
     agents: { running: rt.runningSubagents, limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode },
     guard: { isOn: s.guard.enabled, continued: rt.guard.turnBlocks },
-    session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1) },
+    session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1), handoffs: totals?.handoffs ?? 0 },
     alert,
     work: workOf(rt),
     now: nowLine(rt),
@@ -254,6 +254,8 @@ export function hudOf(rt: Runtime): HudModel {
     checks: validation.map(v => ({ label: v.label, status: v.status })),
     quest: questHudOf(rt),
     cache: rt.cache.hud(rt.clock()),
+    objective: rt.run?.objective ?? null,
+    isAnimated: !s.ui.reducedMotion,
   }
 }
 
@@ -330,6 +332,7 @@ export function statusLineOf(hud: HudModel): string {
   const isHigh = (t: Tone) => t === 'warn' || t === 'bad'
   const parts = [`◆ Context ${pct(hud.ctx.pct)}`]
   if (hud.work !== null) parts.push(`Work ${hud.work.done}/${hud.work.total}`)
+  if (hud.cache !== null) parts.push(`Cache ${hud.cache.text}`)
   if (hud.autopilot.isOn && hud.autopilot.state !== 'off' && hud.autopilot.state !== 'armed') parts.push(hud.autopilot.text)
   if (hud.now !== null) parts.push(hud.now.text)
   if (hud.failing.length > 0) parts.push(`${hud.failing.join(', ')} failing`)

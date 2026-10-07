@@ -16,7 +16,9 @@ That is how the terminal UI is checked at a given width without looking at the w
   `-Dir`, and remembers the console. Use a folder Claude Code already trusts (an empty one is
   best), because a trust dialog would wait for you. The size is set before Claude Code starts:
   once it holds the alternate screen, the console cannot be resized. `-Claude '<command>'`
-  replaces `claude` (to add a model or a second `--plugin-dir`, say). `-Font 'Cascadia Mono'`
+  replaces `claude` (to add a model or allowed tools, say). `-Also <folder>` loads more plugin
+  folders after Control Room, so their hooks sit beneath its own (the demo driver:
+  `-Also tools\demo`). `-Font 'Cascadia Mono'`
   (`-FontSize`, default 16) sets the console's font first: the default one lacks some of the glyphs
   Claude Code draws. Keep the window within the screen, or its bottom rows are not drawn.
 - **read** prints the visible screen, one numbered row per line, and writes it to

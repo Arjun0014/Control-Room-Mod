@@ -56,8 +56,11 @@ anything the engine refused, and why.
 - **The names went from the readings:** below 100 columns (70 on Desktop) the meters stand alone;
   when a state appears and room runs short, check names go before anything is dropped. Widen the
   terminal, or close the docked panel, to see them again.
-- **No top line:** it appears with the first turn of a context, so a fresh session or a `/clear`
-  shows the readings alone until Claude starts working.
+- **The top line reads `Ready`, or the objective, dim:** no turn has run in this context yet. It
+  says what Claude is doing once a turn starts.
+- **No Cache reading:** it appears once Claude has answered in this context, and only for a prompt
+  of 4,096 tokens or more.
+- **Kit is missing:** see [Kit](#kit-the-companion).
 
 ## Answer styles and the Quest log
 
@@ -70,6 +73,66 @@ anything the engine refused, and why.
 - **Claude names points or levels:** it is asked not to. The numbers in Activity and the status bar
   are Control Room's own.
 
+## The prompt cache
+
+Claude Code reports how many tokens each request read from the cache and wrote to it. The rest
+(the expiry, the hit ratio, why it was rebuilt) is derived from those, and the panel says so.
+
+- **"Lifetime not known yet"**: Claude Code reports the cache's lifetime only at a model switch.
+  Otherwise Control Room learns it: a request that still reads the cache after more than five idle
+  minutes proves the one-hour cache, and with Keep warm on, one refresh six minutes after the last
+  request tells. Until then the status bar reads `warm`, then `lapsed?`. Once learned, it is
+  remembered across sessions.
+- **"Cache rebuilt: 446k tokens · Model changed"**: the request after a change had to write the
+  conversation to the cache again, at a higher price than reading it. Context → Cache health says
+  what happened and what would avoid it. The usual causes: switching models or effort in the
+  middle of a context, the model router switching models, a setting changed with *Keep policies
+  stable* off, an MCP server or plugin connected mid-session, or a long break. Compaction always
+  rebuilds it, and reads *Expected*.
+- **"Unexplained"**: nothing Control Room saw changed. Once is usually the server evicting the
+  cache. If it keeps happening, check for a proxy or gateway between Claude Code and the API that
+  does not keep the cache.
+- **A model switch asks first**: *Ask before a model switch* (on by default) confirms a switch that
+  would re-send 100k or more warm tokens. Switch at the start of a fresh context instead, or turn it
+  off (`/cr cache guard off`).
+- **"Effort changes rebuild the prompt cache on …"**: Control Room saw an effort change rebuild the
+  cache on that model before, so it says so before the next request.
+
+### Keep warm
+
+- **It does not refresh**: the line under *Keep warm while you are away* says why. It refreshes
+  only while you are away (Claude's own requests keep the cache warm while it works), while the
+  context holds at least 20k tokens, while no handoff is about to clear the context, and until the
+  idle limit (*Stop after*; 45 minutes at most for the five-minute cache, past which refreshing
+  costs more than a rebuild). If the machine slept past the expiry, the cache lapsed and the next
+  request rebuilds it.
+- **"Retrying in 2 min"**: a refresh failed (the API refused it, or no reply came). It tries again
+  while the cache can still be saved.
+- **"It did not keep the cache warm here, so it stopped"**: a refresh must carry the cache past
+  its old expiry, and here it did not, or two refreshes sent in time found the cache gone.
+  Something between Claude Code and the API (a proxy, a gateway, another provider) may not keep
+  the cache alive. Turn Keep warm off and on again to let it try afresh.
+- **What it costs**: each refresh re-sends the conversation as cache reads (a tenth of the input
+  price) plus a one-word reply. Context → Cache counts the refreshes.
+
+## Kit, the companion
+
+- **Kit doesn't appear**: it is off by default (Setup → *Companion*, or `/cr companion on`). It
+  walks under the status bar above the prompt, so not with `/cr hud status`, and not on mobile.
+- **Kit appeared, then went away**: its drawing failed on this surface, so Control Room left it out
+  and the status bar draws without it. `/reload-plugins` tries again; `claude --debug` names the
+  reason.
+- **It moves too much**: Setup → *Reduce motion* (or `/cr motion off`) holds it still. On a busy
+  machine it slows down by itself.
+- **Clicking it does nothing on Desktop**: a click opens Control Room in the terminal; on Desktop,
+  use the status bar's button.
+
+## Git
+
+The Git line (Overview's run header and `/cr status`) is terminal only: Desktop shows Git beside
+the session. It needs a Git repository and `git` on the `PATH`, and it is read at session start and
+after each turn, at most every 15 seconds, so a change you make by hand shows after the next turn.
+
 ## Context Autopilot
 
 | Symptom | Cause and fix |
@@ -79,6 +142,7 @@ anything the engine refused, and why.
 | Waiting for you | `/clear` was refused and compaction was not allowed or also failed, or the continuation is `manual`. Press **Start fresh context** (or `/cr fresh`). |
 | The threshold is lower than I set | It is kept below Claude Code's own auto-compact point, so the handoff runs first. The Context section shows the clamp. |
 | The fresh context didn't continue by itself | *Auto-continue* is off, or the session was waiting on an approval. Ask Claude to continue from `NEXT_SESSION_PROMPT.md`. Your policies and profile are already active. |
+| *Last handoff* shows items missing | It counts what it saw in tool calls: *Project docs updated* needs a documentation file edited in the handoff turn, *Validation recorded* a check run in that context, and *Project docs read* a documentation file opened by the fresh context. `○` marks an item that was not needed (no milestones to save, CLAUDE.md left alone). The handoff itself went ahead; the list says what the fresh context may lack. |
 | "Control Room reloaded in the middle of a handoff" | The plugin was reloaded (`/reload-plugins`, an update) while a handoff was under way. Autopilot picks up where it was; only when it cannot tell whether a step already happened (the handoff prompt was about to go out, or a compaction) does it wait for you, so nothing runs twice. Press **Hand off now** or **Start fresh**. |
 
 ## Permission Policy

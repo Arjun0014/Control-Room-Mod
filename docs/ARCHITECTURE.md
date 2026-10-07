@@ -32,6 +32,11 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 | Host CPU/RAM | `$.process.spawn` of one long-lived sampler | ✅ Windows P/Invoke sampler: ~0.5 s CPU / 30 s incl. start-up, ~80 MB; one-shot probes cost ~2.4 s each (rejected). Verified live through the final plugin on 2.1.289 and 2.1.292. |
 | Model per request | `turn.step` → `next({ ...e, model })` | ⚠ **full ids only**: a bare alias (`haiku`) fails the turn on 2.1.292 (`unrecognized_model` → `model_fallback` → an error answer). Ids reported in `usage.model` (main and subagent steps) work. Subagent spawns *do* resolve aliases. |
 | Store scope | `$.store` | One store per plugin name and source (`~/.claude/plugins/store/<name>_<source>-<hash>.json`); every `--plugin-dir` load of `control-room` shares one. |
+| Prompt cache figures | `turn.step` answer `usage` (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `model`) for each main-thread request | ✅ in the engine harness and in a real console during the demo driver's turn. ⚠ No expiry, hit ratio or miss cause exists anywhere: Control Room derives them, and says so. |
+| Cache lifetime and a confirmed model switch | `classic.PreModelSwitch` (`prompt_cache_warm`, `cache_ttl`, `context_tokens`, `estimated_cache_write_usd`) answering `permissionDecision: 'ask'` with a reason; `classic.PostModelSwitch` (`from_model`, `to_model`, `cache_ttl`, `source`) | ✅ through the engine in tests (`ask` with the reason; the TTL learned). Not yet watched in a live `/model` switch. |
+| Keep the cache warm | `$.model.fork({ prompt })` from a `$.clock.after` timer | ⚠ From the declarations and engine tests: it re-sends the main thread's last request plus one user message, never added to the transcript, and returns the request's usage; `nothing-to-fork` before the first response. Not yet run against the live API (the CLI here is logged out), so Keep warm verifies itself in use (§7). |
+| A drawing with its own clock | a `Client` element naming a surface module (`module` must be a string literal in `register.tsx`); the module gets `surface.every`, `setState`, `onPointer`, `post`; `ui.message` carries its posts to the hooks module, `ui.fault` reports a module that failed | ✅ terminal, live in a real console (Kit). Desktop draws an SVG instead. |
+| The project's Git state | `$.session.repo()` (the repository root, or null) and `$.process.run(['git', 'status', '--porcelain=v1', '--branch', ...], { timeoutMs: 10_000 })` | ✅ live in a real console: `master · clean`, then `master · 4 uncommitted` after a turn that changed four files. |
 
 Platform constraints discovered and designed around:
 
@@ -62,7 +67,8 @@ Platform constraints discovered and designed around:
 
 | Surface element | Mechanism | Terminal | Desktop |
 | --- | --- | --- | --- |
-| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status`. Two lines: what Claude is doing, then the readings; meters as glyphs, SVG on Desktop | ✅ | ✅ |
+| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status`. Two lines: what Claude is doing with the run's cost and the panel button, then the three lifecycles (Context, Work, Cache) and the checks; graphics as glyphs, SVG on Desktop | ✅ | ✅ |
+| **Kit** (optional) | a row under the status bar: a `Client` surface module in the terminal, a self-animating SVG on Desktop | ✅ | ✅ (SVG) |
 | **Launcher / sidebar** | `Pane` `control-room`: docked beside the transcript in the fullscreen TUI, inline otherwise; placed by Desktop | ✅ | ✅ |
 | **Control Room panel** | the same pane: six sections drawn by the design system (`ui/primitives.tsx`) | ✅ | ✅ (native controls, SVG meters) |
 | Activity line | `Spinner` `message` rewrite while a turn runs | ✅ | ✅ |
@@ -90,6 +96,8 @@ plugins/control-room/
     commands.ts / actions.ts      /cr sub-commands; the panel's actions
     persist.ts                    store reads/writes (settings, runs, index), debouncing, pruning
     monitor.ts                    resource sampler lifecycle (spawn, parse, restart, stop)
+    cacheGuardian.ts              Cache Guardian: request telemetry, Keep warm's timer and fork, its
+                                  self-check, stable policies, the countdown, the cache's views
   hooks/core/
     settings.ts                   schema, defaults, normalisation (clamps, high-risk allow → ask)
     profiles.ts                   built-in + custom profiles, labelled diffs
@@ -107,11 +115,17 @@ plugins/control-room/
     validation.ts                 checks recognised by their runner (tests, build, type-check, lint, checks, simulation)
     digest.ts                     signal: change groups, Attention, the turn in counted lines, what Claude is doing now
     quest.ts                      Quest log: XP table, levels, achievements, validation of the stored quest
+    cache.ts                      the prompt cache model: observeRequest, miss causes and kinds, the TTL
+                                  learned, nextRefresh (Keep warm's schedule), the stored cache.v1
+    handoff.ts                    Handoff Health and Continuity: healthOf, continuityOf, the stored record
+    companion.ts                  Kit: moods from the status bar's state, pixel frames, the Desktop SVG
+    git.ts                        `git status --porcelain=v1 --branch` parsed into a line
     prompts.ts                    every text Control Room gives Claude (answer-style policies included)
     permissions/                  shell tokenizer, category classifier, decisions + invariants
     resources/                    samplers + parsers (Windows/macOS/Linux), pressure, heavy commands
   hooks/ui/                       design system (primitives.tsx, theme.ts, kit.ts), status bar (hud.tsx),
-                                  Focus view rows, pane/ (frame + overview, context, behavior,
+                                  Kit's surface module (companion.client.tsx), Focus view rows,
+                                  pane/ (frame + overview, context with cache and handoff, behavior,
                                   guardrails, activity, setup)
   types/index.d.ts                settings schema + PluginState contract (render view models)
   tests/                          claude plugin test suites + fixtures (fake host, engine world)
@@ -130,8 +144,10 @@ sites redraw. No feature module touches `$`.
 | Run / chain | `$.store` `run.v1.<id>` + `runs.index.v1` + `runs.counter.v1` | `/clear`, reload, restart | run id, sessions (ids, times, peak context, cost, turns, model, end reason, transitions); 30 runs × 60 sessions kept |
 | Run plan and objective | inside the run record (`plan`, `objective`) | `/clear`, reload, restart | Claude's milestones as its task tools left them; the objective as Claude stated it, else the person's latest substantial request |
 | Quest log | `$.store` `quest.v1`, and the run record's `quest` | everything | lifetime XP, achievements with when each was earned, the last 8 awards; per run, its XP and the milestones already paid for |
+| Prompt cache memory | `$.store` `cache.v1` | everything | the cache lifetime learned (`5m` or `1h`) and how; Keep warm's verdict on itself and when; the short model names on which an effort change was seen to rebuild the cache (at most 12) |
+| Last handoff | the run record's `lastHandoff` | `/clear`, reload, restart | when, from and to which session, how (clear, compact, manual), Handoff Health's checks, the milestone under way then, the plan's count, and Continuity's checks once the fresh context's first turn ended |
 | Handoff in flight | `$.state` `autopilot` (`{ record }`) | hot reload only (gone after restart or `/clear`) | the Autopilot step under way, when it began, retries, a snooze: what a reload needs to carry the handoff on instead of starting a second one |
-| Live session | module memory (`Runtime`) | `/clear` (module stays loaded) | context, cost, autopilot machine, guard counters, activity, changes, resources, agents, learned model ids |
+| Live session | module memory (`Runtime`) | `/clear` (module stays loaded) | context, cost, autopilot machine, guard counters, activity, changes, resources, agents, learned model ids; this context's cache state (requests, misses, Keep warm's refreshes; reset at a fresh context); the Git state |
 | View models | `$.state` atoms `hud`, `pane`, `resources`, `chain`, `activity`, `permissions`, `focus`, `spinner` | hot reload (re-published after `/clear`) | render-ready projections only |
 
 On hot reload `session.start` fires again: settings and run are re-read from
@@ -201,10 +217,24 @@ crossing the threshold again never starts a second handoff.
   Code's own auto-compact threshold (warned in the UI).
 * Pending notice is injected mid-turn with `$.session.append` (finish the
   current logical unit; do not begin another large task).
-* The handoff prompt asks Claude to verify state, update existing project
-  docs/handoff files, record unfinished work, run minimum validation and
-  create/update `NEXT_SESSION_PROMPT.md` — **without prescribing its
+* The handoff prompt asks Claude to verify state, run minimum validation and
+  leave the work in four places, each for what it is for: the run's
+  milestones (the canonical run state, which Control Room hands to the fresh
+  context), the project's own documentation, CLAUDE.md (durable
+  instructions only, never a progress log) and `NEXT_SESSION_PROMPT.md`
+  (the prompt Claude would want to receive) — **without prescribing its
   contents**.
+* **Handoff Health** is read when the notes are verified, from what Control
+  Room counted in the handoff turn: run state saved, the milestone under way
+  captured, notes written, docs updated, validation recorded, CLAUDE.md.
+  **Continuity** is read when the fresh context's first turn ends: notes
+  read, run state restored, the milestone picked up, docs read, work
+  resumed; a toast says how it went. Both are pure (`features/handoff.ts`),
+  counted from tool calls only, kept in the run record (`lastHandoff`) and
+  shown in Context → *Last handoff*.
+* Keep warm stands down while a handoff will clear the context (pending,
+  under way, waiting for the person, or past the threshold), since `/clear`
+  throws the cache away; a handoff that compacts keeps it.
 * After `/clear`: `classic.SessionStart{clear}` injects the continuation
   context (run/session numbers, active policies, where the handoff file is,
   and the run plan's open milestones so the fresh context rebuilds its task
@@ -254,7 +284,8 @@ crossing the threshold again never starts a second handoff.
   Toasts announce achievements and level ups; Activity draws the Quest
   card and the status bar the level.
 * **Frontier Max** — `prompt.compose` session section (stable text → one
-  cache miss per toggle) with automatic `prompt.submit` context fallback;
+  cache miss per toggle, none while *Keep policies stable* holds a warm
+  cache) with automatic `prompt.submit` context fallback;
   `turn.step` effort `max` where the step carries an effort (never invented
   for models without one); auto-enables the guard via profile.
 * **No-Lazy-Exit Guard** — `classic.Stop`: heuristic scoring of the last
@@ -294,6 +325,54 @@ crossing the threshold again never starts a second handoff.
   classified; the strictest wins.
 * **Profiles** — Normal, Frontier Max, Low Resource, Release/QA + custom;
   shown as an explicit diff; individual overrides mark the profile modified.
+* **Cache Guardian** — `turn.step` hands each main-thread request's usage to
+  `CacheGuardian` (`app/cacheGuardian.ts`), and `features/cache.ts` decides
+  what it means: a request that reads less than half of the prompt the one
+  before it sent missed the cache (prompts under 4,096 tokens are ignored).
+  The cause is the change seen before it, in order: compaction (expected),
+  a model switch (by the person, the engine, or the router), changed
+  policies, the output style, the tools offered (`$.tool.list` at each turn
+  start), an effort change; else idling past the lifetime; else
+  *unexplained*. A change made after the cache had surely lapsed is not
+  blamed. The lifetime is the engine's (PreModelSwitch / PostModelSwitch
+  report it), else observed: a hit after more than five idle minutes proves
+  the hour, a lapse inside the hour with nothing else to blame points to
+  five minutes. Every cache figure is timed by `Runtime.clock()`.
+  **Keep warm** (off by default) plans one refresh at a time
+  (`nextRefresh`): a sixth of the lifetime before the expiry, between one
+  and ten minutes; with the lifetime unknown, one probe at six idle
+  minutes. It refreshes only while the person is away (no turn running),
+  the context is worth keeping (`cache.minTokens`, 20k), no handoff is about
+  to clear it, and the idle limit is not reached (`cache.maxIdleMinutes`,
+  capped at 45 for the five-minute cache, past which refreshing costs more
+  than one rebuild). A refresh is `$.model.fork` with a one-word answer
+  asked for. It checks itself: the first request after the expiry a
+  refresh replaced must still read the cache; if it does, Keep warm is
+  verified, and if it does not, Keep warm stops, as it does after two
+  refreshes sent in time that found the cache gone. The verdict is kept in
+  `cache.v1` until the person turns Keep warm on again. *Ask before a model
+  switch* answers PreModelSwitch with `ask` when a switch the person makes
+  would re-send 100k or more warm tokens. *Keep policies stable* holds
+  Control Room's system-prompt section while the cache is warm and sends a
+  setting change as a hidden note instead (and a second note when the
+  settings go back). An effort change on a model where one was seen to
+  rebuild the cache is announced. The router does not downgrade the main
+  conversation while 20k or more tokens are warm.
+* **Kit** — `features/companion.ts` is pure: a mood from the status bar's
+  state and the time (`moodOf`), and its animation (`animationOf`: pixel
+  frames, palette, pace; one frame and no pace under Reduce motion, at most
+  two frames a second on a busy machine). In the terminal, `register.tsx`
+  draws a `Client` naming `ui/companion.client.tsx`, which plays the frames
+  as half blocks on its own clock and posts `{ open: true }` on a click
+  (`ui.message` → toggle the panel); a `ui.fault` leaves Kit out until the
+  plugin reloads. Desktop draws `svgCompanion`, which animates itself with
+  SMIL. While Kit is on, a one-minute tick lets its mood move on with time.
+* **Git** — terminal only (Desktop shows Git natively): `$.session.repo()`
+  once, then `git status --porcelain=v1 --branch` at session start and after
+  each turn, at most every 15 s, read-only, with a 10 s timeout;
+  `features/git.ts` keeps the branch, ahead and behind, and the counts of
+  changed and untracked files (no paths). Overview's run header and
+  `/cr status` show it.
 
 ## 8. Failure handling
 
@@ -306,10 +385,13 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (175 tests, run on 2.1.292, and in CI on the latest Claude Code for Linux,
-  Windows and macOS and on 2.1.289 for Linux):
+* `claude plugin test` (217 tests in 20 files, run on 2.1.292 and 2.1.289, and in CI on the latest
+  Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux):
   pure-logic suites (settings, profiles, permissions classifier, guard
-  heuristics, resource parsers, Autopilot reducer, router, chain, activity),
+  heuristics, resource parsers, Autopilot reducer, router, chain, activity,
+  the cache model, handoff health and continuity, Kit's moods, Git's parser),
+  Cache Guardian over the in-memory host (`guardian.test.ts`: Keep warm's
+  schedule, refresh, self-check and stand-down),
   a Runtime suite over an in-memory host with a manual clock, and
   engine-driven suites (`$.session.start`, `$.tool.call`, `$.tool.check`,
   `$.agent.spawn`, `$.classic.Stop`, `$.prompt.compose`, `$.turn.step`, the
@@ -337,7 +419,13 @@ only. Unknown future events/props → passed through untouched.
   a turn from `tools/demo`: its `turn.step` hook answers each model step from a
   script, so Claude Code runs every tool call inside a genuine turn (the
   `milestones` tool included) without a model or a login.
-* Not yet done: visual review of 1.1.0 inside the Claude Desktop app (1.0.1
-  and 1.0.2 were reviewed from the person's screenshots), the `milestones`
-  tool and the answer styles with a real model, and live sampling on macOS
-  and Linux.
+* 1.2.0 in a real console (150 columns, docked and full width): the status
+  bar with Kit, Overview's lifecycle cards, Context's Cache card and Cache
+  health, `/cr cache` and Activity, during the demo driver's turn with a
+  scripted model switch (`/demo miss`); the Git line in a throwaway
+  repository, before and after a turn.
+* Not yet done: visual review of 1.1.0 and 1.2.0 inside the Claude Desktop
+  app (1.0.1 and 1.0.2 were reviewed from the person's screenshots), Keep
+  warm against the live API, a live `/model` switch with a warm cache, the
+  `milestones` tool and the answer styles with a real model, and live
+  sampling on macOS and Linux.

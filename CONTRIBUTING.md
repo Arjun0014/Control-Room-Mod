@@ -55,6 +55,13 @@ This page lists them and how to check your work.
   `hooks/ui/primitives.tsx`, which draw natively per surface. Decide capabilities by surface
   (`uiOf`), not by whether an element exists in the table. Never use the terminal's `Select`: its
   options cannot be picked or closed with the pointer. Read [docs/DESIGN.md](docs/DESIGN.md) first.
+- **Surface modules stand alone.** A `Client` surface module (Kit's `hooks/ui/companion.client.tsx`)
+  runs on Claude Code's drawing thread: it never touches `$`, imports nothing from the plugin, takes
+  everything it draws from its props, and posts only plain data. `register.tsx` names it with a
+  string literal (`module="./ui/companion.client.tsx"`), as the validator requires.
+- **One clock per subsystem.** Cache figures are timed by `Runtime.clock()` (the fake host's clock
+  in tests), Activity by `Date.now()`, Autopilot by `host.now()`. Mixing them makes tests disagree
+  with the views.
 
 ## Tests
 
@@ -62,10 +69,12 @@ Tests live in `plugins/control-room/tests/` and run with `claude plugin test`:
 
 - **Pure logic:** settings, profiles, permissions classifier, guard heuristics, Autopilot reducer
   (and its recovery after a reload), router, chain, run plan, validation and Activity's signal
-  (`signal.test.ts`), activity, resource parsers, answer styles (`answers.test.ts`) and the Quest
-  log (`quest.test.ts`).
+  (`signal.test.ts`), activity, resource parsers, answer styles (`answers.test.ts`), the Quest
+  log (`quest.test.ts`), the prompt cache model (`cache.test.ts`), Kit's moods and frames
+  (`companion.test.ts`) and Git's status parser (`git.test.ts`).
 - **Runtime:** `runtime.test.ts`, with the in-memory host in `tests/fixtures/fake-host.ts` (a manual
-  clock and recorded effects).
+  clock and recorded effects); Cache Guardian and Keep warm (`guardian.test.ts`); Handoff Health
+  and Continuity, through a whole handoff (`handoff.test.ts`).
 - **Engine-driven:** `register.test.ts` and `ui.test.ts`, using the real engine with the world
   answered beneath the plugin by `tests/fixtures/world.ts`, and UI mounted on the `terminal`,
   `desktop` and `mobile` surfaces.
@@ -90,8 +99,9 @@ Unit tests don't paint. Before a release:
   and every panel section, and use them with the mouse and the keyboard. On Windows,
   [`tools/console`](tools/console/README.md) runs a session in a console of a given size and reads
   the screen back as text. [`tools/demo`](tools/demo/README.md) plays a scripted turn of real tool
-  calls without a model, so the status bar's top line, This turn and the Quest log have something
-  to show.
+  calls without a model, so the status bar's top line, This turn, the prompt cache and the Quest
+  log have something to show (`/demo miss` adds a model switch that rebuilds the cache). Load it
+  with `console.ps1 launch … -Also tools\demo`, so its hooks sit beneath Control Room's.
 - Run one Autopilot chain end to end, both in the interactive terminal and in the Desktop host
   protocol (stream-json): they order the `/clear` differently. A low threshold with a cheap model
   is enough: `/cr autopilot 45k`, then a small multi-step task.

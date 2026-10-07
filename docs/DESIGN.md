@@ -23,7 +23,9 @@ This page records the decisions behind the UI, so later changes keep it that way
    each surface.
 7. **Counted, never guessed.** Progress is milestones done of the total Claude listed, cost is
    what Claude Code reports, a check passed when its command did. A fact that cannot be known (a
-   background command's outcome, a diff no tool reported) says so in words.
+   background command's outcome, a diff no tool reported) says so in words. A figure derived from
+   reported ones (the cache's expiry, its hit ratio, why it was rebuilt) is named as derived
+   where it is shown.
 
 ## Hierarchy and rhythm
 
@@ -85,7 +87,8 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | `meterBar` | thin line `━━━━──┃──` with the threshold tick | SVG bar | SVG bar |
 | `spark` | `▁▂▄▆█` | SVG area chart with a dashed ceiling | SVG |
 | `navBar` | labels with the section's accent underline under the current one | native buttons in one row with an even gap when all fit; otherwise three equal cells per row, each button centred | same as Desktop |
-| `workStrip` | one square per milestone: `■` done (blue), the current one bright, `□` to come; scaled past its width, with `4 of 7` beside it | rounded SVG segments | SVG segments |
+| `workTrack` | a track of milestones, one stop each: `●` done (blue), `◉` the one under way (bold), `○` to come, joined by `─`; scaled past its width, with `4 of 7` beside it. A track of stops, never a filling bar, so it cannot be read as the context meter | SVG circles on a line, the current one pulsing unless *Reduce motion* is on | SVG |
+| `cacheClock` | the prompt cache's time left: a clock face emptying (`●` `◕` `◑` `◔` `○`) in blue, and its words beside it | an SVG clock face | SVG |
 | `callout` | rounded border in the status color, title, line, actions | same, drawn natively | same |
 | `gauge` | label and %, line meter with ceiling tick, sparkline | label and %, SVG bar | SVG bar |
 | `steps` | numbered lines in the accent | same | same |
@@ -97,7 +100,11 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | `diffSquares` | five squares per file, green for lines added and red for removed, dim for the rest | rounded SVG squares | SVG |
 | `dots` | one `●` per run of a check, oldest first, in its outcome's color | same | same |
 | `levelBadge` | `★ Level 3` | an SVG ring of the way to the next level, and the level | SVG |
+| `apart` | a row set a blank line apart from the readings above it, so a switch never sits flush under a meter's figures | no gap (native rows are spaced already) | same as Desktop |
 | `card`, `row`, `pair`, `note`, `textRuns`, `spaced` | layout | layout | layout |
+
+The status bar draws its three graphics from the same theme (`ui/theme.ts`): `meterCells` and
+`svgBar` for Context, `trackStops` and `svgTrack` for Work, `clockGlyph` and `svgClock` for Cache.
 
 Every control has a stable `key`. A picker's options are keyed `<picker>:<value>`, a stepper's
 buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every surface.
@@ -105,45 +112,99 @@ buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every sur
 ## The status bar
 
 ```
-▸ Fixing orbitalSpeed                                                                         Milestone 2 of 4
-◆   Context ━━━━━━┃─── 51%   Work ■■□□ 1/4   Checks ✗ Tests                RAM 86%   Run $4.18   Control Room
+▸ Fixing orbitalSpeed · Milestone 2 of 4                                            Run $4.18   [ ◆ Control Room ]
+  Context ━━━━━──┃── 51%   Work ●─◉─○─○ 1/4   Cache ◕ 40m   Checks ✗ Tests                                RAM 88%
 ```
 
-The run at a glance, in two layers: what is happening on top, the readings below.
+The run at a glance, in two lines: what is happening on top, the run's three lifecycles below.
 
 **The top line** says what Claude is doing while a turn runs (`▸ Fixing orbitalSpeed`): in its
 own words when the milestone under way has them, else from the running call (`Running tests`),
-else `Thinking`. A call running past 20 seconds adds its time (`· 4m 51s`). On the right, where
-the milestone sits: `Milestone 2 of 4` when the line already names it, or its name and place when
-the line names a call. Once the turn ends, the line says what it did in counted words
-(`✓ Changed 4 files · Ran tests 3×, passing after a fix`) and how long it took. It appears with
-the first turn of a context. A handoff that needs the person takes its place, with **Hand off
-now** and **Later**, or **Start fresh**; so does a machine under heavy load while a machine-load
-limit is on.
+else `Thinking`. A call running past 20 seconds adds its time (`· 4m 51s`), then where the
+milestone sits: `Milestone 2 of 4` when the line already names it, or its name and place when the
+line names a call. Once the turn ends, the line says what it did in counted words
+(`✓ Changed 4 files · Ran tests 3×, passing after a fix`) and how long it took; before the first
+turn of a context it names the run's objective, dim. On its right, always: the **run's** total
+cost, which a fresh context never resets (a session's own cost stays in the panel), and the
+Control Room button, bright while the panel is open.
 
-**The readings line** holds the readings, each a name and a graphic. Two meters cannot be
-confused, by shape, color and number:
+**The lifecycles line** holds the three things that start over at different times, each a name
+and a graphic of its own shape, so they cannot be confused:
 
 - **Context** is a continuous line with the orange handoff tick and a percentage: how much of the
-  reasoning window is used. It starts over after a handoff.
-- **Work** is one square per milestone with `done/total`: how much of the run's objective is
-  finished, from Claude's own task list. It carries across handoffs, so it keeps climbing while the
-  context meter saws up and down.
+  reasoning window is used. It starts over after a handoff, and a handoff under way says so
+  beside it (`Handoff soon`, `Writing the handoff`).
+- **Work** is a track of milestones (`●─●─◉─○`) with `done/total`: how much of the run's
+  objective is finished, from Claude's own task list. It carries across handoffs, so it keeps
+  climbing while the context meter saws up and down.
+- **Cache** is a clock face emptying as the prompt cache's lifetime runs out, with the time left
+  (`◕ 40m`). It starts over with every request and is lost at a fresh context. It turns amber
+  near the expiry when no refresh is coming, and for a few minutes after a costly rebuild it
+  says so (`rebuilt 446k`).
 
 Then **Checks**, each kind's latest outcome by name (`✓ Tests ✗ Lint`). On the right, states only
-while they matter: a handoff under way, calls that need a look (`▲ 2 issues`; a failing check is
-not counted again, Checks shows it), a busy machine (`RAM 92%`, amber near a ceiling and red at
-it; calm readings stay in the panel), running agents, the guard keeping Claude going, and the
-Quest log's level when that style is chosen. Last, the **run's** total cost, which a fresh
-context never resets. A session's own cost stays in the panel. Settings (a profile, the
-threshold) are never shown.
+while they matter: calls that need a look (`▲ 2 issues`; a failing check is not counted again,
+Checks shows it), a busy machine (`RAM 92%`, amber near a ceiling and red at it; calm readings
+stay in the panel), running agents, the guard keeping Claude going, and the Quest log's level
+when that style is chosen. Settings (a profile, the threshold) are never shown.
 
-Width decides the detail: the line takes the richest form that shows every reading. Names
-(Context, Work, Checks, Run) need 100 columns in the terminal and 70 on Desktop, so they do not
-come and go as states appear. Below that the meters stand alone, then check names go, then the
-meters shorten, and only then do the least important readings drop. Docked beside the panel (about
-80 columns), `◆ ━━━━━┃── 51%  ■■■□ 2/4  ✓ Tests ✗ Lint  $4.18  Control Room` still fits. Desktop
-draws the meters as SVG.
+A handoff that needs the person takes a line of its own above, with **Hand off now** and
+**Later**, or **Start fresh**; so does a machine under heavy load while a machine-load limit is
+on.
+
+Width decides the detail: the lifecycles line takes the richest form that shows every reading.
+Names (Context, Work, Cache, Checks, Run) need 100 columns in the terminal and 70 on Desktop, so
+they do not come and go as states appear. Below that the graphics stand alone, then check names
+go, then the meter and the track shorten, and only then do the least important readings drop.
+Docked beside the panel (about 80 columns), the whole line still fits:
+`━━━━─┃── 48%   ●─●─●─◉ 3/4   ● rebuilt 446k   ✓ Tests ✗ Lint`. Desktop draws the meter, the
+track and the clock as SVG, the milestone under way pulsing.
+
+## Kit, the companion
+
+Off by default: a status bar is calm first. Turned on (Setup → *Companion*), Kit, a small pixel
+fox in Claude orange, walks a row of its own under the status bar and shows by what it does what
+the status bar says in words: trotting while Claude works, sniffing about while it reads and
+searches, sitting with a spinner while a check runs, celebrating a green finish, sweating over a
+failure, carrying a note through a handoff, waiting for you, tending the cache's clock while
+Keep warm holds it, then dozing and asleep when nothing has happened for a while. It never
+carries information the bar does not; it is company, not a reading.
+
+Calm rules: its mood follows what Claude is doing (and, when nothing happens, the time); on a
+busy machine it plays at two frames a second at most; *Reduce motion* holds one frame still. In the terminal it is four pixel
+rows drawn as two rows of half blocks, played by a surface module on its own frame clock (the
+plugin does no work between frames, and a beat that changes nothing draws nothing); a click on it
+opens Control Room. On Desktop it is an SVG that animates itself. If its module ever fails to
+draw, it is left out until the plugin reloads, and the status bar draws without it.
+
+## Overview
+
+Overview leads with the run: its number and session, its whole cost and its objective, and in
+the terminal the Git branch with the uncommitted files (`main · 3 uncommitted · 2 ahead`; Desktop
+shows Git itself). Then the three lifecycles as cards, in the order they last: **Work** (the
+track; carries across handoffs), **Context** (the meter and Autopilot's switch; starts over at
+each handoff) and **Cache** (the clock, what it holds and Keep warm's switch; starts over with
+each fresh context and lapses when left idle). Each card's footnote says how it starts over,
+which is the one thing that tells the three apart. Then **Now** (the top line, what needs a look,
+the machine), the profile, and one card per remaining section.
+
+## The prompt cache
+
+Context's **Cache** card: the cache's state in words (`Warm · lapses in about 40 min`), a meter of
+the time left, what it holds (`506k tokens cached · 9 requests`, the share read from the cache),
+then Keep warm with its next refresh or why there is none, its idle limit, *Ask before a model
+switch* and *Keep policies stable*. The lifetime sits in the card's aside, with where it came
+from (`1-hour cache · as Claude Code reports it`, or `Lifetime not known yet`). The footnote says
+that the expiry, the hit ratio and the causes are derived from the tokens Claude Code reports.
+
+**Cache health** lists the recent rebuilds, one line each (what happened, tokens re-cached, when),
+and under it, wrapping, its kind (*Preventable*, *Expected*, *Unexplained*) and what would avoid
+the next one. Only a costly rebuild that could have been avoided, or one that keeps happening
+with nothing changed, raises its voice (amber, and a toast); compaction is expected and dim.
+
+**Last handoff**, after one: what the handoff left for the fresh context and what the fresh
+context picked up, each a `✓`, `✗` or a dim `○` (not needed), with a score (`5 of 6`). It is
+counted from tool calls, never from what Claude said, and the footnote says so.
 
 ## Activity
 
@@ -152,8 +213,9 @@ Activity is the run in detail, signal before noise. Its summary reads top to bot
 1. **Quest**, only with the Quest log answer style: the level and the way to the next, the run's
    latest awards with their XP, and the achievements.
 2. **Run progress**: the objective (Claude's statement of it, else the person's latest substantial
-   request), the milestone strip and a window of milestones around the one under way, then *Now*,
-   *Next* and *Checks*.
+   request), the milestone track and a window of milestones around the one under way (one being
+   verified shows its evidence, a blocked one what it waits for), then *Now*, *Next* and
+   *Checks*.
 3. **This turn**: where the turn's time went, as a strip across the turn colored by the kind of
    work (read, edit, run, check, web, agent; red where a call failed; blank where Claude was
    thinking) with its legend, then a few counted lines ("Changed 4 files · 3 in code, 1 in tests",

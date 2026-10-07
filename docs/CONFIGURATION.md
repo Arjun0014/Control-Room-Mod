@@ -8,7 +8,8 @@ machine load). The updated policy reaches the system prompt from its next reques
 ## Where settings live
 
 Claude Code gives every plugin its own store, a JSON file under `~/.claude/plugins/store/`.
-Control Room keeps `settings.v1` (settings and custom profiles) and its run records there. The
+Control Room keeps `settings.v1` (settings and custom profiles), its run records and what it
+learned about the prompt cache (`cache.v1`) there. The
 store is validated on load: unknown values fall back to defaults, numbers are clamped to the
 ranges below, and a high-risk permission set to `allow` is repaired to `ask`. Hand-editing is
 possible but not needed. `/cr reset confirm` restores the defaults and keeps custom profiles.
@@ -148,6 +149,36 @@ every milestone of a plan of three or more done (100), and an Autopilot handoff 
 (ten milestones in one run). XP and achievements are kept across sessions in the plugin store
 (`quest.v1`) and are earned only while the Quest log style is chosen.
 
+### Prompt cache (`cache`)
+
+In the panel: **Context → Cache**. `/cr cache` shows it in words.
+
+| Setting | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `keepWarm` | on / off | off | *Keep warm while you are away*: refresh the cache shortly before it lapses by re-sending the last request (see below). `/cr cache keep on\|off` |
+| `maxIdleMinutes` | 15–480 | 120 | *Stop after*: how long Keep warm holds the cache while you have not come back. The panel steps through 15, 30, 45 minutes, 1, 1.5, 2, 3 … 8 hours; `/cr cache idle 45m` or `idle 2h` takes any value in range. The five-minute cache stops at 45 minutes whatever is set: past that, refreshing it costs more than one rebuild. |
+| `minTokens` | 5,000–1,000,000 | 20,000 | Keep warm leaves a smaller context alone (starting it cold costs little), and *Keep policies stable* holds only a cache at least this large. Not in the panel. |
+| `guardModelSwitch` | on / off | on | *Ask before a model switch*: a switch you make (`/model`, the model picker) that would re-send 100k or more warm tokens is confirmed first, with Claude Code's own estimate of what it costs. `/cr cache guard on\|off` |
+| `stablePolicies` | on / off | on | *Keep policies stable*: while the cache is warm, a setting you change reaches Claude as a note, and the system prompt keeps the policies it was cached with until the cache lapses or the context starts fresh. Off, every change rewrites the system prompt, which rebuilds the whole cache. `/cr cache stable on\|off` |
+
+Claude Code reports how many tokens each request read from the cache and wrote to it. From those
+Control Room derives the rest: a request that read less than half of what the one before it sent
+missed the cache, and the change it saw before it is the cause (a model or effort switch, the
+model router's switch, changed policies, the output style, a new tool, compaction), else idling
+past the cache's lifetime, else *unexplained*. The lifetime is the one Claude Code reports at a
+model switch, or learned: a request that still read the cache after more than five idle minutes
+proves the one-hour cache. It is remembered across sessions.
+
+**Keep warm** refreshes only while you are away (no turn running), the context is at least
+`minTokens`, no handoff is about to clear the context, and the idle limit has not passed. It
+refreshes a sixth of the lifetime before the expiry (ten minutes ahead for the one-hour cache, one
+minute for the five-minute one); with the lifetime unknown, one refresh six minutes after the
+last request learns it. A refresh asks Claude Code to re-send the last request with a one-word
+reply asked for; the transcript never sees it, and it costs tokens (mostly cache reads at a tenth
+of the input price, plus the short reply). It checks itself: the first request after an expiry it
+replaced must still read the cache. If refreshes do not hold the cache, it says so and stops;
+turning it on again lets it try afresh.
+
 ### Subagents (`subagents`)
 
 In the panel: **Guardrails**.
@@ -232,6 +263,8 @@ In the panel: **Setup**.
 | `hud` | `band` / `status` / `both` / `off` | `band` | *Status bar*: above the prompt, in Claude Code's status line, both, or hidden |
 | `toasts` | on / off | on | Brief notices on state changes |
 | `liveLoad` | on / off | on | *Live CPU and memory*: machine-wide readings in the status bar and in Guardrails, sampled every `resources.intervalSec` seconds, even with no machine-load limit. Off stops the sampler unless a limit needs it. It is not sampled while the status bar is hidden. |
+| `companion` | on / off | off | *Companion*: Kit, a small pixel fox on a row of its own under the status bar, shows what Claude is doing. In the terminal a click on it opens Control Room. `/cr companion on\|off` |
+| `reducedMotion` | on / off | off | *Reduce motion*: still drawings instead of animation (Kit, and the pulse of the milestone under way on Desktop). `/cr motion off` turns it on. |
 | `openOnStart` | on / off | off | Open the Control Room panel when a session starts. In the terminal it seats from 144 columns. |
 
 ## Profiles

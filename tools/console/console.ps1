@@ -3,6 +3,7 @@
   terminal UI can be read back and used without looking at the window. See README.md.
 
     console.ps1 launch -Dir C:\some\trusted\folder [-Cols 150] [-Lines 48] [-Font 'Cascadia Mono' [-FontSize 16]]
+                       [-Claude '<command>'] [-Also <plugin folder>, ...]
     console.ps1 read [-Attrs]
     console.ps1 send -Spec 'text:/cr|enter'
     console.ps1 capture -Out shot.png [-Cells 'col,row,width,height']

@@ -6,11 +6,12 @@ All notable changes to Control Room are recorded here. The format follows
 `plugins/control-room/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/control-room` checks this when tagging a release.
 
-## [Unreleased]
+## [1.2.0] - 2026-10-08
 
-Planned as 1.2.0. Built and tested (217 tests); still to do before release: the remaining docs
-(README, DESIGN, ARCHITECTURE, CONFIGURATION, SECURITY, TROUBLESHOOTING, CONTRIBUTING), a
-retaken `cli-cache.png`, the version bump, and this section's final wording.
+The prompt cache comes into view: Cache Guardian explains every rebuild, keeps changes from
+throwing a large cache away, and can keep it warm while you are away. The status bar shows the
+three lifecycles side by side (context, work, cache), a handoff now checks what it left and what
+the fresh context picked up, and Kit, an optional pixel fox, shows what Claude is doing.
 
 ### Added
 
@@ -50,10 +51,12 @@ retaken `cli-cache.png`, the version bump, and this section's final wording.
 - **Kit**, an optional pixel companion (Setup → Companion, `/cr companion on`; off by default):
   a small fox in Claude orange on a row of its own under the status bar, showing what Claude is
   doing (working, reading, waiting on a check, celebrating, worried, carrying the handoff notes,
-  tending the cache, asleep). The terminal plays it in a surface module on its own clock; Desktop
-  draws an SVG that animates itself. Reduce motion holds it still; a click opens Control Room.
+  tending the cache, asleep). The terminal plays it in a surface module on its own clock, and a
+  click on it opens Control Room; Desktop draws an SVG that animates itself. Reduce motion (Setup,
+  `/cr motion off`) holds it still.
 - **Git in the terminal**: the branch and the uncommitted files in Overview and `/cr status`
-  (one read-only `git status` after a turn, at most every 15 s). Desktop shows Git itself.
+  (one read-only `git status` at session start and after a turn, at most every 15 s). Desktop
+  shows Git itself.
 - Development: `/demo miss` plays a model switch halfway through the scripted turn, with
   realistic cache figures; `tools/console` takes `-Also <plugin folder>` to load the demo beneath
   Control Room.
@@ -72,6 +75,32 @@ retaken `cli-cache.png`, the version bump, and this section's final wording.
 - The handoff prompt names four places, each for what it is for: the run's milestones (the
   canonical run state), the project's own docs, CLAUDE.md (durable instructions only, never a
   progress log) and the notes (the prompt Claude would want to receive).
+
+### Security
+
+- **Keep warm makes model requests.** Off by default. When you turn it on, it asks Claude Code to
+  re-send the main conversation's last request with one short message (`$.model.fork`, through
+  Claude Code's own client); each refresh costs tokens, mostly cheap cache reads. Nothing is
+  added to the transcript.
+- SECURITY.md lists the new engine calls and data: `$.model.fork` (Keep warm),
+  `classic.PreModelSwitch` answering *ask* (a switch that would re-send a large warm cache),
+  `$.session.repo` and `$.process.run` (one read-only `git status`, terminal only; only the branch
+  and counts are kept), `$.tool.list` at each turn start (a change of tools rebuilds the cache),
+  Kit's surface module (it runs on the drawing thread with no `$`, and only ever posts
+  `{ open: true }`), and the store key `cache.v1` and the run record's `lastHandoff`.
+
+### Verified
+
+- `tsc`, `claude plugin validate --strict` (plugin and marketplace) and 217 tests in
+  `claude plugin test`, on Claude Code 2.1.292 and on 2.1.289 (the engine bundled with Claude
+  Desktop).
+- A live pass in a real Windows console (Claude Code 2.1.292, 150 columns, docked and full width)
+  during a scripted turn with a model switch: the status bar with Kit, Overview, Context's Cache
+  card and Cache health, `/cr cache`, and Activity; and the Git line in a throwaway repository,
+  before and after a turn that changed four files.
+- Not yet: Keep warm against a real model (the refresh, its timing and its self-check are tested
+  through the engine, not with a live API), and the look of 1.2.0 inside Claude Desktop (tested
+  on the `desktop` surface in the harness).
 
 ## [1.1.0] - 2026-10-07
 

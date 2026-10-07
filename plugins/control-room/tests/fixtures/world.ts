@@ -44,10 +44,13 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
   on('session.version', () => ({ value: { version: '2.1.292', base: '2.1.292' } }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.messages', () => ({ value: [] }))
-  on('session.append', ($, e) => {
+  // From Claude Code 2.1.293 the test kit stores the row beneath this hook, and a hook must relay
+  // what `next(e)` stored. Before it, this world is the bottom and answers from memory.
+  on('session.append', async ($, e, next) => {
     const text = e.message.content.map(b => (typeof b.text === 'string' ? b.text : '')).join('')
     kept.appended.push(text)
-    return { message: e.message, uuid: `row-${kept.appended.length}` }
+    const stored = await next(e).catch(() => undefined)
+    return stored ?? { message: e.message, uuid: `row-${kept.appended.length}` }
   })
   on('session.compact', () => ({ messages: [], tokensBefore: 900_000, tokensAfter: 40_000 }))
 

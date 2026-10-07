@@ -6,6 +6,15 @@ All notable changes to Control Room are recorded here. The format follows
 `plugins/control-room/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/control-room` checks this when tagging a release.
 
+## [Unreleased]
+
+### Fixed
+
+- **Tests on Claude Code 2.1.293.** Its test kit stores a `session.append` row itself, and a hook
+  must relay what `next(e)` stored; the test world answered the row on its own, so eight
+  engine-driven tests failed there. The world now relays it (and still answers on older engines).
+  The plugin itself is unchanged: the 217 tests pass on 2.1.289, 2.1.292 and 2.1.293.
+
 ## [1.2.0] - 2026-10-08
 
 The prompt cache comes into view: Cache Guardian explains every rebuild, keeps changes from

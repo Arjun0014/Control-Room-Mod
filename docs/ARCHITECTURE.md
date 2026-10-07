@@ -216,6 +216,22 @@ crossing the threshold again never starts a second handoff.
 * **Session Chain** — run record updated on `session.measure`, transitions
   and exit; per-session cost from `$.session.usage().cost` (resets per
   session), cumulative = Σ. Unavailable figures render as "—", never guessed.
+* **Run progress** — the run plan (`features/plan.ts`) is read from Claude's
+  own task list as its tools report it: TodoWrite's whole list, or
+  TaskCreate / TaskUpdate / TaskList, read at `tool.call` as each call
+  succeeds (a subagent's list is its own). Claude Code
+  2.1.29x offers neither by default, so at session start, when
+  `$.tool.list()` shows no task tool and `progress.milestones` is on,
+  Control Room registers `milestones` (`$.tool.register`, offered as
+  `mcp__control-room__milestones`) and adds a short "Run progress" policy
+  section; a `tool.call` hook registered before the general one answers it
+  (`fromMilestones`, the whole list each time). The plan and the objective
+  (the first sentence of the person's latest substantial request) live in
+  the run record, so they survive `/clear`, reloads and restarts; after a
+  handoff the continuation context names the open milestones so the fresh
+  context records them again. Progress is done of total, never estimated.
+  `validation.ts` and `digest.ts` turn the same tool calls into Activity's
+  checks, Attention, change groups and the "now" line.
 * **Frontier Max** — `prompt.compose` session section (stable text → one
   cache miss per toggle) with automatic `prompt.submit` context fallback;
   `turn.step` effort `max` where the step carries an effort (never invented
@@ -269,7 +285,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (155 tests, run on 2.1.292, and in CI on the latest Claude Code for Linux,
+* `claude plugin test` (157 tests, run on 2.1.292, and in CI on the latest Claude Code for Linux,
   Windows and macOS and on 2.1.289 for Linux):
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity),
@@ -295,6 +311,9 @@ only. Unknown future events/props → passed through untouched.
   crossing, handoff notes, *Wait for me*, Start fresh, continuation.
 * Install from the folder marketplace into an isolated Claude Code config,
   and a session loading the installed copy.
-* Not yet done: visual review inside the Claude Desktop app (needs the
-  person's hot-reload approval or an install), and live sampling on macOS
-  and Linux.
+* The 1.0.2 status bar, Activity and run progress in a real console,
+  driven by `tools/demo` (real tool calls, the `milestones` tool included,
+  no model turn).
+* Not yet done: visual review of 1.0.2 inside the Claude Desktop app
+  (1.0.1 was reviewed from the person's screenshots), the `milestones`
+  tool with a real model, and live sampling on macOS and Linux.

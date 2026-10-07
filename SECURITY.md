@@ -22,7 +22,8 @@ own settings and run records in Claude Code's per-plugin store. Run
 | The prompts you submit, and Claude's final message when a turn stops | Model Router task class (keyword match). No-Lazy-Exit Guard comparison of the request with the final answer. The first sentence of your latest substantial request is the run's *objective* in Activity. | The objective: in the run record. The rest: memory only, for the current turn |
 | Tool calls as they happen: tool name, and input such as a shell command or file path; whether each succeeded, and for a failed or refused call the first line of its answer | Permission Policy classification, the heavy-command check, Activity (Attention, Validation), Focus View rows | Memory only (last 300 calls) |
 | Edit/Write results (the structured patch Claude Code returns; for a file written whole, its content as the added lines) | The Changes view's per-file diffs | Memory only (200 files, hunks capped) |
-| Claude's own task list: the inputs and results of TodoWrite, TaskCreate, TaskUpdate and TaskList (subjects, statuses, the "doing" form) | Run progress in Activity and the status bar; after a handoff, the open milestones are named in the fresh context so its task list carries on | In the run record (at most 60 tasks) |
+| Claude's own task list: the inputs and results of TodoWrite, TaskCreate, TaskUpdate and TaskList, or of Control Room's `milestones` tool where it is offered (subjects, statuses, the "doing" form) | Run progress in Activity and the status bar; after a handoff, the open milestones are named in the fresh context so its task list carries on | In the run record (at most 60 tasks) |
+| The names of the tools Claude is offered (`$.tool.list`), once per session | Only to see whether Claude Code offers a task list, so the `milestones` tool is added only where none exists | Nothing |
 | File *metadata* only (`stat`): the handoff file's modification time; the real path of a file Claude is about to edit | Verifying that the handoff was written; detecting edits outside the project, including through links | Nothing |
 | The running subagents list (type, status, description) | Subagent counts and limits | Memory only |
 | The names of registered slash commands | Only so as not to take `/cr` if something else uses it | Nothing |
@@ -43,7 +44,8 @@ It reads totals only: no per-process data, no process names, nothing about other
 
 | Change | When |
 | --- | --- |
-| Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release check, machine load, subagent limits or Autopilot are on |
+| Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release check, machine load, subagent limits or Autopilot are on, or the `milestones` tool is offered ("Run progress": record the run's steps with it) |
+| Offer Claude one tool, `milestones` (`mcp__control-room__milestones`, `$.tool.register`). Its answer only records the list in the run plan; it reads and writes nothing else | Only where Claude Code offers no task list of its own (TodoWrite or the Task tools) and Behavior → *Run progress* is on (the default) |
 | Add short hidden notes to the conversation, which Claude reads at its next request | Autopilot pending, resource pressure, or you changed a setting mid-session |
 | Submit prompts in the session: the handoff prompt, one corrective retry, the continuation prompt | Only with the Context Autopilot on, or when you ask for a handoff |
 | Run `/clear`; run `/compact` as a fallback | Only after a handoff whose file was verified as freshly written (`/compact` only if `/clear` fails and the fallback is allowed) |
@@ -52,8 +54,8 @@ It reads totals only: no per-process data, no process names, nothing about other
 | Hide, refuse or ask about a subagent | Subagent Control |
 | Continue a turn that stopped early, with a short message | No-Lazy-Exit Guard (capped per turn and per session) |
 | Stop a background job that Claude started | Only when you press Stop in Guardrails → Machine load |
-| Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts; scroll its own pane back to the top | Always (Focus view and the status bar can be turned off) |
-| Keep the Autopilot step under way in `$.state` | While a handoff is under way or waiting, so a reload of the plugin carries it on instead of starting a second one |
+| Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts; scroll its own pane back to the top (`$.ui.scroll`) | Always (Focus view and the status bar can be turned off). The scroll happens when you change section or press *↑ Sections* |
+| Keep the Autopilot step under way in `$.state` (`autopilot`) | While a handoff is under way or waiting, so a reload of the plugin carries it on instead of starting a second one |
 | Write its own store | Settings changes, run records |
 
 **Permission rules that always hold:**

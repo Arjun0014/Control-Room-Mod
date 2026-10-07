@@ -68,7 +68,7 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
                     key: 'profile-save',
                     label: 'Keep as a profile',
                     // A native text field is far wider than its placeholder, so it moves under the label sooner.
-                    control: { element: <Input key="profile-save" value="" placeholder="Type a name" submitLabel="save" onSubmit={name => kit.actions.saveProfile(name)} />, width: isNative(k) ? 36 : 18 },
+                    control: { element: <Input key="profile-save" value="" placeholder="Type a name" submitLabel={isNative(k) ? 'Save' : 'save'} onSubmit={name => kit.actions.saveProfile(name)} />, width: isNative(k) ? 36 : 18 },
                   }),
               buttons(k, [{ key: 'profile-revert', label: `Back to ${active.name}`, onPress: () => kit.actions.applyProfile(active.id) }], 'profile-actions'),
             ],

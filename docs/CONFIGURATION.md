@@ -100,6 +100,22 @@ Rules:
 - A model that Claude Code refuses is not chosen again in that session.
 - Forks inherit the parent's model, and a model Claude chose explicitly for a subagent is respected.
 
+### Run progress (`progress`)
+
+In the panel: **Behavior → Run progress**.
+
+| Setting | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `milestones` | on / off | on | Where Claude Code offers no task list of its own, give Claude a small `milestones` tool and ask it to record the run's steps, so Activity and the status bar can count them |
+
+Run progress is counted from Claude's task list: TodoWrite or the Task tools where Claude Code
+offers them, else Control Room's `milestones` tool. Where a task list exists, nothing is added
+and Behavior reads *Automatic*. Off, Claude is offered no tool and no progress is shown.
+Switched on mid-session, the tool is offered at once. Switched off mid-session, the policy goes
+and Claude is told; a tool already offered stays until the session ends, and answers that
+tracking is off. Progress is milestones done of the total Claude listed, never an estimate, and
+it carries across handoffs.
+
 ### Subagents (`subagents`)
 
 In the panel: **Guardrails**.

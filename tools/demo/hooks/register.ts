@@ -8,7 +8,10 @@
  * really fail and pass, the edits really land in the sample project.
  */
 
-import type { Register } from 'claude-code'
+import type { Register, ToolCallArgs } from 'claude-code'
+
+/** Control Room's milestones tool, offered where Claude Code has no task list. */
+const MILESTONES_TOOL = 'mcp__control-room__milestones'
 
 /** The milestones, as Claude would list them: subject and its "doing" form. */
 const MILESTONES: readonly (readonly [string, string])[] = [
@@ -44,15 +47,16 @@ export const register: Register = on => {
     return started
   })
 
-  on('command.run', { command: 'demo' }, async ($, e) => {
-    if (e.args.trim() === 'tools') return { text: (await $.tool.list()).map(t => t.name).join(' ') }
+  on('command.run', { command: 'demo' }, async $ => {
     const root = (await $.session.root()).replace(/[\\/]+$/, '')
     const at = (path: string) => `${root}/${path}`
     const shell = (command: string, description: string) => $.tool.call({ tool: 'Bash', command, description }).catch(() => undefined)
-    // The task list as this build keeps it: the Task tools where they exist, else TodoWrite.
-    const hasTasks = (await $.tool.list()).some(t => t.name === 'TaskCreate')
+    // The task list as Claude would keep it here: Control Room's milestones
+    // tool where it is offered, else the Task tools, else TodoWrite.
+    const names = new Set((await $.tool.list()).map(t => t.name))
+    const via = names.has(MILESTONES_TOOL) ? 'milestones' : names.has('TaskCreate') ? 'tasks' : 'todos'
     const ids: string[] = []
-    if (hasTasks) {
+    if (via === 'tasks') {
       for (const [subject, activeForm] of MILESTONES) {
         const created = await $.tool.call({ tool: 'TaskCreate', subject, description: subject, activeForm })
         const task = (created as { result?: { task?: { id?: unknown } } }).result?.task
@@ -60,11 +64,16 @@ export const register: Register = on => {
       }
     }
     const plan = async (states: readonly ('pending' | 'in_progress' | 'completed')[]) => {
-      if (!hasTasks) {
-        await $.tool.call({ tool: 'TodoWrite', todos: MILESTONES.map(([content, activeForm], i) => ({ content, activeForm, status: states[i] ?? 'pending' })) })
-        return
+      const status = (i: number) => states[i] ?? 'pending'
+      if (via === 'milestones') {
+        const milestones = MILESTONES.map(([title, doing], i) => (status(i) === 'in_progress' ? { title, status: status(i), doing } : { title, status: status(i) }))
+        // Registered at run time, so the generated tool types do not name it.
+        await $.tool.call({ tool: MILESTONES_TOOL, milestones } as unknown as ToolCallArgs)
+      } else if (via === 'todos') {
+        await $.tool.call({ tool: 'TodoWrite', todos: MILESTONES.map(([content, activeForm], i) => ({ content, activeForm, status: status(i) })) })
+      } else {
+        for (const [i, s] of states.entries()) if (s !== 'pending' && ids[i] !== '') await $.tool.call({ tool: 'TaskUpdate', taskId: ids[i] ?? '', status: s })
       }
-      for (const [i, status] of states.entries()) if (status !== 'pending' && ids[i] !== '') await $.tool.call({ tool: 'TaskUpdate', taskId: ids[i] ?? '', status })
     }
 
     await plan(['in_progress', 'pending', 'pending', 'pending'])

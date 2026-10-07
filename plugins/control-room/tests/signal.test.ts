@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { type ActivityItem, ActivityTracker, changesOf } from '../hooks/features/activity'
+import { type ActivityItem, ActivityTracker, changesOf, reasonOf } from '../hooks/features/activity'
 import { attentionOf, groupOf, nowOf, turnSummaryOf } from '../hooks/features/digest'
 import { emptyPlan, fromTodoWrite, progressOf } from '../hooks/features/plan'
 import { summarize, validationKindOf } from '../hooks/features/validation'
@@ -100,8 +100,18 @@ describe('attention', () => {
     ])
     const list = attentionOf(t.items, 100_000)
     expect(list.map(a => `${a.kind}:${a.state}:${a.attempts}`)).toEqual(['failed:unresolved:2', 'failed:recovered:1'])
-    expect(list[0]!.reason).toBe('Exit code 1')
+    expect(list[0]!.reason).toBe('FAIL src/b.test.ts')
     expect(list[1]!.reason).toBe('String to replace not found in file.')
+  })
+
+  test('the reason is the line that says why, not the exit status or the runner echoing its script', () => {
+    expect(reasonOf('Exit code 1\nnpm error Missing script: "lint"\nnpm error\nnpm error Did you mean this?')).toBe('npm error Missing script: "lint"')
+    expect(reasonOf('Exit code 1\n> orbit@0.1.0 test\n> node --test\n\nTAP version 13\n# Subtest: the ISS\nnot ok 1 - the ISS\n  ---')).toBe('not ok 1 - the ISS')
+    expect(reasonOf('Exit code 1\n=================== FAILURES ===================\n    def test_y():\nE       AssertionError: assert 1 == 2')).toBe('E AssertionError: assert 1 == 2')
+    expect(reasonOf('Exit code 2\nsrc/a.ts: unused variable')).toBe('src/a.ts: unused variable')
+    expect(reasonOf('Exit code 1')).toBe('Exit code 1')
+    expect(reasonOf('<tool_use_error>Error:\nFile has not been read yet.</tool_use_error>')).toBe('File has not been read yet.')
+    expect(reasonOf(undefined)).toBeNull()
   })
 
   test('refused and held calls, long-running and unusually slow ones are named; quick successes are not', () => {

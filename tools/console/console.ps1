@@ -2,7 +2,7 @@
   Drives a real Windows console running Claude Code with this repository's plugin, so the
   terminal UI can be read back and used without looking at the window. See README.md.
 
-    console.ps1 launch -Dir C:\some\trusted\folder [-Cols 150] [-Lines 48]
+    console.ps1 launch -Dir C:\some\trusted\folder [-Cols 150] [-Lines 48] [-Font 'Cascadia Mono' [-FontSize 16]]
     console.ps1 read [-Attrs]
     console.ps1 send -Spec 'text:/cr|enter'
     console.ps1 capture -Out shot.png [-Cells 'col,row,width,height']
@@ -19,7 +19,9 @@ param(
   [switch]$Attrs,
   [switch]$Whole,
   [int]$TargetPid = 0,
-  [string]$Claude = 'claude'
+  [string]$Claude = 'claude',
+  [string]$Font = '',
+  [int]$FontSize = 16
 )
 $ErrorActionPreference = 'Stop'
 # The screen is box drawing and glyphs: hand it on as UTF-8, not the console code page.
@@ -32,11 +34,17 @@ Add-Type -Path (Join-Path $here 'ConDrive.cs') -ReferencedAssemblies System.Draw
 if ($Action -eq 'launch') {
   if ($Dir -eq '' -or -not (Test-Path $Dir)) { throw 'launch needs -Dir: an existing folder Claude Code already trusts (a trust dialog would wait for you).' }
   $plugin = (Resolve-Path (Join-Path $here '..\..\plugins\control-room')).Path
+  # Started from inside a Claude Code session, the child would inherit that session's wiring (its
+  # API proxy, so it reads "Not logged in") and NO_COLOR (so it draws in monochrome). Start clean.
+  foreach ($n in @(Get-ChildItem env: | Where-Object { $_.Name -match '^(CLAUDE|ANTHROPIC)|^NO_COLOR$' } | ForEach-Object { $_.Name })) {
+    [Environment]::SetEnvironmentVariable($n, $null, 'Process')
+  }
   # Size the console before Claude Code starts: once it holds the alternate screen it cannot be resized.
   $p = Start-Process -FilePath 'conhost.exe' -ArgumentList @('cmd.exe', '/k', "mode con: cols=$Cols lines=$Lines") -WorkingDirectory $Dir -PassThru
   Start-Sleep -Milliseconds 1200
   $cmd = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id) and Name='cmd.exe'" | Select-Object -First 1
   if ($null -eq $cmd) { throw "no cmd.exe under conhost $($p.Id)" }
+  if ($Font -ne '') { [ConDrive]::Font([uint32]$cmd.ProcessId, $Font, [int16]$FontSize) }
   [ConDrive]::Send([uint32]$cmd.ProcessId, "text:$Claude --plugin-dir `"$plugin`"|enter")
   Set-Content -Path $pidFile -Value $cmd.ProcessId -Encoding ascii
   "console $($cmd.ProcessId): $Cols x $Lines in $Dir"

@@ -213,14 +213,26 @@ export function changesOf(tool: string, result: unknown): ReportedChange[] {
   return []
 }
 
-/** The first meaningful line of a tool's answer: why it failed or was refused. */
+/** Lines that never say why: a bare "Error:", an exit status, a runner echoing its script, a rule. */
+const SAYS_NOTHING = [/^error:?$/i, /^exit code -?\d+$/i, /^> /, /^[=\-_*~#]{3,}/]
+
+/** Lines that usually do: an error, a failure, a refusal. */
+const SAYS_WHY = /\b(errors?|fail(ed|ure|ing)?|not ok|exception|cannot|can't|missing|denied|refused|not found|no such|expected|assert\w*)\b|[✖✗]/i
+
+/**
+ * Why a tool call failed or was refused, in one line of its answer: the first
+ * line that names an error or a failure, else the first that says anything
+ * ("Exit code 1" only when nothing else does).
+ */
 export function reasonOf(text: unknown): string | null {
   if (typeof text !== 'string') return null
-  const line = text
+  const lines = text
     .replace(/<\/?[a-z_-]+>/gi, ' ')
     .split(/\r?\n/)
     .map(l => l.trim())
-    .find(l => l !== '' && !/^error:?$/i.test(l))
+    .filter(l => l !== '')
+  const telling = lines.filter(l => !SAYS_NOTHING.some(r => r.test(l)))
+  const line = telling.find(l => SAYS_WHY.test(l)) ?? telling[0] ?? lines.find(l => !/^error:?$/i.test(l))
   return line === undefined ? null : clean(line, 140)
 }
 

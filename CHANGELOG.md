@@ -8,6 +8,87 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-07
+
+A public-release polish pass: the status bar and Activity now show how far the run is and what
+needs a look, and a reload mid-handoff can no longer start a second one.
+
+### Added
+
+- **Run progress.** The run's objective (your latest substantial request) and its milestones, done
+  of the total Claude listed, counted from Claude's own task list: TodoWrite, or TaskCreate,
+  TaskUpdate and TaskList. It is kept with the run, so it survives `/clear`, reloads and restarts,
+  and after a handoff the fresh context is told the open milestones, so the work meter keeps
+  climbing while the context meter starts over. A subagent's list is its own. Progress needs a list
+  to count: without one there is no work meter.
+- **A `milestones` tool where Claude Code has none.** Claude Code 2.1.29x offers no task list by
+  default (its task tools are behind flags). There, Control Room offers Claude one small tool,
+  `mcp__control-room__milestones`, with a short "Run progress" policy, so it can keep one. Where a
+  task list exists, nothing is added. Behavior → *Run progress* switches it (`progress.milestones`,
+  on by default). It has not yet been watched with a real model.
+- **Activity: Attention and Validation.** Attention lists failures nothing has fixed (with the line
+  of output that says why and how many tries), refusals, calls the machine-load limit held back,
+  long-running and unusually slow calls, then failures a later attempt recovered from, dimmed.
+  Validation has one row per kind of check (tests, build, type-check, lint, checks, simulation),
+  recognised by its runner; readers such as `grep` or `cat` are not checks.
+- **Activity: this turn in counted lines,** such as "Changed 4 files · 2 in code, 1 in tests, 1 in
+  docs" and "Ran tests 3×, passing after a fix". No model writes them.
+- **Moving around.** Choosing a section starts its page at the top, and every page ends with
+  *↑ Sections*, which brings the section bar back. The plugin API has no pinned region inside a
+  pane, so this is the supported way back.
+- **Continuous integration.** GitHub Actions run the type-check, strict validation of the plugin
+  and the marketplace, and the tests on every push and pull request: on Linux, Windows and macOS
+  with the latest Claude Code, and on Linux with 2.1.289. No step signs in.
+- **Development tools.** `tools/console` saves the console as a PNG (`capture`), sets its font
+  (`-Font`), and starts the child session clean of the calling session's `CLAUDE*`, `ANTHROPIC*`
+  and `NO_COLOR` variables. `tools/demo` is a development-only driver that replays scripted work
+  through real tool calls, for screenshots without a model turn.
+
+### Changed
+
+- **Status bar: the run at a glance.** Context is a line with Autopilot's handoff tick; work is one
+  square per milestone with `done/total`; then what Claude is doing right now, in the room that is
+  left; then the run's total cost (a session's own cost moved to the panel). Failing checks, open
+  issues, a busy machine (calm CPU and memory readings moved to the panel), running agents and
+  handoffs show only while they matter. Labels drop at medium widths and meters shorten when
+  narrow; Desktop draws both meters as graphics.
+- **Activity leads with the run.** Its summary reads: run progress (objective, milestones, now,
+  next, checks), this turn, Attention, Validation, then Changes grouped as code, tests, docs,
+  config and other, with generated and temporary files (temp and build folders, `.claude`, the
+  handoff notes, files outside the project) folded into one row. Every tool call, newest first, is
+  now the secondary view.
+- **Overview** shows the run's work under the context meter.
+- **README:** screenshots from the terminal and from Claude Desktop, badges, and the new status bar.
+- The workspace `package.json` no longer carries a version of its own, which disagreed with the
+  plugin's.
+
+### Fixed
+
+- **Autopilot: a reload mid-handoff started a second one.** A hot reload or `/reload-plugins`
+  starts a fresh runtime with empty memory, so a handoff in progress was forgotten and the context
+  crossing the threshold again began another. The step under way is now kept in `$.state`, which
+  outlives a reload but not a restart or `/clear`, so it never applies to the wrong context. A
+  fresh runtime carries it on: a pending or running handoff waits for its turn to end, an owed
+  check or `/clear` is carried out, and a step that may or may not have happened (the handoff
+  prompt about to go out, a compaction) waits for you instead of being repeated.
+- **Changes said `+0 −0` for files without a diff.** A file written whole now counts its lines, and
+  one with no reported diff reads `new · diff unavailable` or `diff unavailable`.
+- **A failure's reason was often just `Exit code 1`.** Attention now shows the line that names the
+  error (`npm error Missing script: "lint"`, `not ok 1 - …`), skipping the exit status and a
+  runner echoing its script.
+- **Desktop: the profile name field's button read "save".** It reads "Save"; the terminal keeps its
+  lowercase key hint.
+
+### Security
+
+- **Deleting files is high-risk.** Like edits outside the project, push and deploys, it can ask or
+  be refused but no longer answers an approval for you: *Allow* is not offered. A saved *Allow*,
+  in settings or in a custom profile, reads as *Ask*, is named once in the panel, and is saved
+  tightened. This is a tightening: a setup that relied on it now asks.
+- SECURITY.md lists the new engine calls: `$.tool.list` (tool names, once per session, to see
+  whether a task list exists), `$.tool.register` (the `milestones` tool), `$.ui.scroll` (the
+  panel's own pane) and the `autopilot` record in `$.state`.
+
 ## [1.0.1] - 2026-10-07
 
 Desktop fixes after a look at the panel in Claude Desktop's Code tab.

@@ -65,7 +65,7 @@ function runCard(kit: Kit, view: ActivityView): RenderElement {
               label: 'Progress',
               content: workStrip(k, { key: 'run-strip', done: plan.done, total: plan.total, hasCurrent: plan.tasks.some(t => t.isCurrent), max: strip, caption: `${plan.done} of ${fmt.plural(plan.total, 'milestone')}` }),
             })}
-            <Box key="run-milestones" flexDirection="column" marginLeft={10} marginTop={1}>
+            <Box key="run-milestones" flexDirection="column" marginLeft={10} marginTop={1} marginBottom={1}>
               {plan.earlier > 0 ? <Text key="run-earlier" dimColor>{`${plan.earlier} earlier done`}</Text> : null}
               {plan.tasks.map((t, i) =>
                 listItem(k, {

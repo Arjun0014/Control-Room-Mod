@@ -48,15 +48,45 @@ public static class ConDrive
         if (!AttachConsole(pid)) throw new Exception("AttachConsole failed: " + Marshal.GetLastWin32Error());
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CONSOLE_FONT_INFOEX
+    {
+        public uint cbSize; public uint nFont; public COORD dwFontSize; public int FontFamily; public int FontWeight;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string FaceName;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetCurrentConsoleFontEx(IntPtr h, bool max, ref CONSOLE_FONT_INFOEX info);
+
+    /// Sets the console's font (a TrueType face, `size` pixels high). The default font lacks some
+    /// of the glyphs Claude Code draws (block quadrants, ◆, ⎿); Cascadia Mono has them.
+    public static void Font(uint pid, string face, short size)
+    {
+        Attach(pid);
+        IntPtr h = CreateFileW("CONOUT$", GENERIC_READ | GENERIC_WRITE, SHARE_RW, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        try
+        {
+            var info = new CONSOLE_FONT_INFOEX();
+            info.cbSize = (uint)Marshal.SizeOf(typeof(CONSOLE_FONT_INFOEX));
+            info.dwFontSize.Y = size;
+            info.FontFamily = 54; // FF_MODERN | TMPF_TRUETYPE | TMPF_VECTOR
+            info.FontWeight = 400;
+            info.FaceName = face;
+            if (!SetCurrentConsoleFontEx(h, false, ref info)) throw new Exception("SetCurrentConsoleFontEx failed: " + Marshal.GetLastWin32Error());
+        }
+        finally { CloseHandle(h); }
+    }
+
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out RECT r);
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
 
     /// Saves the console window as a PNG, as drawn (even when other windows cover it).
     /// `cells` crops to "col,row,width,height" in 1-based character cells; empty keeps it whole.
     public static void Capture(uint pid, string path, string cells)
     {
+        // Without it, a scaled display reports the window in scaled-down pixels and the shot is cut.
+        SetProcessDPIAware();
         Attach(pid);
         IntPtr hwnd = GetConsoleWindow();
         if (hwnd == IntPtr.Zero) throw new Exception("no console window");

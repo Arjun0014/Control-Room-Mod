@@ -58,6 +58,7 @@ export function statusText(rt: Runtime): string {
     ['Focus view', st.focus.text],
     ['Answer style', st.answers.text],
     ['Prompt cache', cacheLine(rt)],
+    ...(hud.git === null ? [] : [['Git', hud.git] as [string, string]]),
   ]
   const head = `◆ Control Room · ${p.name}${p.isModified ? ' (edited)' : ''} · ${runLabelOf(rt)}`
   return [head, ...lines.map(([label, value]) => `${label.padEnd(17)}${value}`)].join('\n')

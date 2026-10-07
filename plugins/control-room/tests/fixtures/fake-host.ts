@@ -29,6 +29,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     registeredTools: [] as string[],
     /** Keep warm's forks, by the time they went out. */
     forks: [] as number[],
+    /** `git status` runs. */
+    gitRuns: 0,
     /** `$.state`'s autopilot record: kept across a new Runtime (a reload), as the engine keeps it. */
     autopilotRecord: null as import('../../types').AutopilotRecord | null,
   }
@@ -39,6 +41,9 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     tools: ['Bash', 'Read', 'Edit', 'Write'] as string[],
     /** What a fork reads from the cache: the whole prompt by default (a hit). */
     forkRead: 300_000,
+    /** The repository the session is in (none by default), and what `git status` says there. */
+    repo: null as string | null,
+    gitStatus: '## main...origin/main\n',
   }
   const schedule = (ms: number, fn: () => void, every: number | null) => {
     const t = { id: ++seq, at: time + ms, every, fn, isCancelled: false }
@@ -122,6 +127,11 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
       }
       const g = gen()
       return Object.assign(g, { result: Promise.resolve({ code: 0, signal: null }) }) as SpawnStream
+    },
+    repoRoot: async () => live.repo,
+    gitStatus: async () => {
+      kept.gitRuns += 1
+      return { exitCode: 0, stdout: live.gitStatus, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
     },
     publishHud: async v => void (kept.published.hud = v),
     publishPane: async v => void (kept.published.pane = v),

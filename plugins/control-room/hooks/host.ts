@@ -15,6 +15,7 @@ import type {
   ModelForkResult,
   PaneCloseArgs,
   PaneOpenArgs,
+  ProcessRunResult,
   ProcessSpawnChunk,
   ProcessSpawnResult,
   PromptSubmitResult,
@@ -102,6 +103,10 @@ export type Host = {
   settings(source?: 'policy' | 'user' | 'project' | 'local'): Promise<EngineSettings>
 
   spawn(argv: readonly string[]): SpawnStream
+  /** Whether the session's folder is in a Git repository (its root), else null. */
+  repoRoot(): Promise<string | null>
+  /** `git status --porcelain=v1 --branch` in the session's folder (read-only; Git runs with repo hooks off). */
+  gitStatus(): Promise<ProcessRunResult>
 
   publishHud(value: HudModel): Promise<void>
   publishPane(value: PaneModel): Promise<void>

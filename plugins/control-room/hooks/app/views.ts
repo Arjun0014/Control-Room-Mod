@@ -38,6 +38,7 @@ import { isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
 import { GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
 import { animationOf, moodOf } from '../features/companion'
+import { gitLine } from '../features/git'
 import { ACHIEVEMENTS, levelOf, runQuestOf } from '../features/quest'
 import { type ValidationSummary, summarize } from '../features/validation'
 import { answerStyleLabel } from '../core/answers'
@@ -258,6 +259,7 @@ export function hudOf(rt: Runtime): HudModel {
     objective: rt.run?.objective ?? null,
     isAnimated: !s.ui.reducedMotion,
     companion: companionOf(rt, now, validation),
+    git: rt.git === null ? null : gitLine(rt.git),
   }
 }
 

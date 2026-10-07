@@ -146,6 +146,8 @@ export type HudModel = {
   isAnimated: boolean
   /** The companion's animation for what Claude is doing now; null while it is off. */
   companion: CompanionView | null
+  /** The project's Git state in a line ("main · 3 uncommitted"), read in the terminal only; null elsewhere or outside a repository. */
+  git: string | null
 }
 
 /**

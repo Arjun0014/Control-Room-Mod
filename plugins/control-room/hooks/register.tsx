@@ -102,6 +102,8 @@ function hostOf($: EngineInterface): Host {
 
     settings: source => $.settings.read(source === undefined ? undefined : { source }),
     spawn: argv => $.process.spawn({ argv }),
+    repoRoot: () => $.session.repo().then(r => r?.root ?? null),
+    gitStatus: () => $.process.run(['git', 'status', '--porcelain=v1', '--branch', '--untracked-files=normal'], { timeoutMs: 10_000 }),
 
     publishHud: v => $.state.set(HUD, v).then(() => undefined),
     publishPane: v => $.state.set(PANE, v).then(() => undefined),

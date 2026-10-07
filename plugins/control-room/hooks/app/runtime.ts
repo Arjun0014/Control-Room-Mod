@@ -34,6 +34,7 @@ import { versionAtLeast } from '../core/version'
 import { ActivityTracker } from '../features/activity'
 import * as Autopilot from '../features/autopilot'
 import * as Chain from '../features/chain'
+import { type GitState, parseStatus } from '../features/git'
 import * as Handoff from '../features/handoff'
 import * as Plan from '../features/plan'
 import * as Quest from '../features/quest'
@@ -148,6 +149,13 @@ export class Runtime {
 
   /** The prompt cache: telemetry, the miss doctor, Keep warm and stable policies. */
   readonly cache: CacheGuardian
+  /** The project's Git state, for the terminal (Desktop shows Git itself); null outside a repository or before the first look. */
+  git: GitState | null = null
+  /** The repository root, once looked up (null: not a repository). */
+  private gitRoot: string | null | undefined = undefined
+  private gitCheckedAt = 0
+  private isGitRefreshing = false
+
   /** When this context began (system clock): the companion wakes up with it. */
   contextStartedAt: number | null = null
   /** Why the companion's surface module failed to draw, if it did: it is left out until the plugin reloads. */
@@ -342,6 +350,7 @@ export class Runtime {
     this.reconfigure({ isStartup: true })
     await this.recoverAutopilot()
     void this.refreshHistory()
+    void this.refreshGit()
     this.publisher.markAll()
 
     if (this.settings.ui.openOnStart) void host.open({ id: PANE_ID, title: PANE_TITLE }).catch(() => undefined)
@@ -511,6 +520,34 @@ export class Runtime {
     }
     this.turnStartDone = this.progress.done
     this.persistRun()
+  }
+
+  /**
+   * The branch and the uncommitted files, read with one `git status` at the
+   * start and after each turn (at most every 15 s), only where a terminal
+   * draws: Desktop shows Git natively beside the session.
+   */
+  async refreshGit(): Promise<void> {
+    const host = this.host
+    if (host === null || !this.surfaces.includes('terminal') || this.isGitRefreshing) return
+    const now = Date.now()
+    if (now - this.gitCheckedAt < 15_000) return
+    this.isGitRefreshing = true
+    this.gitCheckedAt = now
+    try {
+      if (this.gitRoot === undefined) this.gitRoot = await host.repoRoot().catch(() => null)
+      if (this.gitRoot === null) return
+      const result = await host.gitStatus()
+      const next = result.exitCode === 0 ? parseStatus(result.stdout) : null
+      if (JSON.stringify(next) !== JSON.stringify(this.git)) {
+        this.git = next
+        this.publisher.mark('hud')
+      }
+    } catch {
+      // Git missing or slow: the line is left out.
+    } finally {
+      this.isGitRefreshing = false
+    }
   }
 
   async refreshHistory(): Promise<void> {
@@ -1116,6 +1153,7 @@ export class Runtime {
     }
     this.cache.turnEnded(this.clock())
     this.checkContinuity()
+    void this.refreshGit()
     this.persistRun()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain')
   }

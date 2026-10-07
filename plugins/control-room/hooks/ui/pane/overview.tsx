@@ -89,6 +89,7 @@ function runHeader(kit: Kit, data: PaneData): RenderElement {
         <Text bold dimColor={run === null ? true : undefined}>{`${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`}</Text>
       </Box>
       {hud.objective === null && under === '' ? null : pair(kit, { key: 'run-under', left: hud.objective ?? '', right: under === '' ? undefined : under })}
+      {hud.git === null || kit.surface !== 'terminal' ? null : pair(kit, { key: 'run-git', left: `Git   ${hud.git}` })}
     </Box>
   )
 }

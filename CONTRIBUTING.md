@@ -76,9 +76,12 @@ assuming one.
 Unit tests don't paint. Before a release:
 
 - Run the plugin in a real terminal at a few widths (80, 120, 150+ columns). Look at the status bar
-  and every panel section, and use them with the mouse and the keyboard.
-- Run one Autopilot chain end to end, ideally in the Desktop host protocol (stream-json). A low
-  threshold with a cheap model is enough: `/cr autopilot 45k`, then a small multi-step task.
+  and every panel section, and use them with the mouse and the keyboard. On Windows,
+  [`tools/console`](tools/console/README.md) runs a session in a console of a given size and reads
+  the screen back as text.
+- Run one Autopilot chain end to end, both in the interactive terminal and in the Desktop host
+  protocol (stream-json): they order the `/clear` differently. A low threshold with a cheap model
+  is enough: `/cr autopilot 45k`, then a small multi-step task.
 - On macOS and Linux, turn machine load on and confirm `/cr status` shows live CPU and memory.
 
 ## Releases

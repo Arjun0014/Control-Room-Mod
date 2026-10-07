@@ -338,7 +338,8 @@ suites. Claude Code writes the engine's type declarations into
 `plugins/control-room/.claude-plugin/types/` whenever a session loads the folder. Load it once
 (`claude --plugin-dir plugins/control-room`, then `/exit`) before running `tsc`. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the rules the code follows and [docs/DESIGN.md](docs/DESIGN.md)
-for the design system.
+for the design system. On Windows, [tools/console](tools/console/README.md) runs a session in a
+real console of a given width and reads the screen back, for checking the terminal UI.
 
 This repository is a Claude Code plugin marketplace (`.claude-plugin/marketplace.json`). It has
 not been submitted to any public directory.

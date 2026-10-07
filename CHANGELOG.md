@@ -8,6 +8,11 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-07
+
+The first stable release. It finishes the 0.2 redesign after a live pass in a real terminal, and
+fixes Autopilot's handoff in the interactive terminal.
+
 ### Changed
 
 - **Status bar: live readings only.** Context, cost, CPU and memory (with recent history in wide
@@ -37,7 +42,6 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
   `Hand off at  70% › 75%`). The field for saving a profile reads "Type a name".
 - The status bar's sparklines appear once there are six readings, so the bar does not shift with
   each new sample. Guardrails' sparklines grow from the right.
-
 - A handoff that waits for you because you chose *Wait for me* reads calm (the accent color), not
   red. Red is kept for a handoff that went wrong (no notes, clearing refused).
 - Notifications, Autopilot notices and `/cr` replies use the panel's words: "Autopilot on. Hands
@@ -60,6 +64,21 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 - `/control-room`'s description listed the sections of 0.1.
 - At a very low handoff point, the status bar's ten-cell meter drew its tick over its only filled
   cell, hiding that the context was past it. A reading past the tick now always shows beyond it.
+
+### Added
+
+- The manifest and the marketplace entry link to the repository (`homepage`, `repository`).
+- The README covers the one-line install from inside a session and how to get updates.
+
+### Verified
+
+- `tsc`, `claude plugin validate --strict` (plugin and marketplace) and 127 tests in
+  `claude plugin test`, on Claude Code 2.1.292 and 2.1.289.
+- A live pass in a real Windows terminal (Claude Code 2.1.292) at 150, 120, 100 and 80 columns,
+  docked and above the prompt: the status bar, every panel section, the pickers, profiles, and
+  keyboard focus.
+- The full Autopilot chain in the interactive terminal, twice: the mid-turn notice, the handoff
+  notes, *Wait for me*, then *Start fresh*, the seeded fresh context and the continuation.
 
 ## [0.2.0] - 2026-10-07
 

@@ -8,25 +8,33 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
 
 ## State at handoff
 
-- Version **0.2.0** plus a large `Unreleased` section in `CHANGELOG.md` (not tagged or bumped).
-- Commits this session, on top of `06ef243`:
-  - `54f4156` polish from a live terminal pass: compact Overview readouts, no repeated card titles,
-    80-column centred pages, the gauge bug fix;
-  - `2b45cdd` Autopilot in the interactive terminal waits for the fresh session (a real bug);
-    calmer "Wait for me" state; the panel's words in toasts, notices and `/cr` replies;
-  - `f0ce05f` a segmented choice stays beside its label whenever the text fits;
-  - `1d2a6a1` a shorter pending line in the status bar;
-  - `46d4ad2` `tools/console`, the Windows console driver;
-  - then a meter fix (a reading past the tick always shows) and these notes.
+- **1.0.0 is released** (2026-10-07). The version is raised in `plugin.json`, the marketplace
+  entry and `VERSION` in `hooks/constants.ts`. The notes sit under `[1.0.0]` in `CHANGELOG.md`, and
+  `Unreleased` is empty. The tag `control-room--v1.0.0` is pushed.
+- The manifest and the marketplace entry carry `homepage` and `repository`. The README has the
+  one-line install from inside a session and an Update section.
 - `npm run check` passes: `tsc`, `validate --strict` for the plugin and the marketplace, and
-  **127 tests**. The suite and `tsc` also pass on the **2.1.289** engine. To repeat that, copy
+  **127 tests**. The suite also passes on the **2.1.289** engine. To repeat that, copy
   `plugins/control-room` to a scratch folder, run
   `%APPDATA%\Claude\claude-code\2.1.289\<hash>\claude.exe plugin test <copy>`, start one 2.1.289
   session on the copy (it writes the 2.1.289 types), then run `tsc -p <copy>`.
 - The user installed the plugin from this folder (`control-room@control-room`, user scope). Their
   sessions read it straight from here and pick up changes with `/reload-plugins`.
 
-## Verified live this session (terminal, 2.1.292, Windows conhost)
+## How to release
+
+1. Raise the version in `plugins/control-room/.claude-plugin/plugin.json`,
+   `.claude-plugin/marketplace.json` and `VERSION` in `hooks/constants.ts`. They must match.
+2. Move the `Unreleased` notes under the new version in `CHANGELOG.md`.
+3. Run `npm run check`, then commit and push.
+4. Run `claude plugin tag plugins/control-room --push`. It checks that the versions agree and
+   pushes `control-room--v<version>`.
+
+People who installed from GitHub get a release only when the version changes, with
+`claude plugin update control-room@control-room` or auto-update (off by default for a marketplace
+they add themselves).
+
+## Verified live in the 1.0.0 pass (terminal, 2.1.292, Windows conhost)
 
 - At 150, 120, 100 and 80 columns, docked (fullscreen, 110 columns and up) and in the frame above
   the prompt:
@@ -42,23 +50,25 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
   - Start fresh runs `/clear`, the fresh context is seeded, and the continuation runs.
   - Before `2b45cdd` the terminal recorded the handoff as "cleared". After it: "handed off",
     "1 handoff", "continuation (session 3)".
+- The user looked at the panel and approved it before 1.0.0.
 
 ## Needs the user (ask; don't guess)
 
-1. **Desktop screenshots.** Claude cannot see the Desktop window. Ask for screenshots of the panel
-   at a narrow and a wide width, after `/reload-plugins`. Worth looking at:
-   - Overview: the new readout block, the untitled Profile card, the cards;
-   - Behavior with the guard on: the stacked Strictness;
-   - Context with Autopilot on;
-   - Setup's changes list;
-   - the section accents.
-   Desktop rendering of `field` (a 10-cell label column) and of rows is unverified.
-2. **Release?** `Unreleased` holds the 0.2.x redesign follow-ups and the terminal Autopilot fix.
-   People who installed from GitHub get the fix only with a version bump. Releasing means:
-   - bump `plugin.json`, `.claude-plugin/marketplace.json` and `VERSION` in `hooks/constants.ts`;
-   - move the notes under the new version;
-   - run `claude plugin tag plugins/control-room`.
-   Ask before tagging, and ask which number (0.3.0 fits).
+1. **Anthropic's directory (optional).** Anyone can already install from the GitHub marketplace.
+   Listing on Anthropic's directory as well puts it in claude.ai's plugin catalog, in
+   `/plugin directory`, and in the `claude-community` marketplace. Only the user can submit:
+   - they need a paid claude.ai plan and submit at claude.ai/directory/manage
+     (*Submit new › Plugin bundle*, repository `Arjun0014/Control-Room-Mod`, plugin folder
+     `plugins/control-room`), then select **Validate** before submitting;
+   - `claude-plugins-official` takes no submissions, except through an Anthropic partner contact;
+   - the directory lists a mod for Claude Code only;
+   - what the checklist looks at: a README of 40 or more words in the plugin folder (it has
+     about 100), a license (`license` is set), files under 256 KiB, no `.DS_Store` or `Thumbs.db`;
+   - the security scan looks for behavior the README doesn't disclose. SECURITY.md and the README
+     already say what Control Room runs (process sampling, the guard's optional model check,
+     permission decisions). A reviewer may still hold it.
+2. **Desktop polish.** If the user reports anything on Desktop, ask for screenshots at a narrow
+   and a wide width after `/reload-plugins`. Claude cannot see the Desktop window.
 
 ## User preferences (durable)
 
@@ -126,6 +136,7 @@ $0.60). Keep them few.
 
 ## Open items / ideas
 
-- Desktop polish from the user's screenshots (above).
+- Listing on Anthropic's directory, if the user wants it (above).
+- Desktop polish, if the user reports anything (above).
 - macOS and Linux sampling is still unverified live (only Windows here).
 - Possibly persist the Autopilot state across reloads, if the reload edge case ever matters.

@@ -10,8 +10,8 @@ Desktop's Code tab. One plugin gives you:
 - policies for effort, finishing the job, models, subagents, machine load and risky actions
 - **profiles** that set everything at once
 
-> **Status: 0.2.0, early access.** Control Room is built on Claude Code's function-hooks plugin
-> API ("mods"), which is itself early access and may change between releases. It is verified on
+> **Status: 1.0.0.** Control Room is built on Claude Code's function-hooks plugin API ("mods"),
+> which is still early access and may change between Claude Code releases. It is verified on
 > Claude Code **2.1.289** (the engine bundled with Claude Desktop) and **2.1.292** (CLI) on
 > Windows 11. See [Compatibility](#compatibility).
 
@@ -136,9 +136,23 @@ claude plugin marketplace add Arjun0014/Control-Room-Mod
 claude plugin install control-room@control-room
 ```
 
+Or do both from inside a session (Claude Code 2.1.275 or newer):
+`/plugin install control-room --marketplace Arjun0014/Control-Room-Mod`.
+
 A local clone works too: `claude plugin marketplace add /path/to/Control-Room-Mod`. An installed
 folder marketplace is read straight from the folder, so after you pull changes, run
 `/reload-plugins` in a session.
+
+### Update
+
+Each release raises the version, and Claude Code installs it when you ask:
+
+```bash
+claude plugin update control-room@control-room
+```
+
+To get releases automatically, open **Marketplaces** in `/plugin`, select `control-room` and
+choose **Enable auto-update**. It is off by default for marketplaces you add yourself.
 
 ### Try it for one session
 

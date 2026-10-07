@@ -5,8 +5,9 @@ This page records the decisions behind the UI, so later changes keep it that way
 
 ## Principles
 
-1. **Calm by default.** Show what is happening, not every switch. In the status bar an off system
-   takes no room; color appears only when something needs a look.
+1. **Calm by default.** Show what is happening, not every switch. The status bar carries live
+   readings and events only; settings live in the panel. Color appears only when something needs a
+   look.
 2. **Plain words.** "Hands off at 70%", "Watching for early stops", "Memory 91%". No internal
    names, codes or all-caps labels in the UI. The same helpers (`app/views.ts`) give the status
    bar, the panel, the status line and `/cr status` one voice.
@@ -26,15 +27,22 @@ This page records the decisions behind the UI, so later changes keep it that way
 | Level | Terminal | Use |
 | --- | --- | --- |
 | Title | bold | the panel's name |
-| Section | dim, bold, small caps | `SYSTEMS`, `PERMISSIONS` |
+| Card title | bold small caps in the section's accent | `PERMISSIONS`, `AUTOPILOT` |
 | Value | default color | what a row says or is set to |
 | Secondary | dim | details, footnotes, units |
-| Accent | Claude orange | the brand mark, the current section, a threshold tick |
+| Brand | Claude orange | the brand mark, a threshold tick |
+| Section accent | one theme key per section (`ui/theme.ts` `ACCENT`) | that section's card titles and its tab underline, nothing else |
 | Status | green, amber, red | only state that needs a look |
 
-A section is its title, its rows, and at most a short footnote. Sections are separated by one
-blank line. Rows use a label column of about 38% of the width (never more than half), so values
-line up down the page. A detail sits beside its control when the line holds it, else under it.
+A page is a stack of cards. A card is a small-caps title (with an optional aside or *Open ›* link),
+a rounded box of rows, and at most a short footnote under it. A row reads like a settings list:
+the label, with a one-line dim description under it, on the left; the control on the right edge,
+at every width. A control wider than about half the row (a segmented choice) moves under the
+label. On Desktop rows are spaced so native buttons never touch.
+
+Section accents: Overview orange (`claude`), Context blue (`ide`), Behavior purple (`autoAccept`),
+Guardrails teal (`planMode`), Activity periwinkle (`suggestion`), Setup gray (`inactive`).
+Overview repeats them on its per-section cards, so color tells you where a setting lives.
 
 ## Components (`hooks/ui/primitives.tsx`)
 
@@ -47,9 +55,11 @@ line up down the page. A detail sits beside its control when the line holds it, 
 | `link` | `No limit ›`, goes to the section that owns it | native button | native button |
 | `meterBar` | thin line `━━━━──┃──` with the threshold tick | SVG bar | SVG bar |
 | `spark` | `▁▂▄▆█` | SVG area chart with a dashed ceiling | SVG |
-| `navBar` | labels with an accent underline under the current one | native buttons, current one primary | native buttons |
+| `navBar` | labels with the section's accent underline under the current one | native buttons in an even grid (one row when wide, three per row when narrow) | same as Desktop |
 | `callout` | rounded border in the status color, title, line, actions | same, drawn natively | same |
-| `section`, `row`, `stat`, `pair`, `listItem`, `note` | layout | layout | layout |
+| `gauge` | label and %, line meter with ceiling tick, sparkline | label and %, SVG bar | SVG bar |
+| `steps` | numbered lines in the accent | same | same |
+| `card`, `row`, `stat`, `pair`, `listItem`, `note` | layout | layout | layout |
 
 Every control has a stable `key`. A picker's options are keyed `<picker>:<value>`, a stepper's
 buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every surface.
@@ -57,23 +67,22 @@ buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every sur
 ## The status bar
 
 ```
-◆   Context ━━━━━━──── 31%   $4.18   Frontier Max   Hands off at 70%   Memory 79%        Control Room
+◆   Context ━━━━━━──── 69%   $78.35   CPU ▂▃▅▃ 23%   RAM ▇▇▇▇ 79%   2 agents        Control Room
 ```
 
-Items, from most to least important:
+Live readings and events only, from most to least important:
 
 1. The brand mark.
 2. Context, with a meter from 76 columns.
-3. Cost.
-4. Frontier Max or a non-default profile.
-5. The Autopilot's state.
-6. Machine load, only near a ceiling.
-7. Running agents.
-8. Guard activity.
-9. The session number once a run has handed off.
+3. Events as they happen: an Autopilot handoff in progress, or waiting for you.
+4. Cost.
+5. CPU and RAM. They have a short history from 110 columns, are amber near a ceiling and red at it.
+6. Running agents, and the guard keeping Claude going.
+7. The run total once a run spans sessions.
 
-Items drop from the least important end as the width shrinks. A second line appears only for a
-handoff that is about to happen, a handoff waiting for you, or a machine under heavy load.
+Settings (Frontier Max, a profile, the handoff threshold) are never shown here. Items drop from
+the least important end as the width shrinks. A second line appears only for a handoff about to
+happen, a handoff waiting for you, or a machine under heavy load.
 
 ## Copy
 

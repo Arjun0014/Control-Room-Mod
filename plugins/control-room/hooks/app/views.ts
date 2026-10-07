@@ -37,6 +37,7 @@ import type { ActivityItem, FileChange } from '../features/activity'
 import { isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
 import { GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
+import { animationOf, moodOf } from '../features/companion'
 import { ACHIEVEMENTS, levelOf, runQuestOf } from '../features/quest'
 import { type ValidationSummary, summarize } from '../features/validation'
 import { answerStyleLabel } from '../core/answers'
@@ -256,7 +257,38 @@ export function hudOf(rt: Runtime): HudModel {
     cache: rt.cache.hud(rt.clock()),
     objective: rt.run?.objective ?? null,
     isAnimated: !s.ui.reducedMotion,
+    companion: companionOf(rt, now, validation),
   }
+}
+
+/** Kit's mood from what Claude is doing, and the animation for it; null while the companion is off or has failed to draw. */
+function companionOf(rt: Runtime, now: number, validation: readonly ValidationSummary[]): HudModel['companion'] {
+  const s = rt.settings
+  if (!s.ui.companion || rt.companionFault !== null) return null
+  const turn = rt.activity.turn
+  const thisTurn = rt.activity.validationRuns().filter(r => r.turn === turn.index)
+  const p = rt.progress
+  const threshold = s.autopilot.enabled ? rt.autopilot.threshold : null
+  const window = rt.usage.window ?? null
+  const ref = threshold ?? (window === null ? null : window * 0.9)
+  const load = liveLoadOf(rt)
+  const mood = moodOf({
+    now,
+    isWorking: rt.turn.isRunning,
+    source: rt.turn.isRunning ? (nowLine(rt)?.source ?? 'thinking') : null,
+    toolKind: rt.activity.runningItems().find(i => i.agentId === null)?.kind ?? null,
+    isCheckRunning: validation.some(v => v.status === 'running'),
+    isFailing: validation.some(v => v.isFailing) || barAttentionOf(rt, now) > 0,
+    autopilotState: s.autopilot.enabled ? rt.autopilot.state : 'off',
+    isGreen: (thisTurn.length > 0 && thisTurn.every(r => r.status === 'passed')) || (p.total > 0 && p.done === p.total && p.done > rt.turnStartDone),
+    turnEndedAt: turn.endedAt,
+    hasTurned: turn.index > 0,
+    contextStartedAt: rt.contextStartedAt,
+    contextShare: ref === null || rt.usage.tokens === undefined ? null : rt.usage.tokens / ref,
+    isKeepingWarm: s.cache.keepWarm && rt.cache.plan.at !== null,
+  })
+  const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'warn' || load.ramTone === 'bad')
+  return animationOf(mood, { isReduced: s.ui.reducedMotion, isBusy })
 }
 
 /**

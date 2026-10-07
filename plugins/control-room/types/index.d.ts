@@ -144,6 +144,23 @@ export type HudModel = {
   objective: string | null
   /** Whether Desktop may animate (the current milestone's pulse); off under reduced motion. */
   isAnimated: boolean
+  /** The companion's animation for what Claude is doing now; null while it is off. */
+  companion: CompanionView | null
+}
+
+/**
+ * Kit, the optional pixel fox: one mood's frames (4 rows of palette letters,
+ * '.' see-through, facing right), its palette, its pace, the glyphs beside
+ * its head, and what it is doing in words.
+ */
+export type CompanionView = {
+  mood: string
+  frames: string[][]
+  palette: Record<string, string>
+  fps: number
+  walk: 'none' | 'slow' | 'normal' | 'fast'
+  bubbles: { text: string; color: string }[]
+  caption: string
 }
 
 export type CacheWarmth = 'none' | 'warm' | 'cold' | 'unknown'

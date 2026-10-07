@@ -108,6 +108,18 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
             control: switchControl(k, { key: 'ui-toasts', isOn: s.ui.toasts, onPress: () => u(d => void (d.ui.toasts = !d.ui.toasts)) }),
           }),
           row(k, {
+            key: 'ui-companion',
+            label: 'Companion',
+            subtitle: s.ui.companion ? 'Kit, a small fox, shows what Claude is doing; click it to open Control Room' : 'A small pixel fox on the status bar that shows what Claude is doing',
+            control: switchControl(k, { key: 'ui-companion', isOn: s.ui.companion, onPress: () => u(d => void (d.ui.companion = !d.ui.companion)) }),
+          }),
+          row(k, {
+            key: 'ui-motion',
+            label: 'Reduce motion',
+            subtitle: 'Still drawings instead of animation',
+            control: switchControl(k, { key: 'ui-motion', isOn: s.ui.reducedMotion, onPress: () => u(d => void (d.ui.reducedMotion = !d.ui.reducedMotion)) }),
+          }),
+          row(k, {
             key: 'ui-open',
             label: 'Open at start',
             subtitle: kit.surface === 'terminal' ? 'In terminals 144 columns or wider' : 'Open Control Room with each session',

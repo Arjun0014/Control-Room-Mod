@@ -9,7 +9,7 @@
  */
 
 import { atom, read } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, RenderSurface } from 'claude-code'
 
 import { PANE_ID } from './constants'
 import { POLICY_SECTION_ID } from './core/policy'
@@ -315,6 +315,23 @@ export const register: Register = on => {
     next.called ? next(e) : { text: 'Control Room could not complete that command (details in the debug log: claude --debug).' },
   )
 
+  // A click on Kit opens (or closes) Control Room.
+  on('ui.message', async ($, e, next) => {
+    const answer = await next(e)
+    if (e.element === 'companion' && isRecord(e.data) && e.data.open === true) void rt.togglePane()
+    return answer
+  }).catch(($, e, next) => next(e))
+
+  // Kit's module failed on this surface: leave it out from now on, so the status bar draws without it.
+  on('ui.fault', async ($, e, next) => {
+    const answer = await next(e)
+    if (e.element === 'companion') {
+      rt.companionFault = e.reason.slice(0, 160)
+      rt.publisher.mark('hud')
+    }
+    return answer
+  }).catch(($, e, next) => next(e))
+
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
     const answer = await next(e)
     if (answer.deny === undefined) {
@@ -332,7 +349,13 @@ export const register: Register = on => {
     const hud = await read($, hudAtom)
     if (!hud.isVisible) return next(e)
     const below = await next(e)
-    const own = hudView(kitOf($.ui.resolve(e), e.props.bodyColumns, e.surface), hud)
+    // Kit, the companion, walks on a row of its own: in the terminal a surface module plays it on its own clock.
+    let stage: RenderElement | null = null
+    if (hud.companion !== null && e.surface === 'terminal') {
+      const { Client } = $.ui.resolve(e)
+      stage = <Client key="companion" module="./ui/companion.client.tsx" props={hud.companion} height={2} flexGrow={1} />
+    }
+    const own = hudView(kitOf($.ui.resolve(e), e.props.bodyColumns, e.surface), hud, stage)
     if (below.type === 'engine') return own
     const { Box } = $.ui.resolve(e)
     return (

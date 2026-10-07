@@ -29,6 +29,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { HudActivity, HudModel, Tone } from '../../types'
 import * as fmt from '../core/format'
+import { type CompanionAnimation, svgCompanion } from '../features/companion'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
 import { CHECK_DOT, G, type Stop, clockGlyph, meterCells, svgBar, svgClock, svgRing, svgTrack, toneProps, trackStops } from './theme'
@@ -433,13 +434,39 @@ function lifecyclesLine(kit: Kit, hud: HudModel): RenderElement {
   )
 }
 
-export function hudView(kit: Kit, hud: HudModel): RenderElement {
+/**
+ * Kit's row, only while the companion is on: the terminal's surface module
+ * (made by the hooks module, which alone may name it), or an SVG that
+ * animates itself on Desktop.
+ */
+function stageRow(kit: Kit, hud: HudModel, stage: RenderElement | null): RenderElement | null {
+  const { Box, Svg } = kit.ui
+  const companion = hud.companion
+  if (companion === null) return null
+  if (kit.surface === 'terminal') {
+    return stage === null ? null : (
+      <Box key="hud-stage" flexDirection="row" marginLeft={INDENT} height={2}>
+        {stage}
+      </Box>
+    )
+  }
+  if (Svg === undefined) return null
+  const width = Math.min(560, Math.max(120, kit.columns * 7))
+  return (
+    <Box key="hud-stage" flexDirection="row" marginLeft={INDENT}>
+      <Svg key="companion" source={svgCompanion(companion as CompanionAnimation, width)} alt={companion.caption} height={18} isInteractive={companion.fps > 0 ? true : undefined} />
+    </Box>
+  )
+}
+
+export function hudView(kit: Kit, hud: HudModel, stage: RenderElement | null = null): RenderElement {
   const { Box } = kit.ui
   return (
     <Box flexDirection="column" rowGap={isNative(kit) && hud.alert !== null ? 1 : 0}>
       {hud.alert === null ? null : alertLine(kit, hud.alert)}
       {topLine(kit, hud)}
       {lifecyclesLine(kit, hud)}
+      {stageRow(kit, hud, stage)}
     </Box>
   )
 }

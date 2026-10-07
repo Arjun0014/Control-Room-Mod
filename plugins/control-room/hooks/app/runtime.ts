@@ -148,6 +148,12 @@ export class Runtime {
 
   /** The prompt cache: telemetry, the miss doctor, Keep warm and stable policies. */
   readonly cache: CacheGuardian
+  /** When this context began (system clock): the companion wakes up with it. */
+  contextStartedAt: number | null = null
+  /** Why the companion's surface module failed to draw, if it did: it is left out until the plugin reloads. */
+  companionFault: string | null = null
+  /** While the companion is on, its mood moves on with time (sleepy, asleep): one republish a minute. */
+  private companionTicker: { cancel: () => void } | null = null
   /** What the last settings change was, in words, for a policy-caused cache miss. */
   private policyReason: string | null = null
 
@@ -314,6 +320,7 @@ export class Runtime {
     ])
     this.root = root
     this.sessionId = id
+    this.contextStartedAt = Date.now()
     this.engineVersion = version?.version ?? null
     this.surfaces = [...surfaces]
     this.sessionModel = model
@@ -552,6 +559,7 @@ export class Runtime {
     this.usage = { tokens: undefined, window: this.usage.window, pct: undefined, costUsd: 0 }
     this.cache.resetForContext()
     this.reads = []
+    this.contextStartedAt = Date.now()
     if (wasOurs && this.run !== null) {
       const h = this.run.lastHandoff
       const index = Chain.currentSession(this.run)?.index ?? 1
@@ -589,6 +597,8 @@ export class Runtime {
     this.monitor.stop()
     this.agents.poll?.cancel()
     this.cache.stop()
+    this.companionTicker?.cancel()
+    this.companionTicker = null
     if (this.run !== null) {
       const now = Date.now()
       const end: Chain.SessionEnd = e.reason === 'resume' ? 'resume' : e.reason === 'logout' ? 'logout' : e.reason === 'prompt_input_exit' ? 'exit' : 'other'
@@ -1494,6 +1504,12 @@ export class Runtime {
     const before = input.before
     this.configureAutopilot()
     if (!this.turn.isRunning) this.cache.schedule()
+    if (host !== null && this.settings.ui.companion && this.companionTicker === null) {
+      this.companionTicker = host.every(60_000, () => this.publisher.mark('hud'))
+    } else if (!this.settings.ui.companion && this.companionTicker !== null) {
+      this.companionTicker.cancel()
+      this.companionTicker = null
+    }
     if (host !== null) {
       const ceilings = this.effective.resources.ceilings
       const isLiveWanted = this.settings.ui.liveLoad && this.settings.ui.hud !== 'off'

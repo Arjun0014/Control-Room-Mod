@@ -784,6 +784,75 @@ describe('ui', () => {
     expect(saved(w).cache.keepWarm).toBe(true)
   })
 
+  test('Kit, the companion: off by default; on, it walks its own row on its own clock, and a click opens Control Room', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await boot($, w)
+    const off = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    expect(await off.find({ type: 'Client' })).toBeUndefined()
+    await off.unmount()
+    expect((await $.command.run({ command: 'cr', args: 'companion on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })).text).toContain('Kit')
+    await w.clock.advance(300)
+
+    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    const client = await band.find({ type: 'Client' })
+    expect(String(client?.props.module)).toContain('companion.client.tsx')
+    expect((client?.props.props as { mood: string }).mood).toBe('wake')
+    await band.resize({ columns: 100, rows: 2 })
+    await band.advance(1000)
+    const drawn = textOf(await band.drawn({ in: 'companion' }))
+    expect(drawn).toMatch(/[▀▄█]/)
+    // It walks: a few seconds later the fox stands somewhere else on its row.
+    const where = async () => {
+      let left = -1
+      each(await band.drawn({ in: 'companion' }), n => {
+        if (left < 0 && n.type === 'Box' && typeof n.props?.marginLeft === 'number' && textOf(n).match(/[▀▄█]/)) left = n.props.marginLeft
+      })
+      return left
+    }
+    // Claude starts work on a milestone: Kit trots along its row.
+    await $.turn.start({ text: 'Build the parser.', turnId: 't1' })
+    await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
+    await w.clock.advance(300)
+    await band.redraw()
+    expect(((await band.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('work')
+    const before = await where()
+    await band.advance(8000)
+    expect(await where()).not.toBe(before)
+    // A click on Kit opens Control Room.
+    await band.pointer({ type: 'down', x: 1, y: 0, button: 'left' })
+    await w.clock.advance(300)
+    expect(w.kept.opened).toContain('control-room')
+    await band.unmount()
+
+    // Desktop: an SVG that animates itself; reduced motion holds it still.
+    const kitSvg = async (ui: { drawn: () => Promise<unknown> }) => {
+      let found: Node | undefined
+      each(await ui.drawn(), n => void (n.type === 'Svg' && String(n.props?.alt).includes('Kit') ? (found = n) : undefined))
+      return found
+    }
+    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const svg = await kitSvg(desktop)
+    expect(String(svg?.props?.alt)).toContain('Kit')
+    expect(svg?.props?.isInteractive).toBe(true)
+    await desktop.unmount()
+    await $.command.run({ command: 'cr', args: 'motion off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+    await w.clock.advance(300)
+    const still = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const held = await kitSvg(still)
+    expect(held).toBeDefined()
+    expect(String(held?.props?.source)).not.toContain('<animate')
+    await still.unmount()
+    // Setup carries both switches.
+    const pane = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    await pane.press({ key: 'tab-setup' })
+    await w.clock.advance(300)
+    await pane.press({ key: 'ui-companion' })
+    await w.clock.advance(2000)
+    expect(saved(w).ui).toMatchObject({ companion: false, reducedMotion: true })
+  })
+
   test('on Desktop no text of the panel or the status bar trips the app’s monospace rule', async ($, on) => {
     on('tool.call', { tool: 'Write' }, ($, e) => ({ result: { type: 'create', filePath: e.file_path, content: 'a\nb\n', structuredPatch: [], originalFile: null } }))
     on('tool.call', { tool: 'Edit' }, ($, e) => ({ result: { filePath: e.file_path, structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: ['-a', '+b', '+c'] }] } }))

@@ -31,6 +31,7 @@ const HELP = [
   '  /cr cache                 the prompt cache: lifetime, Keep warm, recent rebuilds',
   '  /cr cache keep on|off · idle 2h · stable on|off · guard on|off',
   '  /cr hud band|status|both|off',
+  '  /cr companion on|off      Kit, a small fox on the status bar · /cr motion on|off',
   '  /cr reset confirm         back to Normal (custom profiles are kept)',
 ].join('\n')
 
@@ -254,6 +255,18 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       })
       const name = what === 'stable' || what === 'policies' ? 'Keep policies stable' : what === 'guard' || what === 'switch' ? 'Ask before a model switch' : 'Keep warm'
       return { text: `${name} ${toggle ? 'on' : 'off'}.${name === 'Keep warm' && toggle ? ` It refreshes the cache before it lapses while you are away, for up to ${fmt.minutes(rt.settings.cache.maxIdleMinutes)}, and checks that it worked.` : ''}` }
+    }
+    case 'companion':
+    case 'kit':
+    case 'motion': {
+      const toggle = onOff(a1)
+      if (toggle === null) return { text: `Usage: /cr ${verb} on|off` }
+      rt.update(s => {
+        if (verb === 'motion') s.ui.reducedMotion = !toggle
+        else s.ui.companion = toggle
+      })
+      if (verb === 'motion') return { text: toggle ? 'Animation on.' : 'Reduced motion: still drawings instead of animation.' }
+      return { text: toggle ? 'Companion on: Kit, a small fox, walks the status bar and shows what Claude is doing. Click it to open Control Room.' : 'Companion off.' }
     }
     case 'hud': {
       const valid = ['band', 'status', 'both', 'off']

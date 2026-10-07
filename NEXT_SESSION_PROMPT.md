@@ -8,98 +8,126 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
 
 ## State at handoff
 
-- Version 0.2.0. Last commits:
-  - `b184c4c` 0.1.0
-  - `4ffa1e6` redesign and stuck-dropdown fix
-  - `23905e3` live status bar, cards and settings-list rows
-- This handoff's DESIGN.md update and these notes are committed after `23905e3`.
-- `npm run check` passes: `tsc`, `validate --strict` for the plugin and the marketplace, and 118
-  tests. The 2.1.289 type-check also passes. Its tsconfig lives in the old session's scratchpad.
+- Version **0.2.0** plus a large `Unreleased` section in `CHANGELOG.md` (not tagged or bumped).
+- Commits this session, on top of `06ef243`:
+  - `54f4156` polish from a live terminal pass: compact Overview readouts, no repeated card titles,
+    80-column centred pages, the gauge bug fix;
+  - `2b45cdd` Autopilot in the interactive terminal waits for the fresh session (a real bug);
+    calmer "Wait for me" state; the panel's words in toasts, notices and `/cr` replies;
+  - `f0ce05f` a segmented choice stays beside its label whenever the text fits;
+  - `1d2a6a1` a shorter pending line in the status bar;
+  - `46d4ad2` `tools/console`, the Windows console driver;
+  - then these notes.
+- `npm run check` passes: `tsc`, `validate --strict` for the plugin and the marketplace, and
+  **126 tests**. The suite and `tsc` also pass on the **2.1.289** engine. To repeat that, copy
+  `plugins/control-room` to a scratch folder, run
+  `%APPDATA%\Claude\claude-code\2.1.289\<hash>\claude.exe plugin test <copy>`, start one 2.1.289
+  session on the copy (it writes the 2.1.289 types), then run `tsc -p <copy>`.
 - The user installed the plugin from this folder (`control-room@control-room`, user scope). Their
-  sessions read it straight from here. They run `/reload-plugins` to pick up changes.
+  sessions read it straight from here and pick up changes with `/reload-plugins`.
 
-## Not verified yet (do this first)
+## Verified live this session (terminal, 2.1.292, Windows conhost)
 
-The last UI pass (`23905e3`) passes tests but has **not been looked at** in a real terminal or in
-Desktop. Earlier passes were checked live; this one was written right before the handoff.
+- At 150, 120, 100 and 80 columns, docked (fullscreen, 110 columns and up) and in the frame above
+  the prompt:
+  - the status bar, with sparklines once there are six readings;
+  - every panel section;
+  - in-place pickers;
+  - saving and deleting a profile;
+  - Tab order and the focus ring, Enter and Esc.
+- The full Autopilot chain, twice:
+  - a mid-turn crossing shows "Handoff soon" in the status bar, a second line with Hand off now
+    and Later, and the amber callout;
+  - the handoff notes are written, then *Wait for me* waits ("Waiting for you", calm accent);
+  - Start fresh runs `/clear`, the fresh context is seeded, and the continuation runs.
+  - Before `2b45cdd` the terminal recorded the handoff as "cleared". After it: "handed off",
+    "1 handoff", "continuation (session 3)".
 
-1. **Terminal.** Drive a real console and read its screen. See "How to see the terminal UI".
-   Check at 150 and 100 columns, with the panel docked and inline:
-   - the status bar shows live CPU and RAM, with sparklines from 110 columns;
-   - Overview's color-coded cards;
-   - Context's numbered steps;
-   - Behavior's per-system cards;
-   - the Guardrails gauges;
-   - Setup's profile rows, which show "✓ In use" or "Use".
-   Watch for:
-   - rounded card borders eating width;
-   - stacked segmented controls;
-   - right-aligned controls;
-   - picker options opening under rows inside a card.
-2. **Desktop.** Claude cannot view or control the Claude Desktop window, so ask the user for
-   screenshots at a narrow and a wide panel width. Their feedback on 0.2.0 (fixed in `23905e3`,
-   unconfirmed):
-   - the tab buttons wrapped unevenly and touched each other; they are now an even grid;
-   - toggle rows misaligned, with details wrapping under the buttons; rows are now label and
-     description left, control right;
-   - Context was hard to read; it now opens with three numbered steps and cards;
-   - Behavior was cramped; each system now has its own card;
-   - they wanted live CPU/RAM in the status bar and no settings there; done.
+## Needs the user (ask; don't guess)
 
-   The user also allowed per-section accent colors "done properly, not rainbow". They are now one
-   theme key per section, used only on card titles and the tab underline. Ask how it looks.
+1. **Desktop screenshots.** Claude cannot see the Desktop window. Ask for screenshots of the panel
+   at a narrow and a wide width, after `/reload-plugins`. Worth looking at:
+   - Overview: the new readout block, the untitled Profile card, the cards;
+   - Behavior with the guard on: the stacked Strictness;
+   - Context with Autopilot on;
+   - Setup's changes list;
+   - the section accents.
+   Desktop rendering of `field` (a 10-cell label column) and of rows is unverified.
+2. **Release?** `Unreleased` holds the 0.2.x redesign follow-ups and the terminal Autopilot fix.
+   People who installed from GitHub get the fix only with a version bump. Releasing means:
+   - bump `plugin.json`, `.claude-plugin/marketplace.json` and `VERSION` in `hooks/constants.ts`;
+   - move the notes under the new version;
+   - run `claude plugin tag plugins/control-room`.
+   Ask before tagging, and ask which number (0.3.0 fits).
 
 ## User preferences (durable)
 
 - **The bar:** Apple-level polish, calm and uncluttered, easy to tell apart, for both CLI and
   Desktop. They review screenshots closely.
 - **Git:** commit and push without asking, as Arjun0014, with **no Git popup**. The remote URL
-  includes the username (`https://Arjun0014@github.com/...`), so Git Credential Manager picks the
-  stored account silently. Push with `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git push origin main`.
+  includes the username, so Git Credential Manager picks the stored account silently. Push with
+  `GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 git push origin main`.
 - **Commit attribution:** end commit messages with
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Browsing:** use the gstack `/browse` skill for web browsing. Never use the claude-in-chrome tools.
 
-## How to see the terminal UI (method; the scripts lived in the old scratchpad)
+## How to see the terminal UI
 
-The Terminal panel tool cannot start a shell, because the user's PowerShell profile fails to load
-the Claude terminal integration. Instead:
+Use `tools/console/console.ps1` (see its README):
 
-1. **Launch.** Start `conhost.exe cmd.exe /c "mode con: cols=150 lines=48 & claude --plugin-dir
-   "C:\Web UI\Control Room Mod\plugins\control-room""`. Use the trusted, empty folder
-   `C:\Web UI\test`; this repo's folder shows the trust dialog, which you must not accept.
-2. **Read the screen.** From a helper PowerShell script, call `FreeConsole` and
-   `AttachConsole(<cmd pid>)`, then `ReadConsoleOutputCharacterW` and `ReadConsoleOutputAttribute`.
-   Attribute `0x4000` is the focus ring.
-3. **Type and press keys.** Use `WriteConsoleInputW` key events: `/cr` then Enter, digits, Tab, Esc.
-4. **Click with the mouse.** Type the SGR sequence `ESC[<0;col;rowM` then `ESC[<0;col;rowm`
-   (1-based). This is how the stuck terminal-dropdown bug was found.
-5. **Hot reload.** A `--plugin-dir` session reloads on save. If a reload fails mid-edit, `touch` a
-   file to reload again. The transcript shows "control-room: reloaded" or "reload failed".
-6. **Gotchas:** never name a script `con.ps1` (`CON` is a reserved device name). Exit with `/exit`.
+1. `launch -Dir 'C:\Web UI\test' -Cols 150 -Lines 48`. That folder is trusted and empty. This
+   repo's folder shows a trust dialog, which you must not accept.
+2. `send -Spec 'text:/cr|enter'`, then `read` (`-Attrs` shows the focus ring as `#`).
+3. Clicks are 1-based `click:<col>,<row>`. The docked panel starts at column 84 at 150 columns.
+   Its tabs are on row 4 at columns 89, 99, 109, 120, 134 and 144.
+4. After live tests:
+   - `/exit` the sessions;
+   - move `~/.claude/plugins/store/control-room_inline-*.json` aside (never touch
+     `control-room_control-room-*.json`, which is the user's);
+   - empty `C:\Web UI\test` again, since test turns write `NEXT_SESSION_PROMPT.md` there.
+
+A test prompt costs real usage (one short turn on Opus at about 50k context is about $0.25 to
+$0.60). Keep them few.
 
 ## Engine facts learned (keep)
 
-- **Terminal `Select`:** a click opens it, but its options cannot be clicked and it cannot be
-  closed with the pointer (keyboard works). So the terminal uses in-place pickers instead.
-- **`turn.step` model:** it rejects bare aliases (`haiku` fails the turn). The router only routes
-  the main conversation to model ids seen answering in this session; subagents take aliases.
+- **`$.command.run('clear')` resolution order differs by surface.**
+  - Interactive terminal: it resolves *before* the reset (`session.end`, then
+    `classic.SessionStart{clear}`).
+  - Desktop host protocol: it resolves after the reset.
+  - `runClear` therefore waits for the fresh session.
+- **Drawn trees and keys.** `drawn()` trees keep `key` on Boxes and Buttons but drop it on Texts.
+  Tests find titles and labels through their Box (`card-*-head`, `row-*`).
+- **Inputs.** A terminal `Input` keeps its props until it remounts, so a changed placeholder shows
+  only after the panel reopens.
+- **Toasts.** The engine heads every toast with the plugin's name, so texts carry no prefix.
+- **The band's `[-]`.** It is the engine's collapse mark, not Control Room's.
+- **Console size.** `mode con` inside `cmd /c "mode … & claude"` did not take. The tool opens
+  `cmd /k mode …` and types the command. A running session cannot be resized.
+- **Terminal `Select`.** A click opens it, but its options cannot be picked or closed with the
+  pointer, so the terminal uses in-place pickers.
+- **`turn.step` model.** It rejects bare aliases. The main conversation routes only to model ids
+  seen answering in this session.
 - **Desktop rendering:**
   - Box `borderStyle`, `rowGap` and percentage widths are drawn;
-  - plain Buttons still render as native pills;
+  - plain Buttons render as native pills;
   - `Select` is a native dropdown;
-  - `Svg` renders well (meters).
-- **Plugin store:** `~/.claude/plugins/store/`. The installed copy uses
-  `control-room_control-room-*.json`, which is the user's own; don't touch it. `--plugin-dir`
-  test runs use `control-room_inline-*.json`; move it aside after live tests.
-- **Install tests:** test marketplace installs in a throwaway `CLAUDE_CONFIG_DIR` so the user's
-  config is never touched.
+  - `Svg` renders well.
+- **Plugin store.** `~/.claude/plugins/store/`. Test marketplace installs in a throwaway
+  `CLAUDE_CONFIG_DIR`.
 
-## Open items / ideas (not started)
+## Known edge cases (not fixed; small)
 
-- Confirm `23905e3` visually in the terminal and on Desktop, then polish from what you see.
-- `docs/CONFIGURATION.md` does not yet document `ui.liveLoad`, or `resources.intervalSec`'s new
-  default of 3 s. README and SECURITY are updated.
-- Possibly add a test that `/cr hud status` text contains CPU/RAM when the sampler is live.
-  The test world has an unknown platform, so no sampler runs there.
-- macOS and Linux sampling is still unverified live. Desktop visuals depend on user screenshots.
+- **Reload mid-handoff.** A hot reload or `/reload-plugins` in the middle of a handoff starts a
+  fresh runtime. The handoff state is lost, and if the context is still past the threshold, a
+  second handoff turn starts. The Autopilot state lives in module memory on purpose.
+- **Low thresholds.** At a very low threshold (for example 60k of 1M), the status bar's 10-cell
+  meter draws the tick over its only filled cell.
+- **Two sessions, one store.** Two live sessions keep separate in-memory settings and the last
+  save wins. This is documented as global settings.
+
+## Open items / ideas
+
+- Desktop polish from the user's screenshots (above).
+- macOS and Linux sampling is still unverified live (only Windows here).
+- Possibly persist the Autopilot state across reloads, if the reload edge case ever matters.

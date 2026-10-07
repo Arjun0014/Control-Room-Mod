@@ -58,6 +58,8 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 - In a narrow status bar, the panel button read "Open" while the panel was open. After a hot reload
   Control Room also forgot that the panel was open.
 - `/control-room`'s description listed the sections of 0.1.
+- At a very low handoff point, the status bar's ten-cell meter drew its tick over its only filled
+  cell, hiding that the context was past it. A reading past the tick now always shows beyond it.
 
 ## [0.2.0] - 2026-10-07
 

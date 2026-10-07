@@ -251,7 +251,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (125 tests, run on both 2.1.292 and 2.1.289):
+* `claude plugin test` (127 tests, run on both 2.1.292 and 2.1.289):
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity),
   a Runtime suite over an in-memory host with a manual clock, and

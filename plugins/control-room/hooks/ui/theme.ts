@@ -86,13 +86,20 @@ export function sparkline(values: readonly number[], width: number): string {
   return v.map(n => G.spark[Math.min(7, Math.max(0, Math.floor((Math.max(0, Math.min(100, n)) / 100) * 7.999)))]).join('')
 }
 
-/** The cells of a line meter: how many are filled, and where the marker sits (or -1). */
+/**
+ * The cells of a line meter: how many are filled, and where the marker sits
+ * (or -1). A reading past the marker always shows at least one filled cell
+ * beyond it, so a coarse meter never hides "past the threshold" under the
+ * tick (60k of a 1M window in ten cells).
+ */
 export function meterCells(fraction: number, width: number, markerAt?: number | null): { filled: number; marker: number; width: number } {
   const w = Math.max(3, Math.floor(width))
   const f = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 0
+  const hasMarker = markerAt !== undefined && markerAt !== null && Number.isFinite(markerAt)
+  const marker = hasMarker ? Math.min(w - 1, Math.max(0, Math.round(markerAt * w) - 1)) : -1
   const filled = Math.round(f * w)
-  const marker = markerAt === undefined || markerAt === null || !Number.isFinite(markerAt) ? -1 : Math.min(w - 1, Math.max(0, Math.round(markerAt * w) - 1))
-  return { filled, marker, width: w }
+  const isPast = hasMarker && f > markerAt
+  return { filled: isPast ? Math.min(w, Math.max(filled, marker + 2)) : filled, marker, width: w }
 }
 
 /** The same meter as one plain string ("━━━━──┃──"), for the status line and tests. */

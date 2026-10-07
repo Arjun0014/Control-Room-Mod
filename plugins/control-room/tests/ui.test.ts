@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import type { Settings } from '../hooks/core/settings'
 import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
+import { meter } from '../hooks/ui/theme'
 import { SESSION, world } from './fixtures/world'
 
 const ENGINE_ROW = { type: 'Text' as const, props: {}, children: ['ENGINE ROW'] }
@@ -78,6 +79,15 @@ async function boot($: Engine, w: ReturnType<typeof world>) {
 const saved = (w: ReturnType<typeof world>) => w.store['settings.v1'] as Settings
 
 describe('ui', () => {
+  test('a coarse meter never hides a reading past its threshold under the tick', () => {
+    // 88k of a 1M window, handing off at 60k, in the status bar's ten cells.
+    expect(meter(0.088, 10, 0.06)).toBe('┃━────────')
+    expect(meter(0.03, 10, 0.06)).toBe('┃─────────')
+    expect(meter(0.69, 10, 0.7)).toBe('━━━━━━┃───')
+    expect(meter(1, 10, 0.7)).toBe('━━━━━━┃━━━')
+    expect(meter(0.5, 10)).toBe('━━━━━─────')
+  })
+
   test('the HUD band draws its vital signs on terminal and desktop at every width', async ($, on) => {
     const w = world(on, { tokens: 684_000 })
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))

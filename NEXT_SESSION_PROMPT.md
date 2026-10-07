@@ -17,9 +17,9 @@ github.com/Arjun0014/Control-Room-Mod (`main`). Read `README.md`, `docs/DESIGN.m
   - `f0ce05f` a segmented choice stays beside its label whenever the text fits;
   - `1d2a6a1` a shorter pending line in the status bar;
   - `46d4ad2` `tools/console`, the Windows console driver;
-  - then these notes.
+  - then a meter fix (a reading past the tick always shows) and these notes.
 - `npm run check` passes: `tsc`, `validate --strict` for the plugin and the marketplace, and
-  **126 tests**. The suite and `tsc` also pass on the **2.1.289** engine. To repeat that, copy
+  **127 tests**. The suite and `tsc` also pass on the **2.1.289** engine. To repeat that, copy
   `plugins/control-room` to a scratch folder, run
   `%APPDATA%\Claude\claude-code\2.1.289\<hash>\claude.exe plugin test <copy>`, start one 2.1.289
   session on the copy (it writes the 2.1.289 types), then run `tsc -p <copy>`.
@@ -121,8 +121,6 @@ $0.60). Keep them few.
 - **Reload mid-handoff.** A hot reload or `/reload-plugins` in the middle of a handoff starts a
   fresh runtime. The handoff state is lost, and if the context is still past the threshold, a
   second handoff turn starts. The Autopilot state lives in module memory on purpose.
-- **Low thresholds.** At a very low threshold (for example 60k of 1M), the status bar's 10-cell
-  meter draws the tick over its only filled cell.
 - **Two sessions, one store.** Two live sessions keep separate in-memory settings and the last
   save wins. This is documented as global settings.
 

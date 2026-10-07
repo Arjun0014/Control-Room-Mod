@@ -28,6 +28,13 @@ const withStyle = (style: Settings['answers']['style']): Settings => {
 }
 
 describe('answer styles', () => {
+  test('every option reads whole in a docked pane: a short label and a hint of at most 37 characters', () => {
+    for (const style of ANSWER_STYLES) {
+      expect(ANSWER_STYLE_INFO[style].label.length, style).toBeLessThanOrEqual(16)
+      expect(ANSWER_STYLE_INFO[style].hint.length, style).toBeLessThanOrEqual(37)
+    }
+  })
+
   test('each style but Standard puts its own rules in front of Claude, for its messages only', () => {
     expect(answerStylePolicy('standard')).toBeNull()
     for (const style of ANSWER_STYLES.filter(s => s !== 'standard')) {

@@ -62,7 +62,8 @@ Tests live in `plugins/control-room/tests/` and run with `claude plugin test`:
 
 - **Pure logic:** settings, profiles, permissions classifier, guard heuristics, Autopilot reducer
   (and its recovery after a reload), router, chain, run plan, validation and Activity's signal
-  (`signal.test.ts`), activity, resource parsers.
+  (`signal.test.ts`), activity, resource parsers, answer styles (`answers.test.ts`) and the Quest
+  log (`quest.test.ts`).
 - **Runtime:** `runtime.test.ts`, with the in-memory host in `tests/fixtures/fake-host.ts` (a manual
   clock and recorded effects).
 - **Engine-driven:** `register.test.ts` and `ui.test.ts`, using the real engine with the world
@@ -88,7 +89,9 @@ Unit tests don't paint. Before a release:
 - Run the plugin in a real terminal at a few widths (80, 120, 150+ columns). Look at the status bar
   and every panel section, and use them with the mouse and the keyboard. On Windows,
   [`tools/console`](tools/console/README.md) runs a session in a console of a given size and reads
-  the screen back as text.
+  the screen back as text. [`tools/demo`](tools/demo/README.md) plays a scripted turn of real tool
+  calls without a model, so the status bar's top line, This turn and the Quest log have something
+  to show.
 - Run one Autopilot chain end to end, both in the interactive terminal and in the Desktop host
   protocol (stream-json): they order the `/clear` differently. A low threshold with a cheap model
   is enough: `/cr autopilot 45k`, then a small multi-step task.

@@ -8,6 +8,54 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-07
+
+A two-line status bar that says what is happening, graphics in the panel, and new ways for Claude
+to write to you: brief, Simplified Technical English, mission-control calls, or a quest log that
+pays XP only for progress Control Room can count.
+
+### Added
+
+- **Answer styles** (Behavior → Answer style, `/cr style`): Standard; Brief (bottom line first);
+  Plain technical (Simplified Technical English, after the writing rules of ASD-STE100; it does
+  not check the STE dictionary); Mission control (GO, NO-GO and HOLD calls, GO only for what was
+  verified); Quest log. They govern Claude's messages only, never code, files or commit messages.
+  A Claude Code output style you chose outranks them, and Behavior reads *Paused*.
+- **Quest log:** XP only for outcomes Control Room counts (a milestone done, once per run; a
+  check's first pass in a turn, or passing again after failing; a finished plan of three or
+  more; a handoff with verified notes), never for lines, files or tool calls. Levels,
+  achievements, a Quest card in Activity and the level in the status bar. Claude is told never to
+  state points itself.
+- **Graphics in the panel**, as SVG on Desktop and glyphs in the terminal: the turn's time strip
+  by kind of work (read, edit, run, check, web, agent) with a legend; peak context per session
+  against the handoff line in Context; each check's runs as dots; diffstat squares per file.
+- The milestones tool takes the objective in Claude's own words.
+- **Development: the demo driver plays a real turn.** `/demo` submits a request and answers each
+  model step from a script, so Claude Code runs every tool call inside a genuine turn, without a
+  model or a login: the status bar's top line, This turn and the Quest log can be captured.
+  `/demo calls` keeps the old replay outside a turn; `/demo slow` paces the turn.
+
+### Changed
+
+- **The status bar has two layers.** On top: what Claude is doing, where the milestone under way
+  sits ("Milestone 2 of 5", or its name when the line names a call instead), and how long a slow
+  call has run; after a turn, what it did in counted words. Below: the readings, each with a name
+  and a graphic (Context, Work, Checks, a busy machine, the level, the run's cost).
+- **The readings take the richest form that fits.** Names (Context, Work, Checks, Run) show from
+  100 columns in the terminal and 70 on Desktop; below that the meters stand alone, then check
+  names go, then the meters shorten, and only then do the least important readings drop. Docked
+  beside the panel, checks keep their names (`✓ Tests ✗ Lint`).
+- A failing check is no longer counted again as an issue: Checks already shows it, by name.
+- Changes: the diffstat squares and the `+n −n` figures use the panel's green and red.
+
+### Fixed
+
+- **Desktop: rows drawn in a monospace face.** The app draws a text with spaced-out runs of blanks
+  as a table; rows now separate their parts with " · " on Desktop.
+- Attention read "all clear" while a call was still running; it says "still running".
+- A running call's glyph looked like a truncation ("…") on Desktop.
+- After a reload, This turn counted the run's earlier milestones as finished in it.
+
 ## [1.0.2] - 2026-10-07
 
 A public-release polish pass: the status bar and Activity now show how far the run is and what

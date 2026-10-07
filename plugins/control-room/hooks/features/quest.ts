@@ -28,11 +28,12 @@ export const ACHIEVEMENTS: readonly { id: AchievementId; name: string; hint: str
   { id: 'long-haul', name: 'Long haul', hint: 'Ten milestones done in one run' },
 ]
 
-const UNLOCKED_BY: Partial<Record<QuestEventKind, AchievementId>> = {
-  green: 'first-green',
-  comeback: 'comeback',
-  fullClear: 'full-clear',
-  handoff: 'clean-handoff',
+/** What an event unlocks the first time: a comeback is a check passing too. */
+const UNLOCKED_BY: Partial<Record<QuestEventKind, readonly AchievementId[]>> = {
+  green: ['first-green'],
+  comeback: ['comeback', 'first-green'],
+  fullClear: ['full-clear'],
+  handoff: ['clean-handoff'],
 }
 
 export type QuestAward = { at: number; xp: number; text: string }
@@ -68,8 +69,8 @@ export function award(state: QuestState, event: { kind: QuestEventKind; text: st
     unlocked: { ...state.unlocked },
     recent: [{ at: now, xp, text: clean(event.text, 90) }, ...state.recent].slice(0, RECENT_MAX),
   }
-  const id = UNLOCKED_BY[event.kind]
-  if (id !== undefined && next.unlocked[id] === undefined) {
+  for (const id of UNLOCKED_BY[event.kind] ?? []) {
+    if (next.unlocked[id] !== undefined) continue
     next.unlocked[id] = now
     unlocked.push(id)
   }

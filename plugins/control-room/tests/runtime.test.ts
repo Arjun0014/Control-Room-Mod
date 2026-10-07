@@ -259,6 +259,21 @@ describe('runtime', () => {
     expect(kept.commands).toContain('clear')
   })
 
+  test('after a reload, milestones finished earlier are not counted as this turn’s', async () => {
+    const { rt, advance, host } = await started(() => undefined)
+    rt.onTurnStart({ turnId: 't1', text: 'build it' })
+    rt.recordMilestones({ milestones: [{ title: 'A', status: 'completed' }, { title: 'B', status: 'completed' }, { title: 'C', status: 'in_progress' }] }, undefined)
+    expect(Views.activityOf(rt).turnSummary.lines).toContain('Finished 2 milestones')
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
+    await advance(3000)
+    const reloaded = new Runtime()
+    reloaded.bind(host)
+    await reloaded.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await advance(200)
+    expect(reloaded.progress.done).toBe(2)
+    expect(Views.activityOf(reloaded).turnSummary.lines.join(' ')).not.toContain('Finished')
+  })
+
   test('across a fresh context the context meter starts over; work progress and the run cost carry on', async () => {
     const { rt, kept, advance } = await started(() => undefined)
     rt.onPromptSubmit('Rebuild the renderer and keep the tests green.', { kind: 'composer' })

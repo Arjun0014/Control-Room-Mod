@@ -62,7 +62,7 @@ Platform constraints discovered and designed around:
 
 | Surface element | Mechanism | Terminal | Desktop |
 | --- | --- | --- | --- |
-| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status`. Context and work meters as glyphs, SVG on Desktop | ✅ | ✅ |
+| **Status bar** (persistent) | `ui.render` `AbovePrompt` band, yields to surveys; or `$.ui.status`. Two lines: what Claude is doing, then the readings; meters as glyphs, SVG on Desktop | ✅ | ✅ |
 | **Launcher / sidebar** | `Pane` `control-room`: docked beside the transcript in the fullscreen TUI, inline otherwise; placed by Desktop | ✅ | ✅ |
 | **Control Room panel** | the same pane: six sections drawn by the design system (`ui/primitives.tsx`) | ✅ | ✅ (native controls, SVG meters) |
 | Activity line | `Spinner` `message` rewrite while a turn runs | ✅ | ✅ |
@@ -94,6 +94,7 @@ plugins/control-room/
     settings.ts                   schema, defaults, normalisation (clamps, high-risk allow → ask)
     profiles.ts                   built-in + custom profiles, labelled diffs
     policy.ts                     effective() snapshot (the priority system) + system-prompt sections
+    answers.ts                    answer styles in the panel's words: labels, hints, sample lines, notes
     format.ts / text.ts / version.ts
   hooks/features/
     autopilot.ts                  threshold maths + pure state machine (events → model + effects)
@@ -105,7 +106,8 @@ plugins/control-room/
     plan.ts                       the run plan from Claude's task tools (TodoWrite, TaskCreate/Update/List), progress
     validation.ts                 checks recognised by their runner (tests, build, type-check, lint, checks, simulation)
     digest.ts                     signal: change groups, Attention, the turn in counted lines, what Claude is doing now
-    prompts.ts                    every text Control Room gives Claude
+    quest.ts                      Quest log: XP table, levels, achievements, validation of the stored quest
+    prompts.ts                    every text Control Room gives Claude (answer-style policies included)
     permissions/                  shell tokenizer, category classifier, decisions + invariants
     resources/                    samplers + parsers (Windows/macOS/Linux), pressure, heavy commands
   hooks/ui/                       design system (primitives.tsx, theme.ts, kit.ts), status bar (hud.tsx),
@@ -126,7 +128,8 @@ sites redraw. No feature module touches `$`.
 | --- | --- | --- | --- |
 | Settings | `$.store` `settings.v1` (normalised on load) + module memory | everything | active profile, per-system settings, custom profiles |
 | Run / chain | `$.store` `run.v1.<id>` + `runs.index.v1` + `runs.counter.v1` | `/clear`, reload, restart | run id, sessions (ids, times, peak context, cost, turns, model, end reason, transitions); 30 runs × 60 sessions kept |
-| Run plan and objective | inside the run record (`plan`, `objective`) | `/clear`, reload, restart | Claude's milestones as its task tools left them, the person's latest substantial request |
+| Run plan and objective | inside the run record (`plan`, `objective`) | `/clear`, reload, restart | Claude's milestones as its task tools left them; the objective as Claude stated it, else the person's latest substantial request |
+| Quest log | `$.store` `quest.v1`, and the run record's `quest` | everything | lifetime XP, achievements with when each was earned, the last 8 awards; per run, its XP and the milestones already paid for |
 | Handoff in flight | `$.state` `autopilot` (`{ record }`) | hot reload only (gone after restart or `/clear`) | the Autopilot step under way, when it began, retries, a snooze: what a reload needs to carry the handoff on instead of starting a second one |
 | Live session | module memory (`Runtime`) | `/clear` (module stays loaded) | context, cost, autopilot machine, guard counters, activity, changes, resources, agents, learned model ids |
 | View models | `$.state` atoms `hud`, `pane`, `resources`, `chain`, `activity`, `permissions`, `focus`, `spinner` | hot reload (re-published after `/clear`) | render-ready projections only |
@@ -232,6 +235,24 @@ crossing the threshold again never starts a second handoff.
   context records them again. Progress is done of total, never estimated.
   `validation.ts` and `digest.ts` turn the same tool calls into Activity's
   checks, Attention, change groups and the "now" line.
+* **Answer styles** — `answers.style` adds one policy section
+  (`prompts.answerStylePolicy`) to the same `prompt.compose` section as the
+  other policies: Brief, Simplified Technical English (after ASD-STE100's
+  writing rules), Mission control or Quest log, each scoped to Claude's
+  messages, never code, files or commit messages. `prompt.compose` carries
+  the session's Claude Code output style (`e.outputStyle`); when the person
+  chose one, `policySections(…, { nativeOutputStyle })` leaves the answer
+  style out and the panel reads *Paused*. A change mid-session reaches
+  Claude as a hidden note, like the other policies.
+* **Quest log** — only while the style is `quest`. `features/quest.ts` is
+  pure (XP per outcome, levels at 50·n·(n−1), achievements); the Runtime
+  decides when an outcome happened: a milestone newly marked done (paid
+  once per run, keyed by its subject), a whole plan of three or more done,
+  a check's first pass per kind per turn or a pass after a failure
+  (`questForCheck`), and a handoff whose notes were verified. Nothing is
+  paid for activity (lines, files, tool calls) or for Claude's words.
+  Toasts announce achievements and level ups; Activity draws the Quest
+  card and the status bar the level.
 * **Frontier Max** — `prompt.compose` session section (stable text → one
   cache miss per toggle) with automatic `prompt.submit` context fallback;
   `turn.step` effort `max` where the step carries an effort (never invented
@@ -285,7 +306,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (157 tests, run on 2.1.292, and in CI on the latest Claude Code for Linux,
+* `claude plugin test` (175 tests, run on 2.1.292, and in CI on the latest Claude Code for Linux,
   Windows and macOS and on 2.1.289 for Linux):
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity),
@@ -311,9 +332,12 @@ only. Unknown future events/props → passed through untouched.
   crossing, handoff notes, *Wait for me*, Start fresh, continuation.
 * Install from the folder marketplace into an isolated Claude Code config,
   and a session loading the installed copy.
-* The 1.0.2 status bar, Activity and run progress in a real console,
-  driven by `tools/demo` (real tool calls, the `milestones` tool included,
-  no model turn).
-* Not yet done: visual review of 1.0.2 inside the Claude Desktop app
-  (1.0.1 was reviewed from the person's screenshots), the `milestones`
-  tool with a real model, and live sampling on macOS and Linux.
+* The 1.1.0 status bar (both lines, 150 columns and docked at 78), Activity's
+  charts, the answer style picker and the Quest log in a real console, during
+  a turn from `tools/demo`: its `turn.step` hook answers each model step from a
+  script, so Claude Code runs every tool call inside a genuine turn (the
+  `milestones` tool included) without a model or a login.
+* Not yet done: visual review of 1.1.0 inside the Claude Desktop app (1.0.1
+  and 1.0.2 were reviewed from the person's screenshots), the `milestones`
+  tool and the answer styles with a real model, and live sampling on macOS
+  and Linux.

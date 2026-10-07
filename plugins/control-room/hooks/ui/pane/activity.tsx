@@ -202,7 +202,7 @@ function timelineLegend(kit: Kit, timeline: TurnTimelineView): RenderElement {
 }
 
 function turnCard(kit: Kit, view: ActivityView): RenderElement {
-  const { Text } = kit.ui
+  const { Box, Text } = kit.ui
   const t = view.turnSummary
   const time = t.durationMs === null ? null : fmt.duration(t.durationMs)
   const aside = view.turn === 0 ? undefined : t.isRunning ? `Running${time === null ? '' : ` · ${time}`}` : `${time === null ? '' : `${time} · `}${fmt.plural(t.tools, 'tool call')}`
@@ -215,7 +215,13 @@ function turnCard(kit: Kit, view: ActivityView): RenderElement {
     rows: k => [
       ...(timeline === null
         ? []
-        : [timelineStrip(k, { key: 'turn-strip', spans: timeline.spans, from: timeline.from, to: timeline.to, width: k.columns }), timelineLegend(k, timeline)]),
+        : [
+            // The chart and its legend, a blank line apart from the counted lines under them.
+            <Box key="turn-chart" flexDirection="column" marginBottom={t.lines.length === 0 ? 0 : 1}>
+              {timelineStrip(k, { key: 'turn-strip', spans: timeline.spans, from: timeline.from, to: timeline.to, width: k.columns })}
+              {timelineLegend(k, timeline)}
+            </Box>,
+          ]),
       ...(t.lines.length === 0
         ? [emptyState(k, view.turn === 0 ? 'Nothing yet. Claude’s work shows here as it happens.' : 'No tool calls in this turn.', 'turn-empty')]
         : t.lines.map((line, i) => (
@@ -362,7 +368,7 @@ function fileRow(kit: Kit, f: FileChangeView, view: ActivityView, isDim: boolean
         <Box flexShrink={0}>
           <Text>
             {parts.map((p, i) => (
-              <Text key={`file-${f.path}-${i}`} color={p.tone === 'good' ? 'diffAdded' : p.tone === 'bad' ? 'diffRemoved' : undefined} dimColor={p.tone === 'muted' || isDim ? true : undefined}>
+              <Text key={`file-${f.path}-${i}`} color={p.tone === 'good' ? 'success' : p.tone === 'bad' ? 'error' : undefined} dimColor={p.tone === 'muted' || isDim ? true : undefined}>
                 {`${i > 0 ? ' ' : ''}${p.text}`}
               </Text>
             ))}

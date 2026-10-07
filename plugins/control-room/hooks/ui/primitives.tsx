@@ -738,8 +738,8 @@ export function diffSquares(kit: Kit, input: { key: string; added: number; remov
   const c = diffCells(input.added, input.removed)
   return (
     <Text key={input.key}>
-      {c.added > 0 ? <Text color="diffAdded">{G.square.repeat(c.added)}</Text> : null}
-      {c.removed > 0 ? <Text color="diffRemoved">{G.square.repeat(c.removed)}</Text> : null}
+      {c.added > 0 ? <Text color="success">{G.square.repeat(c.added)}</Text> : null}
+      {c.removed > 0 ? <Text color="error">{G.square.repeat(c.removed)}</Text> : null}
       {c.empty > 0 ? <Text dimColor>{G.square.repeat(c.empty)}</Text> : null}
     </Text>
   )

@@ -36,7 +36,7 @@ import { versionAtLeast } from '../core/version'
 import type { ActivityItem, FileChange } from '../features/activity'
 import { isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
-import { type Attention, GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
+import { GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
 import { ACHIEVEMENTS, levelOf, runQuestOf } from '../features/quest'
 import { type ValidationSummary, summarize } from '../features/validation'
 import { answerStyleLabel } from '../core/answers'
@@ -213,8 +213,6 @@ function liveLoadOf(rt: Runtime): HudModel['load'] {
 /** The main conversation's calls in the current (or last) turn, oldest first. */
 const turnItemsOf = (rt: Runtime): ActivityItem[] => rt.activity.items.filter(i => i.turn === rt.activity.turn.index && i.agentId === null)
 
-const attentionNow = (rt: Runtime, now: number): Attention[] => attentionOf(turnItemsOf(rt), now)
-
 const validationNow = (rt: Runtime, now: number): ValidationSummary[] => summarize(rt.activity.validationRuns(), now)
 
 const nowLine = (rt: Runtime) => nowOf({ isTurnRunning: rt.turn.isRunning, running: rt.activity.runningItems(), progress: rt.progress })
@@ -251,11 +249,21 @@ export function hudOf(rt: Runtime): HudModel {
     work: workOf(rt),
     now: nowLine(rt),
     failing: validation.filter(v => v.isFailing).map(v => v.label),
-    attention: attentionNow(rt, now).filter(isOpen).length,
+    attention: barAttentionOf(rt, now),
     activity: hudActivityOf(rt, now),
     checks: validation.map(v => ({ label: v.label, status: v.status })),
     quest: questHudOf(rt),
   }
+}
+
+/**
+ * The status bar's count of calls that need a look. A failing check is left
+ * out: the bar already shows it failing, by name.
+ */
+function barAttentionOf(rt: Runtime, now: number): number {
+  const items = turnItemsOf(rt)
+  const checks = new Set(items.filter(i => i.validation !== null).map(i => i.id))
+  return attentionOf(items, now).filter(a => isOpen(a) && !(a.kind === 'failed' && checks.has(a.id))).length
 }
 
 /** A running call is worth timing in the status bar after this long. */
@@ -291,9 +299,11 @@ function hudActivityOf(rt: Runtime, now: number): HudModel['activity'] {
     attention: attentionOf(items, now),
     milestonesDone: Math.max(0, p.done - rt.turnStartDone),
   })
+  // The changes by count alone ("Changed 4 files"), so the checks after them stay in view.
+  const [first, second] = lines.map((line, i) => (i === 0 && line.startsWith('Changed ') ? (line.split(' · ')[0] ?? line) : line))
   return {
     state: 'done',
-    text: lines.length === 0 ? 'Replied, no tools used' : lines.slice(0, 2).join(' · '),
+    text: first === undefined ? 'Replied, no tools used' : second === undefined ? first : `${first} · ${second}`,
     source: 'summary',
     milestone,
     runningMs: null,

@@ -389,6 +389,8 @@ export class Runtime {
     const existing = await findRunBySession(host, this.sessionId)
     if (existing !== null) {
       this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan) }
+      // Milestones done before this runtime attached are no turn's doing.
+      this.turnStartDone = this.progress.done
       return
     }
     const resumedFrom = this.startSource?.source === 'resume' ? this.startSource.sessionId : null
@@ -406,6 +408,7 @@ export class Runtime {
         now,
       })
     }
+    this.turnStartDone = this.progress.done
     this.persistRun()
   }
 

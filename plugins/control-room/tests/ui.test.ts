@@ -97,10 +97,12 @@ describe('ui', () => {
       for (const columns of [44, 80, 120, 200]) {
         const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'AbovePrompt', props: bandProps(columns), viewport: { columns, rows: 40 } })
         expect(await ui.find({ text: /68%/ }), `${surface} ${columns}`).toBeDefined()
-        expect(await ui.find({ text: /Run/ }), `${surface} ${columns}`).toBeDefined()
+        expect(await ui.find({ text: /\$1\.25/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open' }), `${surface} ${columns}`).toBeDefined()
-        // Labels only where there is room for them.
-        expect((await ui.find({ text: /Context/ })) !== undefined, `${surface} ${columns}`).toBe(columns >= (surface === 'terminal' ? 100 : 70))
+        // Labels only where there is room for them, the run's cost among them.
+        const isLabelled = columns >= (surface === 'terminal' ? 100 : 70)
+        expect((await ui.find({ text: /Context/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
+        expect((await ui.find({ text: /Run/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
         await ui.unmount()
       }
     }
@@ -482,7 +484,9 @@ describe('ui', () => {
     const line = textOf(await wide.drawn())
     // Two layers: what Claude is doing on top, with the milestone it serves; the readings below.
     expect(line).toContain('Running regression tests')
-    expect(line).toContain('C · 3 of 4')
+    // The line names the milestone in its own words, so the right says only where it sits.
+    expect(line).toContain('Milestone 3 of 4')
+    expect(line).not.toContain('C · 3 of 4')
     expect(line.indexOf('Running regression tests')).toBeLessThan(line.indexOf('Context'))
     expect(line).toContain('Context ━')
     expect(line).toContain('Work ■■■□ 2/4')
@@ -526,7 +530,15 @@ describe('ui', () => {
     expect(text).toContain('Checks')
     expect(text).toContain('✓ Tests')
     expect(text).toContain('✗ Lint')
-    expect(text).toContain('▲ 1 issue')
+    // The failing lint is shown once, as a check, not again as an issue.
+    expect(text).not.toContain('issue')
+    await after.unmount()
+    // Docked beside the panel: no labels, but the checks keep their names while they fit.
+    const docked = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(79) })
+    const narrow = textOf(await docked.drawn())
+    expect(narrow).not.toContain('Checks')
+    expect(narrow).toContain('✓ Tests')
+    expect(narrow).toContain('✗ Lint')
   })
 
   test('the spinner carries the activity summary while a turn runs', async ($, on) => {
@@ -556,7 +568,7 @@ describe('ui', () => {
     expect(cards[0]?.title).toBe('ANSWER STYLE')
     await ui.press({ key: 'an-style' })
     await w.clock.advance(300)
-    expect(textOf(await ui.drawn())).toContain('Short, simple sentences (Simplified Technical English)')
+    expect(textOf(await ui.drawn())).toContain('Simplified Technical English')
     await ui.press({ key: 'an-style:mission' })
     await w.clock.advance(2000)
     expect(saved(w).answers.style).toBe('mission')

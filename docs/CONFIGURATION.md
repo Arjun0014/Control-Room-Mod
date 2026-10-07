@@ -116,6 +116,38 @@ and Claude is told; a tool already offered stays until the session ends, and ans
 tracking is off. Progress is milestones done of the total Claude listed, never an estimate, and
 it carries across handoffs.
 
+### Answer style (`answers`)
+
+In the panel: **Behavior → Answer style**.
+
+| Setting | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `style` | `standard` / `brief` / `ste` / `mission` / `quest` | `standard` | How Claude writes its messages to you. `/cr style <name>` |
+
+| Style | In the panel | What Claude is asked to do |
+| --- | --- | --- |
+| `standard` | Standard | Nothing: Claude Code's own way |
+| `brief` | Brief | The bottom line first, then only what you need to act on it. Code, commands, paths and error text stay exact; failures and anything unverified are still said. |
+| `ste` | Plain technical | Simplified Technical English, after the writing rules of ASD-STE100: one instruction per sentence of at most 20 words, descriptions of at most 25, active voice, simple tenses, one word for one meaning. It does not check the STE dictionary. |
+| `mission` | Mission control | A status call first (GO, NO-GO or HOLD, with its reason), a short board of the areas touched, then `NEXT:` with the next action and its owner. GO only for what was verified. |
+| `quest` | Quest log | Short log entries (the step, the obstacle, the outcome) and the next quest step. Control Room keeps the XP, levels and achievements; Claude is told never to state them. |
+
+A style governs Claude's messages only, never code, commands, file contents or commit messages.
+`/cr style` also takes `default`, `short`, `plain` and `game`. The style is part of a profile; the
+built-in profiles use Standard. Changed mid-session, Claude is told at its next request.
+
+When you have chosen one of Claude Code's own output styles (`/config`), that style is in charge:
+Control Room adds no answer-style rules, and Behavior reads *Paused* until you set it back to
+Default.
+
+**Quest log XP.** Only outcomes Control Room counts itself earn XP: a milestone Claude marked done
+(50, once per run), a check's first pass in a turn (10), a check passing again after failing (30),
+every milestone of a plan of three or more done (100), and an Autopilot handoff with verified notes
+(40). Level *n* starts at 50·*n*·(*n*−1) XP: 0, 100, 300, 600, 1,000. Achievements: *First green*,
+*Comeback*, *Full clear*, *Clean handoff*, *Relay* (one run across three contexts) and *Long haul*
+(ten milestones in one run). XP and achievements are kept across sessions in the plugin store
+(`quest.v1`) and are earned only while the Quest log style is chosen.
+
 ### Subagents (`subagents`)
 
 In the panel: **Guardrails**.

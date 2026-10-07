@@ -44,7 +44,7 @@ It reads totals only: no per-process data, no process names, nothing about other
 
 | Change | When |
 | --- | --- |
-| Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release check, machine load, subagent limits or Autopilot are on, or the `milestones` tool is offered ("Run progress": record the run's steps with it) |
+| Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release check, machine load, subagent limits or Autopilot are on, the `milestones` tool is offered ("Run progress": record the run's steps with it), or an answer style other than Standard is chosen (how to write messages to you, never code, files or commit messages; it stands down while you use one of Claude Code's own output styles) |
 | Offer Claude one tool, `milestones` (`mcp__control-room__milestones`, `$.tool.register`). Its answer only records the list in the run plan; it reads and writes nothing else | Only where Claude Code offers no task list of its own (TodoWrite or the Task tools) and Behavior → *Run progress* is on (the default) |
 | Add short hidden notes to the conversation, which Claude reads at its next request | Autopilot pending, resource pressure, or you changed a setting mid-session |
 | Submit prompts in the session: the handoff prompt, one corrective retry, the continuation prompt | Only with the Context Autopilot on, or when you ask for a handoff |
@@ -104,12 +104,17 @@ Claude Code keeps each plugin's store as JSON under `~/.claude/plugins/store/`. 
 - `settings.v1`: your settings and custom profiles.
 - `run.v1.<id>`, `runs.index.v1`, `runs.counter.v1`: run records. Each holds the project root
   path, session ids, start and end times, peak and last context, reported cost, turn counts, model
-  ids, end reasons and transitions, and for run progress the run's objective (the first sentence
-  of your latest substantial request, at most 140 characters) and Claude's task list (subjects and
-  statuses, at most 60). At most 30 runs and 60 sessions per run are kept; older ones are pruned.
+  ids, end reasons and transitions, and for run progress the run's objective (Claude's statement
+  of it through the `milestones` tool, or the first sentence of your latest substantial request; at
+  most 140 characters) and Claude's task list (subjects and statuses, at most 60). With the Quest
+  log style, a run also keeps its XP and the milestones already paid for (their subjects in lower
+  case, at most 200). At most 30 runs and 60 sessions per run are kept; older ones are pruned.
+- `quest.v1`, only once the Quest log style has earned something: the total XP, when each
+  achievement was unlocked, and the last 8 award lines, which may name a milestone ("Milestone:
+  Fix orbitalSpeed") or a kind of check ("Tests pass").
 
-Beyond that objective and the task subjects, no prompt text, answer text, tool input, diff or file
-content is persisted. `/cr reset confirm` clears the settings; uninstalling the plugin removes the
+Beyond that objective, the task subjects and those award lines, no prompt text, answer text, tool
+input, diff or file content is persisted. `/cr reset confirm` clears the settings; uninstalling the plugin removes the
 plugin itself.
 
 ## Reporting a vulnerability

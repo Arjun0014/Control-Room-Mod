@@ -51,6 +51,9 @@ describe('quest log', () => {
     expect(first.state.recent[0]).toEqual({ at: 10, xp: 10, text: 'Tests pass' })
     const again = award(first.state, { kind: 'green', text: 'Lint pass' }, 20)
     expect(again.unlocked).toEqual([])
+    // A comeback is a check passing too: it earns First green when that is still to come.
+    expect(award(emptyQuest(), { kind: 'comeback', text: 'Tests pass again' }, 5).unlocked).toEqual(['comeback', 'first-green'])
+    expect(award(first.state, { kind: 'comeback', text: 'Tests pass again' }, 25).unlocked).toEqual(['comeback'])
     const big = award({ ...again.state, xp: 90 }, { kind: 'milestone', text: 'Milestone: A' }, 30)
     expect(big.levelUp).toBe(2)
     expect(unlockForRun(emptyQuest(), { sessions: 3, milestonesDone: 10 }, 40).unlocked).toEqual(['relay', 'long-haul'])

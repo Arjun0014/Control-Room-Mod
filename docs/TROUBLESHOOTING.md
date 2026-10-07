@@ -53,6 +53,22 @@ anything the engine refused, and why.
   The status bar names them only near a ceiling.
 - **The cost in the status bar is higher than this session's:** it is the whole run's total, which a
   handoff never resets. Each session's own cost is in Context → Run.
+- **The names went from the readings:** below 100 columns (70 on Desktop) the meters stand alone;
+  when a state appears and room runs short, check names go before anything is dropped. Widen the
+  terminal, or close the docked panel, to see them again.
+- **No top line:** it appears with the first turn of a context, so a fresh session or a `/clear`
+  shows the readings alone until Claude starts working.
+
+## Answer styles and the Quest log
+
+- **Claude doesn't write in the chosen style:** one of Claude Code's own output styles (`/config`)
+  is in charge, and Behavior reads *Paused*. Set it back to Default. A change mid-session reaches
+  Claude at its next request.
+- **No XP:** XP is earned only while the Quest log style is chosen, and only for outcomes Control
+  Room can count: a milestone done (Claude must keep a task list), a check passing, a finished plan,
+  a verified handoff. Each milestone pays once per run, and a check's first pass once per turn.
+- **Claude names points or levels:** it is asked not to. The numbers in Activity and the status bar
+  are Control Room's own.
 
 ## Context Autopilot
 

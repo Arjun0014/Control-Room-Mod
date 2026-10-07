@@ -69,7 +69,7 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
         key: 'answers',
         title: 'Answer style',
         accent,
-        aside: native === null && style !== 'standard' ? info.label : undefined,
+        aside: native === null ? undefined : 'Paused',
         footer:
           native !== null
             ? `Claude Code’s own output style, ${native}, is in use and takes precedence. Set it back to Default in Claude Code (/config) to use these.`

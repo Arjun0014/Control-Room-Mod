@@ -55,15 +55,24 @@ const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).
 
 export const widthOf = (s: Segment): number => spanWidth(s.spans) + (s.graphic?.cells ?? 0) + spanWidth(s.after)
 
-/** How much the readings line shows at a width: names, check names, and the cells of each meter. */
+/** How much the readings line shows: names, check names, and the cells of each meter. */
 export type Tier = { labels: boolean; names: boolean; meter: number; squares: number }
 
-export function tierOf(columns: number, surface: Kit['surface'] = 'terminal'): Tier {
-  const wide = surface === 'terminal' ? 100 : 70
-  if (columns >= wide) return { labels: true, names: true, meter: 10, squares: 10 }
-  if (columns >= 80) return { labels: false, names: true, meter: 8, squares: 8 }
-  if (columns >= 60) return { labels: false, names: false, meter: 6, squares: 6 }
-  return { labels: false, names: false, meter: 4, squares: 4 }
+const TIERS: readonly Tier[] = [
+  { labels: true, names: true, meter: 10, squares: 10 },
+  { labels: false, names: true, meter: 8, squares: 8 },
+  { labels: false, names: true, meter: 6, squares: 6 },
+  { labels: false, names: false, meter: 6, squares: 6 },
+  { labels: false, names: false, meter: 4, squares: 4 },
+]
+
+/**
+ * The tiers the readings line may take at a width, richest first: it takes
+ * the first whose segments all fit. Names need a wide bar (100 columns in
+ * the terminal, 70 on Desktop), so they do not come and go as states do.
+ */
+export function tiersOf(columns: number, surface: Kit['surface'] = 'terminal'): readonly Tier[] {
+  return columns >= (surface === 'terminal' ? 100 : 70) ? TIERS : TIERS.slice(1)
 }
 
 function meterSpans(fraction: number, marker: number | null, tone: Tone, width: number): Span[] {
@@ -98,9 +107,8 @@ const EVENT_STATES = new Set(['pending', 'requested', 'handoff', 'verifying', 'c
 
 const CHECK_GLYPH: Record<string, string> = { passed: G.ok, failed: G.fail, running: G.run, blocked: G.stop, background: G.ring, stopped: G.stop }
 
-/** The readings line's segments, in display order, each with its priority for when room runs short. */
-export function hudSegments(hud: HudModel, columns: number, surface: Kit['surface'] = 'terminal'): Segment[] {
-  const tier = tierOf(columns, surface)
+/** The readings line's segments at a tier, in display order, each with its priority for when room runs short. */
+export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] = 'terminal'): Segment[] {
   const isSvg = surface !== 'terminal'
   const label = (text: string): Span[] => (tier.labels ? [{ text: `${text} `, isDim: true }] : [])
   const segments: Segment[] = [{ key: 'brand', priority: 0, side: 'left', spans: [{ text: G.brand, tone: 'accent', isBold: true }] }]
@@ -206,7 +214,8 @@ export function hudSegments(hud: HudModel, columns: number, surface: Kit['surfac
     key: 'cost',
     priority: 2,
     side: 'right',
-    spans: [{ text: 'Run ', isDim: true }, { text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null }],
+    // A dollar figure says what it is by itself; an unknown one ("—") keeps its name.
+    spans: [...(run === null ? [{ text: 'Run ', isDim: true }] : label('Run')), { text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null }],
   })
   return segments
 }
@@ -253,9 +262,14 @@ function segmentEl(kit: Kit, s: Segment): RenderElement {
   )
 }
 
-/** "Fetch E-008 outputs · 2 of 5", or just "2 of 5" when the room is short. */
-function milestoneText(m: NonNullable<HudActivity['milestone']>, room: number): string | null {
+/**
+ * "Fetch E-008 outputs · 2 of 5", or just "2 of 5" when the room is short.
+ * When the line already names the milestone, in its "doing" words, only
+ * where it sits: "Milestone 2 of 5".
+ */
+function milestoneText(m: NonNullable<HudActivity['milestone']>, isNamed: boolean, room: number): string | null {
   const position = `${m.index} of ${m.total}`
+  if (isNamed) return `Milestone ${position}`.length <= room ? `Milestone ${position}` : position.length <= room ? position : null
   const subject = m.subject.length > 40 ? `${m.subject.slice(0, 39)}…` : m.subject
   const full = `${subject} · ${position}`
   if (full.length <= room) return full
@@ -272,7 +286,13 @@ function activityLine(kit: Kit, a: HudActivity): RenderElement {
   const glyphTone: Tone = isWorking ? (a.source === 'thinking' ? 'muted' : 'info') : 'good'
   const left = isWorking && a.runningMs !== null ? `${a.text} · ${fmt.duration(a.runningMs)}` : a.text
   const room = Math.max(0, kit.columns - left.length - 2 - GAP - 8)
-  const right = isWorking ? (a.milestone === null ? null : milestoneText(a.milestone, Math.max(room, 12))) : a.durationMs === null ? null : fmt.duration(a.durationMs)
+  const right = isWorking
+    ? a.milestone === null
+      ? null
+      : milestoneText(a.milestone, a.source === 'plan', Math.max(room, 12))
+    : a.durationMs === null
+      ? null
+      : fmt.duration(a.durationMs)
   return (
     <Box flexDirection="row" key="hud-activity" alignItems="center" columnGap={GAP}>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} {...clip(kit)}>
@@ -334,7 +354,13 @@ function readingsLine(kit: Kit, hud: HudModel): RenderElement {
   // The button opens and closes the panel: its name when there is room, else what a press does.
   const label = kit.columns >= 70 ? 'Control Room' : hud.isPaneOpen ? 'Close' : 'Open'
   const room = Math.max(10, kit.columns - label.length - GAP - (isNative(kit) ? 4 : 0))
-  const kept = fitSegments(hudSegments(hud, kit.columns, kit.surface), room)
+  // The richest tier that shows every reading; failing that, the leanest one, least important readings dropped.
+  let kept: Segment[] = []
+  for (const tier of tiersOf(kit.columns, kit.surface)) {
+    const all = hudSegments(hud, tier, kit.surface)
+    kept = fitSegments(all, room)
+    if (kept.length === all.length) break
+  }
   const left = kept.filter(s => s.side === 'left')
   const right = kept.filter(s => s.side === 'right')
   return (

@@ -28,9 +28,9 @@ const END: Record<string, string> = {
 }
 
 const THEN_HINT: Record<string, string> = {
-  clear: 'Clears the context and carries on with the notes. Nothing is compacted.',
-  compact: 'Compacts the context instead of clearing it.',
-  manual: 'Writes the notes, then waits for you to start the fresh context.',
+  clear: 'Clears the context, then carries on from the notes',
+  compact: 'Compacts the context instead of clearing it',
+  manual: 'Writes the notes, then waits for you',
 }
 
 const stepFor = (tokens: number): number => (tokens >= 1_000_000 ? 100_000 : tokens >= 200_000 ? 50_000 : 10_000)
@@ -127,7 +127,8 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
 
       {card(kit, {
         key: 'ap-how',
-        title: s.enabled ? `When context reaches ${at}` : 'How it works',
+        title: s.enabled ? 'Handoff' : 'How it works',
+        aside: s.enabled ? `at ${at}` : undefined,
         accent,
         rows: k => [
           steps(k, 'ap-steps', ['Claude finishes the step it is on. No new large tasks.', `It writes handoff notes to ${s.handoffFile}.`, thirdStep], accent),

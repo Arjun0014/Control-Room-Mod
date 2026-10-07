@@ -122,7 +122,10 @@ export class Runtime {
   /** What the next plugin-submitted turn is, so turn.start can label it. */
   private expecting: TurnKind | null = null
   private startSource: { source: string; sessionId: string } | null = null
+  /** True from Control Room's own /clear until the fresh session it makes is seen (or the wait ends). */
   private isOwnClear = false
+  /** Resolves when classic.SessionStart{clear} reports the fresh session of Control Room's own /clear. */
+  private onOwnClearSeen: (() => void) | null = null
   private commandsRegistered = new Set<string>()
 
   readonly publisher: Publisher
@@ -304,6 +307,7 @@ export class Runtime {
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
     const wasOurs = this.isOwnClear || this.autopilot.state === 'clearing'
+    if (wasOurs) this.onOwnClearSeen?.()
     if (this.run !== null) {
       this.run = Chain.rollOver(this.run, {
         end: wasOurs ? 'handoff' : 'clear',
@@ -427,7 +431,7 @@ export class Runtime {
         await host.appendForModel(prompts.pendingNotice({ tokens: effect.tokens, threshold: effect.threshold, window: effect.window }))
         return
       case 'notify':
-        if (this.settings.ui.toasts) host.toast(`Control Room: ${effect.text}`, effect.level === 'error' ? 8000 : 5000)
+        if (this.settings.ui.toasts) host.toast(effect.text, effect.level === 'error' ? 8000 : 5000)
         if (effect.level === 'error') this.note(effect.text)
         return
       case 'submitHandoff':
@@ -500,18 +504,45 @@ export class Runtime {
     }
   }
 
+  /**
+   * Control Room's /clear. `$.command.run` resolves when the command has run,
+   * which in the interactive terminal is before the engine has reset the
+   * session; the Desktop host protocol resets first. Either way the fresh
+   * session is waited for, so it is recognised as ours (handoff recorded,
+   * fresh context seeded) and the continuation goes into it, numbered for it.
+   */
   private async runClear(): Promise<void> {
     const host = this.host
     if (host === null) return
+    const before = await host.sessionId().catch(() => null)
+    let isSeen = false
+    const seen = new Promise<void>(resolve => {
+      this.onOwnClearSeen = () => {
+        isSeen = true
+        resolve()
+      }
+    })
     this.isOwnClear = true
+    const settle = () => {
+      this.isOwnClear = false
+      this.onOwnClearSeen = null
+    }
     try {
       await host.runCommand('clear')
-      this.isOwnClear = false
-      this.stepAutopilot({ kind: 'clearDone', now: await host.now() })
     } catch (error) {
-      this.isOwnClear = false
+      settle()
       this.stepAutopilot({ kind: 'clearFailed', error: error instanceof Error ? clean(error.message, 160) : String(error) })
+      return
     }
+    if (!isSeen) await Promise.race([seen, new Promise<void>(resolve => host.after(LIMITS.clearSettleMs, resolve))])
+    settle()
+    // Without the fresh session's start, a new session id still proves the clear happened.
+    const after = isSeen ? null : await host.sessionId().catch(() => null)
+    if (!isSeen && (after === null || after === before)) {
+      this.stepAutopilot({ kind: 'clearFailed', error: 'the context was not cleared' })
+      return
+    }
+    this.stepAutopilot({ kind: 'clearDone', now: await host.now() })
   }
 
   private async runCompact(): Promise<void> {
@@ -737,7 +768,7 @@ export class Runtime {
     this.guard.turnBlocks += 1
     this.guard.sessionBlocks += 1
     this.guard.lastBlockedAnswer = input.lastMessage
-    if (this.settings.ui.toasts) this.host?.toast(`Control Room guard: continuing — ${assessment.reasons[0] ?? 'unfinished work'}`, 4000)
+    if (this.settings.ui.toasts) this.host?.toast(`Kept Claude going: ${assessment.reasons[0] ?? 'unfinished work'}`, 4000)
     return prompts.guardBlock({ reasons: assessment.reasons.slice(0, 3), items: assessment.items, attempt: this.guard.turnBlocks, max: g.maxPerTurn })
   }
 
@@ -966,7 +997,7 @@ export class Runtime {
       this.resourceStats.lastNoticeAt = now
       this.resourceStats.lastNoticeLevel = pressure.level
       this.turn.pressureNoticeSent = true
-      if (this.settings.ui.toasts) host.toast(`Control Room: resource pressure ${pressure.level.toUpperCase()} — Claude was asked to reduce load`, 5000)
+      if (this.settings.ui.toasts) host.toast(`Machine load ${pressure.level}. Claude was asked to ease off`, 5000)
     } else if (isRecovered && this.turn.pressureNoticeSent && this.turn.isRunning) {
       void host.appendForModel(prompts.pressureRecoveredNotice({ cpu: pressure.cpu, ram: pressure.ram }))
       this.turn.pressureNoticeSent = false
@@ -993,7 +1024,7 @@ export class Runtime {
     const profile = findProfile(this.settings, id)
     if (profile === undefined) return false
     this.update(s => applyProfile(s, profile), { isProfile: true })
-    if (this.settings.ui.toasts) this.host?.toast(`Control Room: profile ${profile.name} applied`, 3000)
+    if (this.settings.ui.toasts) this.host?.toast(`Profile ${profile.name} applied`, 3000)
     return true
   }
 

@@ -19,7 +19,7 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 
 | Need | Mechanism | Result |
 | --- | --- | --- |
-| Automatic `/clear` | `$.command.run({ command: 'clear' })` from a `$.clock.after` timer after `turn.complete` | ✅ `session.end{reason:'clear'}` → new session id → `classic.SessionStart{source:'clear'}` → promise resolves. Host stream emits `conversation_reset`. |
+| Automatic `/clear` | `$.command.run({ command: 'clear' })` from a `$.clock.after` timer after `turn.complete` | ✅ Host protocol (Desktop): `session.end{reason:'clear'}` → new session id → `classic.SessionStart{source:'clear'}` → promise resolves; the stream emits `conversation_reset`. ⚠ Interactive terminal: the promise resolves *first* and the reset follows. Control Room therefore waits for `classic.SessionStart{clear}` (up to 15 s, else a changed session id) before it continues. |
 | Inject context into the fresh window | `classic.SessionStart` (source `clear`) answering `additionalContext` | ✅ fresh-context model quoted the injected marker verbatim |
 | Resume autonomously | `$.prompt.submit({ text })` after the clear resolves | ✅ turn starts by itself, framed as "The control-room plugin sent a message" |
 | `$.state` across `/clear` | — | ⚠ **reset** by `/clear` (version back to 0). Module memory survives `/clear`; `$.store` survives everything. |
@@ -164,11 +164,11 @@ The UI's design decisions are recorded in [DESIGN.md](DESIGN.md).
 off ─enable→ armed ─(context ≥ threshold: mid-turn from turn.step usage, or after the turn)→
 pending ─(main turn completes, not aborted)→ requested ─($.prompt.submit handoff prompt)→
 handoff ─(handoff turn completes)→ verifying ─(NEXT_SESSION_PROMPT.md freshly written)→
-clearing ─($.command.run clear → classic.SessionStart{clear} seeds the context)→
+clearing ─($.command.run clear; classic.SessionStart{clear}, before or after it resolves, seeds the context)→
 resuming ─(continuation prompt submitted, turn starts)→ armed (new session, same run)
 
-clearing ✗ (command refused/rejected) → compacting (if allowed) → resuming
-                                      → else awaiting [START FRESH CONTEXT · /cr fresh]
+clearing ✗ (refused, or no fresh session in 15 s) → compacting (if allowed) → resuming
+                                               → else awaiting [Start fresh context · /cr fresh]
 verifying ✗ (file not written)        → one corrective prompt, then awaiting (no clear)
 continuation = manual                 → awaiting after a verified handoff
 aborted by the person                 → stays pending (no auto action) + HUD actions
@@ -251,13 +251,15 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (118 tests): pure-logic suites (settings, profiles,
-  permissions classifier, guard heuristics, resource parsers, Autopilot
-  reducer, router, chain, activity), a Runtime suite over an in-memory host
-  with a manual clock, and engine-driven suites (`$.session.start`,
-  `$.tool.call`, `$.tool.check`, `$.agent.spawn`, `$.classic.Stop`,
-  `$.prompt.compose`, `$.turn.step`, and `$.ui.mount` on `terminal`,
-  `desktop` and `mobile`) with the world answered beneath the mod.
+* `claude plugin test` (125 tests, run on both 2.1.292 and 2.1.289):
+  pure-logic suites (settings, profiles, permissions classifier, guard
+  heuristics, resource parsers, Autopilot reducer, router, chain, activity),
+  a Runtime suite over an in-memory host with a manual clock, and
+  engine-driven suites (`$.session.start`, `$.tool.call`, `$.tool.check`,
+  `$.agent.spawn`, `$.classic.Stop`, `$.prompt.compose`, `$.turn.step`, the
+  Autopilot `/clear` in both orderings, and `$.ui.mount` on `terminal`,
+  `desktop` and `mobile`, including the rule that a row never repeats its
+  card's title) with the world answered beneath the mod.
 * `tsc` against the engine-written declarations of 2.1.292 and 2.1.289.
 * `claude plugin validate --strict` (plugin) and `claude plugin validate .`
   (marketplace).
@@ -265,9 +267,13 @@ only. Unknown future events/props → passed through untouched.
   plugin: the full Autopilot chain on 2.1.292 and 2.1.289; Permission Deny,
   subagent block, Router learning and routing, and the Windows sampler on
   2.1.292; a live resource-pressure notice that Claude acted on (2.1.289).
-* Terminal UI in a real console (Windows conhost, 150 × 46): the HUD and
+* Terminal UI in a real console (Windows conhost at 150, 120 and 100
+  columns, docked and in the frame above the prompt): the status bar and
   every panel section read back from the screen buffer, driven with injected
-  keyboard and mouse input, including hot reload.
+  keyboard and mouse input (Tab order, focus ring, Enter, Esc, in-place
+  pickers, saving and deleting a profile), including hot reload. The full
+  Autopilot chain ran in the interactive terminal on 2.1.292: mid-turn
+  crossing, handoff notes, *Wait for me*, Start fresh, continuation.
 * Install from the folder marketplace into an isolated Claude Code config,
   and a session loading the installed copy.
 * Not yet done: visual review inside the Claude Desktop app (needs the

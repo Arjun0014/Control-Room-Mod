@@ -42,7 +42,7 @@ export function alertCallout(kit: Kit, data: PaneData): RenderElement | null {
   if (alert.kind === 'awaiting') {
     return callout(kit, {
       key: 'alert',
-      tone: 'bad',
+      tone: alert.tone,
       title: 'Waiting for you',
       text: alert.text,
       actions: [

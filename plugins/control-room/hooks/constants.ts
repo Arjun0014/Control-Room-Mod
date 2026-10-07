@@ -50,6 +50,12 @@ export const LIMITS = {
   sampleStaleMs: 30_000,
   /** Delay between the handoff turn ending and the automatic /clear. */
   clearDelayMs: 1200,
+  /**
+   * How long Control Room waits for the fresh session after its /clear
+   * resolves. The interactive terminal finishes the reset after the command
+   * returns; the Desktop host protocol before it.
+   */
+  clearSettleMs: 15_000,
   /** Characters of the person's request and Claude's answer the guard reads. */
   guardTextChars: 6000,
   /** Model classification timeout for the guard and router. */

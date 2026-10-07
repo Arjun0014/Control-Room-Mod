@@ -26,7 +26,7 @@ export function actionsOf(rt: Runtime): Actions {
       const clean = name.trim()
       if (clean === '') return
       rt.update(s => saveCustomProfile(s, clean, Date.now()))
-      rt.host?.toast(`Control Room: saved profile "${clean}"`, 3000)
+      rt.host?.toast(`Profile “${clean}” saved`, 3000)
     },
     deleteProfile: id => rt.update(s => deleteCustomProfile(s, id)),
     handoff: () => rt.requestHandoff(),
@@ -46,7 +46,7 @@ export function actionsOf(rt: Runtime): Actions {
       }),
     resetSettings: () => {
       rt.update(s => ({ ...defaultSettings(), customProfiles: s.customProfiles }))
-      rt.host?.toast('Control Room: settings reset to Normal', 3000)
+      rt.host?.toast('Settings reset to Normal', 3000)
     },
     copy: (text, surface) => void rt.host?.copy(text, surface),
   }

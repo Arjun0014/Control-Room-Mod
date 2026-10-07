@@ -1,7 +1,7 @@
 /**
- * `/control-room [sub-command]` (alias `/cr`): everything the Control Centre
- * does, typeable — handy over Remote Control, in `-p` runs and for muscle
- * memory. With no argument it toggles the Control Centre.
+ * `/control-room [sub-command]` (alias `/cr`): everything the panel does,
+ * typeable — handy over Remote Control, in `-p` runs and for muscle memory.
+ * With no argument it opens or closes the panel. Replies use the panel's words.
  */
 
 import type { CommandRunResult } from 'claude-code'
@@ -44,15 +44,15 @@ export function statusText(rt: Runtime): string {
     ['Cost', `${fmt.cost(hud.cost.usd)} this session${runCost}`],
     ['Autopilot', rt.settings.autopilot.enabled ? `${st.autopilot.text} · ${rt.autopilot.note}` : st.autopilot.text],
     ['Frontier Max', st.frontier.text],
-    ['Guard', st.guard.text],
+    ['Lazy-exit guard', st.guard.text],
     ['Release check', st.qa.text],
-    ['Router', st.router.text],
+    ['Model router', st.router.text],
     ['Subagents', st.subagents.text],
     ['Machine load', st.load.text],
     ['Focus view', st.focus.text],
   ]
   const head = `◆ Control Room · ${p.name}${p.isModified ? ' (edited)' : ''} · ${runLabelOf(rt)}`
-  return [head, ...lines.map(([label, value]) => `${label.padEnd(14)}${value}`)].join('\n')
+  return [head, ...lines.map(([label, value]) => `${label.padEnd(17)}${value}`)].join('\n')
 }
 
 export async function handleCommand(rt: Runtime, args: string): Promise<CommandRunResult> {
@@ -64,7 +64,7 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       const result = await rt.togglePane()
       if (result === 'closed') return { text: 'Control Room closed.' }
       if (result === 'opened') return { text: 'Control Room opened.' }
-      return { text: `${statusText(rt)}\n(The Control Centre pane is not shown on this surface; use the sub-commands, e.g. /cr help.)` }
+      return { text: `${statusText(rt)}\n(The panel is not shown on this surface. Every control is a sub-command: /cr help.)` }
     }
     case 'help':
     case '?':
@@ -93,7 +93,7 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
         rt.update(s => {
           s.autopilot.enabled = toggle
         })
-        return { text: `Context Autopilot ${toggle ? 'on' : 'off'}.` }
+        return { text: `Autopilot ${toggle ? 'on' : 'off'}.` }
       }
       const m = a1 === undefined ? null : /^(\d+(?:\.\d+)?)(%|k|m)?$/.exec(a1)
       if (m === null) return { text: 'Usage: /cr autopilot on|off|70%|700k' }
@@ -108,11 +108,11 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
           s.autopilot.thresholdTokens = m[2] === 'k' ? n * 1000 : m[2] === 'm' ? n * 1_000_000 : n
         }
       })
-      return { text: `Context Autopilot on, threshold ${m[2] === '%' ? `${n}%` : fmt.tokens(rt.settings.autopilot.thresholdTokens)}.` }
+      return { text: `Autopilot on. Hands off at ${m[2] === '%' ? `${rt.settings.autopilot.thresholdPercent}%` : fmt.tokens(rt.settings.autopilot.thresholdTokens)}.` }
     }
     case 'handoff':
       rt.requestHandoff()
-      return { text: 'Handoff requested: Claude will write the handoff notes, then the work continues in a fresh context.' }
+      return { text: 'Handing off: Claude writes the handoff notes, then the work continues in a fresh context.' }
     case 'fresh':
       if (rt.autopilot.state !== 'awaiting') {
         return { text: 'No written handoff is waiting. Run /cr handoff first (it writes the notes, then continues fresh), or /clear to discard this context.' }
@@ -134,7 +134,8 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
         if (verb === 'qa') s.qa.enabled = toggle
         if (verb === 'focus') s.focus.enabled = toggle
       })
-      return { text: `${verb === 'qa' ? 'Release/QA mode' : verb[0]!.toUpperCase() + verb.slice(1)} ${toggle ? 'on' : 'off'}.` }
+      const name = { frontier: 'Frontier Max', guard: 'Lazy-exit guard', qa: 'Release check', focus: 'Focus view' }[verb]
+      return { text: `${name} ${toggle ? 'on' : 'off'}${verb === 'frontier' && toggle ? ', with the lazy-exit guard' : ''}.` }
     }
     case 'resources':
     case 'res': {
@@ -151,7 +152,10 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
           s.resources.ram = Number(custom[2])
         })
       } else return { text: 'Usage: /cr resources off|low|medium|high|<cpu>/<ram>' }
-      return { text: `Resource Governor: ${rt.settings.resources.level}${rt.settings.resources.level === 'custom' ? ` (CPU ${rt.settings.resources.cpu}%, RAM ${rt.settings.resources.ram}%)` : ''}. Claude was told about the change.` }
+      const r = rt.settings.resources
+      if (r.level === 'off') return { text: 'Machine load limit off. Readings only.' }
+      const ceilings = rt.effective.resources.ceilings
+      return { text: `Machine load ${r.level.charAt(0).toUpperCase()}${r.level.slice(1)}: ceilings at CPU ${ceilings?.cpu ?? r.cpu}% · RAM ${ceilings?.ram ?? r.ram}%. Claude was told.` }
     }
     case 'agents':
     case 'subagents': {
@@ -174,7 +178,7 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       rt.update(s => {
         s.router.strategy = a1 as 'off' | 'balanced' | 'performance' | 'economy' | 'custom'
       })
-      return { text: `Model Router: ${a1}.` }
+      return { text: `Model router ${a1 === 'off' ? 'off' : `${a1.charAt(0).toUpperCase()}${a1.slice(1)}`}.` }
     }
     case 'hud': {
       const valid = ['band', 'status', 'both', 'off']
@@ -182,12 +186,13 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       rt.update(s => {
         s.ui.hud = a1 as 'band' | 'status' | 'both' | 'off'
       })
-      return { text: `HUD: ${a1}.` }
+      const where = { band: 'above the prompt', status: "in Claude Code's status line", both: "above the prompt and in the status line", off: 'hidden' }[a1 as 'band' | 'status' | 'both' | 'off']
+      return { text: `Status bar ${where}.` }
     }
     case 'reset': {
       if (a1 !== 'confirm') return { text: 'This resets every Control Room setting (custom profiles kept). Run /cr reset confirm to proceed.' }
       rt.update(s => ({ ...defaultSettings(), customProfiles: s.customProfiles }))
-      return { text: 'Control Room settings reset to the Normal profile.' }
+      return { text: 'Settings reset to Normal. Your profiles are kept.' }
     }
     default:
       void a2

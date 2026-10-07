@@ -51,6 +51,12 @@ const EFFORT_NAME: Record<string, string> = { max: 'Maximum effort', xhigh: 'Ext
 const LEVEL_NAME: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', custom: 'Custom' }
 const STRATEGY_NAME: Record<string, string> = { off: 'Off', balanced: 'Balanced', performance: 'Performance', economy: 'Economy', custom: 'Custom' }
 
+/**
+ * A handoff waiting for the person: calm when they asked for it ("Wait for
+ * me"), red only when something went wrong (no notes, clearing refused).
+ */
+const awaitingTone = (rt: Runtime): Tone => (rt.autopilot.lastError === null ? 'accent' : 'bad')
+
 /** "70%" or "700k": the threshold as the person set it. */
 export function thresholdText(rt: Runtime): string {
   const a = rt.settings.autopilot
@@ -75,7 +81,7 @@ export function autopilotStatus(rt: Runtime): StatusView {
     case 'resuming':
       return { text: 'Resuming', tone: 'accent' }
     case 'awaiting':
-      return { text: 'Waiting for you', tone: 'bad' }
+      return { text: 'Waiting for you', tone: awaitingTone(rt) }
   }
 }
 
@@ -194,7 +200,7 @@ export function hudOf(rt: Runtime): HudModel {
   const ap = autopilotStatus(rt)
   const s = rt.settings
   let alert: HudModel['alert'] = null
-  if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: 'bad' }
+  if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: awaitingTone(rt) }
   else if (rt.monitor.pressure.level === 'critical' && s.resources.level !== 'off') alert = { kind: 'load', text: 'Your machine is under heavy load. Claude was asked to ease off.', tone: 'bad' }
   else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Claude is finishing this step, then hands off to a fresh context.', tone: 'warn' }
   return {

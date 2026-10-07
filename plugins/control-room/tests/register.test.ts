@@ -39,7 +39,7 @@ describe('register', () => {
     const w = world(on)
     await $.session.start(SESSION)
     const r = await $.command.run(cmd('cr', 'autopilot 65%'))
-    expect(r.text).toContain('threshold 65%')
+    expect(r.text).toBe('Autopilot on. Hands off at 65%.')
     await w.clock.advance(2000)
     const saved = w.store['settings.v1'] as Settings
     expect(saved.autopilot.enabled).toBe(true)
@@ -180,6 +180,39 @@ describe('register', () => {
 
     const status = await $.command.run(cmd('cr', 'status'))
     expect(status.text).toContain('Session 2')
+  })
+
+  test('Context Autopilot in the terminal: the reset lands after /clear returns, and the fresh session is still ours', async ($, on) => {
+    let fresh: { additionalContext?: string[] } | undefined
+    let finishReset: (() => Promise<void>) | null = null
+    on('command.run', { command: 'clear' }, async () => {
+      // The interactive terminal resets the session after the command has returned.
+      finishReset = async () => {
+        w.live.sessionId = 'session-2'
+        fresh = await $.classic.SessionStart({ source: 'clear', session_id: 'session-2' })
+      }
+      return { text: '' }
+    })
+    const w = world(on, { settings: withSettings(s => void (s.autopilot.enabled = true)) })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    await $.session.start(SESSION)
+    await $.command.run(cmd('cr', 'handoff'))
+    await w.clock.advance(400)
+    await $.turn.start({ text: 'handoff', turnId: 'h1' })
+    await $.turn.complete({ answer: 'Handoff written.', durationMs: 1, isAborted: false, turnId: 'h1', reason: 'answer' })
+    await w.clock.advance(3000)
+    expect(finishReset).not.toBeNull()
+    // Nothing is sent into the old context while the reset is still under way.
+    expect(w.kept.submitted.some(t => t.includes('Context Autopilot continuation'))).toBe(false)
+
+    await finishReset!()
+    await w.clock.advance(1000)
+    expect(fresh?.additionalContext?.join(' ')).toContain('fresh context')
+    const continuation = w.kept.submitted.find(t => t.includes('Context Autopilot continuation'))
+    expect(continuation).toContain('(session 2)')
+    const runs = Object.entries(w.store).filter(([k]) => k.startsWith('run.v1.')).map(([, v]) => v as { sessions: { end: string | null }[] })
+    expect(runs.at(-1)?.sessions.map(s => s.end)).toEqual(['handoff', null])
   })
 
   test('the handoff never clears the context when the notes were not written', async ($, on) => {

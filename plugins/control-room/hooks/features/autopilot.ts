@@ -142,8 +142,8 @@ function proceedAfterHandoff(model: Autopilot, cfg: AutopilotConfig): Step {
       return { model: set(model, { state: 'compacting', note: 'Handoff written. Compacting the context' }), effects: [{ kind: 'compact' }] }
     case 'manual':
       return {
-        model: set(model, { state: 'awaiting', note: 'Handoff written. Start the fresh context when you’re ready' }),
-        effects: [{ kind: 'notify', text: 'Handoff written. Start a fresh context from the Control Room when ready.', level: 'info' }],
+        model: set(model, { state: 'awaiting', note: 'Handoff written. Start fresh when you’re ready' }),
+        effects: [{ kind: 'notify', text: 'Handoff written. Start the fresh context from Control Room when you’re ready.', level: 'info' }],
       }
   }
 }
@@ -181,7 +181,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           model: set(triggered, { state: 'pending', note: 'Finishing the current step, then handing off' }),
           effects: [
             { kind: 'appendPending', tokens: event.tokens, threshold: model.threshold, window: event.window },
-            { kind: 'notify', text: 'Context threshold reached: finishing the current unit of work, then handing off.', level: 'warn' },
+            { kind: 'notify', text: 'Context reached the handoff point. Claude finishes the current step, then hands off.', level: 'warn' },
           ],
         }
       }
@@ -189,7 +189,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         model: set(triggered, { state: 'requested', note: 'Threshold reached. Starting the handoff' }),
         effects: [
           { kind: 'submitHandoff' },
-          { kind: 'notify', text: 'Context threshold reached: starting the handoff turn.', level: 'warn' },
+          { kind: 'notify', text: 'Context reached the handoff point. Claude is writing the handoff notes.', level: 'warn' },
         ],
       }
     }
@@ -205,7 +205,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         if (event.reason === 'aborted') {
           return {
             model: set(model, { state: 'awaiting', note: 'Handoff interrupted. Resume it when you’re ready' }),
-            effects: [{ kind: 'notify', text: 'Handoff interrupted. Resume it from the Control Room when ready.', level: 'warn' }],
+            effects: [{ kind: 'notify', text: 'Handoff interrupted. Resume it from Control Room when you’re ready.', level: 'warn' }],
           }
         }
         return { model: set(model, { state: 'verifying', note: 'Checking the handoff notes' }), effects: [{ kind: 'verifyHandoff' }] }
@@ -232,7 +232,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           lastError: 'handoff file not written',
           note: 'No handoff notes found, so the context was kept',
         }),
-        effects: [{ kind: 'notify', text: 'Handoff notes were not written, so the context was not cleared. Review and continue manually.', level: 'error' }],
+        effects: [{ kind: 'notify', text: 'No handoff notes were written, so the context was kept. Check the work and continue by hand.', level: 'error' }],
       }
     }
 
@@ -241,7 +241,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (!cfg.autoContinue) {
         return {
           model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Fresh context ready. Continue when you are' }),
-          effects: [{ kind: 'notify', text: 'Fresh context ready. Auto-continue is off.', level: 'info' }],
+          effects: [{ kind: 'notify', text: 'Fresh context ready. Carry on by itself is off, so Claude waits for you.', level: 'info' }],
         }
       }
       return { model: set(model, { state: 'resuming', note: 'Continuing in the fresh context' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
@@ -251,12 +251,12 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (cfg.fallbackToCompact) {
         return {
           model: set(model, { state: 'compacting', lastError: event.error, note: 'Clearing was refused. Compacting instead' }),
-          effects: [{ kind: 'compact' }, { kind: 'notify', text: `/clear was refused (${event.error}); compacting instead.`, level: 'warn' }],
+          effects: [{ kind: 'compact' }, { kind: 'notify', text: `Clearing was refused (${event.error}), so the context is compacted instead.`, level: 'warn' }],
         }
       }
       return {
         model: set(model, { state: 'awaiting', lastError: event.error, note: 'Clearing was refused. Start fresh when you’re ready' }),
-        effects: [{ kind: 'notify', text: `Automatic /clear was refused: ${event.error}`, level: 'error' }],
+        effects: [{ kind: 'notify', text: `Clearing was refused: ${event.error}`, level: 'error' }],
       }
 
     case 'compactDone':

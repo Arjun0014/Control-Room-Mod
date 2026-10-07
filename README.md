@@ -283,8 +283,8 @@ What it observes, what it can change and what it never does is listed in [SECURI
 
 | | Status |
 | --- | --- |
-| Claude Code 2.1.292, terminal CLI (Windows 11) | Verified: unit and engine tests, live headless runs, real-terminal rendering and mouse and keyboard use |
-| Claude Code 2.1.289 (bundled with Claude Desktop) | Verified: type-checked against its declarations, live headless runs in the Desktop host protocol |
+| Claude Code 2.1.292, terminal CLI (Windows 11) | Verified: unit and engine tests, live headless runs, real-terminal rendering at 100–150 columns, mouse and keyboard use, and the full Autopilot chain in the interactive terminal |
+| Claude Code 2.1.289 (bundled with Claude Desktop) | Verified: the test suite run on its engine, type-checked against its declarations, live headless runs in the Desktop host protocol |
 | Claude Desktop Code tab, visual | Built for and tested in the harness on the `desktop` surface. Visual review in the app is ongoing; screenshots are welcome. |
 | macOS and Linux machine-load sampling | Implemented and unit-tested against real `top`, `sysctl` and `/proc` output. Not yet run live. |
 | Mobile and VS Code surfaces | Draw (mobile opens choices in place, as in the terminal). Not reviewed visually. |

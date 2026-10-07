@@ -122,6 +122,45 @@ describe('runtime', () => {
     expect(rt.run?.sessions.map(s => s.start)).toEqual(['startup', 'clear', 'handoff'])
   })
 
+  test('a /clear that never resets the session is a failed clear: compaction takes over', async () => {
+    const { rt, kept, advance } = await started(s => {
+      s.autopilot.enabled = true
+    })
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
+    rt.startFreshContext()
+    await advance(2000)
+    expect(kept.commands).toContain('clear')
+    expect(rt.autopilot.state).toBe('clearing')
+    await advance(16_000)
+    expect(rt.autopilot.lastError).toBe('the context was not cleared')
+    expect(kept.compacted).toBe(1)
+  })
+
+  test('a /clear whose fresh session start goes unseen still counts once the session id changed', async () => {
+    const { rt, kept, live, advance } = await started(s => {
+      s.autopilot.enabled = true
+    })
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
+    rt.startFreshContext()
+    await advance(2000)
+    live.sessionId = 'S2'
+    await advance(16_000)
+    expect(kept.compacted).toBe(0)
+    expect(kept.submitted.some(t => t.includes('Context Autopilot continuation'))).toBe(true)
+  })
+
+  test('a handoff waiting by choice reads calm; one that went wrong reads red', async () => {
+    const { rt } = await started(s => {
+      s.autopilot.enabled = true
+    })
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting', lastError: null }
+    expect(Views.hudOf(rt).alert).toMatchObject({ kind: 'awaiting', tone: 'accent' })
+    expect(Views.autopilotStatus(rt).tone).toBe('accent')
+    rt.autopilot = { ...rt.autopilot, lastError: 'the context was not cleared' }
+    expect(Views.hudOf(rt).alert).toMatchObject({ kind: 'awaiting', tone: 'bad' })
+    expect(Views.autopilotStatus(rt).tone).toBe('bad')
+  })
+
   test('the guard blocks at most the configured number of times per turn', async () => {
     const { rt } = await started(s => {
       s.guard.enabled = true

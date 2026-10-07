@@ -37,8 +37,21 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 - The status bar's sparklines appear once there are six readings, so the bar does not shift with
   each new sample. Guardrails' sparklines grow from the right.
 
+- A handoff that waits for you because you chose *Wait for me* reads calm (the accent color), not
+  red. Red is kept for a handoff that went wrong (no notes, clearing refused).
+- Notifications, Autopilot notices and `/cr` replies use the panel's words: "Autopilot on. Hands
+  off at 70%", "Machine load Medium", "Status bar above the prompt", "Kept Claude going". They no
+  longer start with "Control Room:", since Claude Code already heads each notification with the
+  plugin's name.
+
 ### Fixed
 
+- **Autopilot in the interactive terminal:** its `/clear` was taken for one of yours. The terminal
+  finishes the reset after the command returns (the Desktop host protocol does it before), so the
+  run recorded "cleared" instead of a handoff, the fresh context missed its continuation note, and
+  the continuation prompt carried the old session number. Control Room now waits for the fresh
+  session before it continues. If no fresh session comes, the clear counts as refused and
+  compaction takes over (when allowed).
 - Guardrails' CPU and memory gauges read "—" while live readings were on without a machine-load
   limit. They now show the same readings as the status bar.
 - In a narrow status bar, the panel button read "Open" while the panel was open. After a hot reload

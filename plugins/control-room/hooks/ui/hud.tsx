@@ -149,7 +149,7 @@ export function hudView(kit: Kit, hud: HudModel): RenderElement {
   return (
     <Box flexDirection="column">
       {line}
-      <Box flexDirection="row" key="hud-alert" alignItems="center">
+      <Box flexDirection="row" key="hud-alert" alignItems="center" columnGap={2}>
         <Box flexGrow={1} flexShrink={1}>
           <Text wrap="truncate-end">
             <Text {...toneProps(alert.tone)}>{`${alert.kind === 'awaiting' ? G.dot : G.warn} `}</Text>

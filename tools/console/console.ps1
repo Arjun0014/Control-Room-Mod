@@ -20,6 +20,7 @@ param(
   [switch]$Whole,
   [int]$TargetPid = 0,
   [string]$Claude = 'claude',
+  [string[]]$Also = @(),
   [string]$Font = '',
   [int]$FontSize = 16
 )
@@ -45,7 +46,9 @@ if ($Action -eq 'launch') {
   $cmd = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id) and Name='cmd.exe'" | Select-Object -First 1
   if ($null -eq $cmd) { throw "no cmd.exe under conhost $($p.Id)" }
   if ($Font -ne '') { [ConDrive]::Font([uint32]$cmd.ProcessId, $Font, [int16]$FontSize) }
-  [ConDrive]::Send([uint32]$cmd.ProcessId, "text:$Claude --plugin-dir `"$plugin`"|enter")
+  # Control Room loads first; -Also folders (the demo driver) load after it, so their hooks sit beneath its own.
+  $extra = ($Also | ForEach-Object { " --plugin-dir `"$((Resolve-Path $_).Path)`"" }) -join ''
+  [ConDrive]::Send([uint32]$cmd.ProcessId, "text:$Claude --plugin-dir `"$plugin`"$extra|enter")
   Set-Content -Path $pidFile -Value $cmd.ProcessId -Encoding ascii
   "console $($cmd.ProcessId): $Cols x $Lines in $Dir"
   exit 0

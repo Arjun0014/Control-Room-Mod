@@ -13,7 +13,7 @@ import type { RenderElement } from 'claude-code'
 import type { CacheMissView, CacheView, Tone } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
-import { card, listItem, meterBar, pair, row, spaced, stepper, switchControl, textRuns } from '../primitives'
+import { apart, card, listItem, meterBar, note, pair, row, spaced, stepper, switchControl, textRuns } from '../primitives'
 import { ACCENT, G, clockGlyph } from '../theme'
 
 /** The idle limits Keep warm offers, in minutes. */
@@ -56,18 +56,28 @@ export function keepWarmStatus(cache: CacheView): { text: string; tone: Tone } {
   return { text: `${k.reason ?? 'Waiting'}${count}${verified}`, tone: k.verified === 'no' ? 'warn' : 'muted' }
 }
 
+/** One rebuild: what happened and when, what it cost, then (wrapping, under it) its kind and what would avoid it. */
 function missItem(kit: Kit, m: CacheMissView, i: number): RenderElement {
-  return listItem(kit, {
-    key: `miss-${i}`,
-    glyph: m.severity === 'warn' ? G.warn : m.kind === 'lifecycle' ? G.ring : G.dot,
-    tone: m.severity === 'warn' ? 'warn' : 'muted',
-    text: spaced(kit, [fmt.clock(m.at), m.detail]),
-    right: `${fmt.tokens(m.recached)} · ${KIND[m.kind]}`,
-    rightTone: m.severity === 'warn' ? 'warn' : 'muted',
-    detail: m.advice,
-    isDim: m.kind === 'lifecycle',
-  })
+  const { Box } = kit.ui
+  return (
+    <Box key={`miss-${i}`} flexDirection="column">
+      {listItem(kit, {
+        key: `miss-${i}-line`,
+        glyph: m.severity === 'warn' ? G.warn : m.kind === 'lifecycle' ? G.ring : G.dot,
+        tone: m.severity === 'warn' ? 'warn' : 'muted',
+        text: m.detail,
+        right: spaced(kit, [fmt.tokens(m.recached), fmt.clock(m.at)]),
+        rightTone: m.severity === 'warn' ? 'warn' : 'muted',
+        isDim: m.kind === 'lifecycle',
+      })}
+      <Box key={`miss-${i}-advice`} marginLeft={3}>
+        {note(kit, `${KIND_WORD[m.kind]} ${m.advice}`, `miss-${i}-note`)}
+      </Box>
+    </Box>
+  )
 }
+
+const KIND_WORD: Record<CacheMissView['kind'], string> = { preventable: 'Preventable.', lifecycle: 'Expected.', unavoidable: 'Unexplained.' }
 
 export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boolean; maxIdleMinutes: number; guardModelSwitch: boolean; stablePolicies: boolean }): RenderElement[] {
   const u = kit.actions.update
@@ -87,7 +97,7 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
       title: 'Cache',
       accent,
       aside: cache.warmth === 'none' ? undefined : lifetime,
-      footer: 'Claude Code reports the tokens each request read from the cache and wrote to it. The expiry, the hit ratio and the causes are derived from those.',
+      footer: 'The expiry, the hit ratio and the causes are derived from the tokens Claude Code reports.',
       rows: k => [
         textRuns(k, 'cache-state', [
           { text: `${state.glyph} `, tone: state.tone === 'normal' ? 'info' : state.tone },
@@ -99,13 +109,17 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
         cache.warmth === 'none'
           ? pair(k, { key: 'cache-under', left: 'The cache starts with Claude’s first response in this context.' })
           : pair(k, { key: 'cache-under', left: `${fmt.tokens(cache.cachedTokens)} tokens cached · ${fmt.plural(cache.requests, 'request')}`, right: hit ?? undefined }),
-        row(k, {
-          key: 'cache-keep',
-          label: 'Keep warm while you are away',
-          subtitle: kw.text,
-          subtitleTone: kw.tone,
-          control: switchControl(k, { key: 'cache-keep', isOn: settings.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
-        }),
+        apart(
+          k,
+          'cache-keep',
+          row(k, {
+            key: 'cache-keep',
+            label: 'Keep warm while you are away',
+            subtitle: kw.text,
+            subtitleTone: kw.tone,
+            control: switchControl(k, { key: 'cache-keep', isOn: settings.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
+          }),
+        ),
         settings.keepWarm &&
           row(k, {
             key: 'cache-idle',
@@ -121,7 +135,7 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
         row(k, {
           key: 'cache-guard',
           label: 'Ask before a model switch',
-          subtitle: 'When the switch would re-send 100k or more cached tokens',
+          subtitle: 'When it would re-send 100k+ cached tokens',
           control: switchControl(k, { key: 'cache-guard', isOn: settings.guardModelSwitch, onPress: () => u(d => void (d.cache.guardModelSwitch = !d.cache.guardModelSwitch)) }),
         }),
         row(k, {
@@ -140,7 +154,7 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
         title: 'Cache health',
         accent,
         aside: preventable > 0 ? `${fmt.plural(cache.misses.length, 'rebuild')} · ${preventable} preventable` : fmt.plural(cache.misses.length, 'rebuild'),
-        rows: k => cache.misses.slice(0, 6).map((m, i) => missItem(k, m, i)),
+        rows: k => cache.misses.slice(0, 4).map((m, i) => missItem(k, m, i)),
       }),
     )
   }
@@ -153,6 +167,5 @@ export function cacheSummary(cache: CacheView, now: number): string {
   const state = cacheState(cache, now)
   const parts = [`${fmt.tokens(cache.cachedTokens)} cached`]
   if (cache.hitRatio !== null) parts.push(`${Math.round(cache.hitRatio * 100)}% read from cache`)
-  parts.push(cache.keepWarm.isOn ? (cache.keepWarm.verified === 'no' ? 'Keep warm stopped' : 'Keep warm on') : 'Keep warm off')
   return cache.warmth === 'warm' ? parts.join(' · ') : `${state.text.split(':')[0]} · ${parts.join(' · ')}`
 }

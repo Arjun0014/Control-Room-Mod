@@ -692,7 +692,7 @@ describe('ui', () => {
       await ui.press({ key: 'tab-context' })
       await w.clock.advance(300)
       const text = textOf(await ui.drawn())
-      for (const expected of ['CACHE', 'Warm · lapses in about', '1-hour cache', '300k tokens cached', 'Keep warm while you are away', 'Ask before a model switch', 'Keep policies stable', 'CACHE HEALTH', '1 rebuild · 1 preventable', 'Model changed: opus-5-5 → sonnet-5-5', '300k · preventable', 'Switch models at the start of a fresh context', 'derived']) {
+      for (const expected of ['CACHE', 'Warm · lapses in about', '1-hour cache', '300k tokens cached', 'Keep warm while you are away', 'Ask before a model switch', 'Keep policies stable', 'CACHE HEALTH', '1 rebuild · 1 preventable', 'Model changed: opus-5-5 → sonnet-5-5', 'Preventable. Switch models', 'Switch models at the start of a fresh context', 'derived']) {
         expect(text, `${surface}: ${expected}`).toContain(expected)
       }
       await ui.unmount()

@@ -22,7 +22,7 @@ import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, switchControl, textRuns, workTrack } from '../primitives'
+import { apart, cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, switchControl, textRuns, workTrack } from '../primitives'
 import { ACCENT, G } from '../theme'
 import { cacheState, cacheSummary } from './cache'
 import type { PaneData } from './frame'
@@ -118,7 +118,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
   const work = hud.work
   const cache = pane.cache
   const cacheNow = cacheState(cache, kit.now)
-  const ttlWords = cache.ttl === '5m' ? 'five idle minutes' : cache.ttl === '1h' ? 'an idle hour' : 'its lifetime idle'
+  const lapses = cache.ttl === '5m' ? 'lapses after five idle minutes' : cache.ttl === '1h' ? 'lapses after an idle hour' : 'lapses when left idle'
   const a = hud.activity
   const isLoadHigh = load !== null && (readingTone(load.cpuTone) !== 'normal' || readingTone(load.ramTone) !== 'normal')
   const needsLook = hud.attention + hud.failing.length
@@ -167,7 +167,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
             left: ctx.tokens === null ? 'Waiting for the first response' : `${fmt.tokens(ctx.tokens)}${ctx.window === null ? '' : ` of ${fmt.tokens(ctx.window)}`} tokens`,
             right: hud.autopilot.isOn && ctx.threshold !== null ? `hands off at ${fmt.tokens(ctx.threshold)}` : undefined,
           }),
-          toggle(k, 'sys-autopilot', 'Autopilot', s.autopilot.enabled, () => u(d => void (d.autopilot.enabled = !d.autopilot.enabled)), st.autopilot),
+          apart(k, 'sys-autopilot', toggle(k, 'sys-autopilot', 'Autopilot', s.autopilot.enabled, () => u(d => void (d.autopilot.enabled = !d.autopilot.enabled)), st.autopilot)),
         ],
       })}
 
@@ -177,15 +177,19 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
         accent: ACCENT.context,
         aside: hud.cache === null ? undefined : `${hud.cache.text}`,
         link: go('context'),
-        footer: `Starts over with each fresh context, and lapses after ${ttlWords}.${s.cache.keepWarm ? ' Keep warm holds it while you are away.' : ''}`,
+        footer: `Starts over with each fresh context, and ${lapses}.${s.cache.keepWarm ? ' Keep warm holds it while you are away.' : ''}`,
         rows: k => [
           cacheClock(k, { key: 'cache-clock', fraction: cacheNow.fraction, tone: cacheNow.tone, text: cacheNow.text, isBold: cache.warmth === 'warm' }),
           cache.warmth === 'none' ? null : pair(k, { key: 'cache-under', left: cacheSummary(cache, kit.now) }),
-          row(k, {
-            key: 'sys-keepwarm',
-            label: 'Keep warm',
-            control: switchControl(k, { key: 'sys-keepwarm', isOn: s.cache.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
-          }),
+          apart(
+            k,
+            'sys-keepwarm',
+            row(k, {
+              key: 'sys-keepwarm',
+              label: 'Keep warm',
+              control: switchControl(k, { key: 'sys-keepwarm', isOn: s.cache.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
+            }),
+          ),
         ],
       })}
 

@@ -11,6 +11,8 @@
  *
  * `/demo calls` replays the same work as bare tool calls, outside any turn.
  * `/demo slow` paces the scripted turn, for a capture while it runs.
+ * `/demo miss` reports a model change halfway through, which rebuilds the
+ * prompt cache: Control Room's Cache reading and Cache health show it.
  */
 
 import type { Register, ToolCallArgs, TurnStepChunk, TurnStepResult } from 'claude-code'
@@ -126,14 +128,20 @@ function script(root: string, via: 'milestones' | 'todos' | null): Step[] {
 /** The share of the context window the scripted turn reports at each step: a session well under way. */
 const contextAt = (index: number) => 0.41 + 0.012 * index
 
+/** With `/demo miss`, the step from which the requests report another model (a switch, as `/model` makes one). */
+const MISS_AT = 4
+
+/** The other model of a scripted switch: the same generation, the next family down. */
+const otherModel = (model: string) => (model.includes('opus') ? model.replace('opus', 'sonnet') : model.includes('sonnet') ? model.replace('sonnet', 'opus') : 'claude-sonnet-5-5')
+
 export const register: Register = on => {
   /** The scripted turn under way, and its steps, once `/demo` submitted its request. */
-  let pending: { steps: Step[]; paceMs: number } | null = null
-  let active: { turnId: string; steps: Step[]; paceMs: number } | null = null
+  let pending: { steps: Step[]; paceMs: number; isMiss: boolean } | null = null
+  let active: { turnId: string; steps: Step[]; paceMs: number; isMiss: boolean } | null = null
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await $.command.register({ name: 'demo', description: 'Play the scripted demo turn (development only)', argumentHint: '[slow|calls]' })
+    await $.command.register({ name: 'demo', description: 'Play the scripted demo turn (development only)', argumentHint: '[slow|calls|miss]' })
     return started
   })
 
@@ -169,7 +177,13 @@ export const register: Register = on => {
     }
     const window = (await $.session.usage()).context?.window ?? 200_000
     const prompt = Math.round(window * contextAt(e.index))
-    const usage = { model: e.model, input_tokens: 1_800, cache_read_input_tokens: prompt - 1_800, cache_creation_input_tokens: 0, output_tokens: 240 + 60 * step.calls.length }
+    // The cache as a real turn uses it: the first request finds the earlier turns cached and writes
+    // its own tail; each later one reads what the one before sent. A scripted switch rebuilds it all.
+    const before = e.index === 0 ? Math.round(window * 0.38) : Math.round(window * contextAt(e.index - 1))
+    const isSwitch = turn.isMiss && e.index === MISS_AT
+    const read = isSwitch ? 0 : before
+    const model = turn.isMiss && e.index >= MISS_AT ? otherModel(e.model) : e.model
+    const usage = { model, input_tokens: 1_800, cache_read_input_tokens: read, cache_creation_input_tokens: Math.max(0, prompt - read - 1_800), output_tokens: 240 + 60 * step.calls.length }
     const stopReason = step.calls.length > 0 ? ('tool_use' as const) : ('end_turn' as const)
     yield { kind: 'stop', stopReason, usage }
     const result: TurnStepResult = {
@@ -189,7 +203,8 @@ export const register: Register = on => {
     const args = String(e.args ?? '').trim().toLowerCase()
     if (args === 'calls') return replayCalls()
     const via = names.has(MILESTONES_TOOL) ? 'milestones' : names.has('TodoWrite') ? 'todos' : null
-    pending = { steps: script(root, via), paceMs: args === 'slow' ? 4_000 : 900 }
+    const words = args.split(/\s+/)
+    pending = { steps: script(root, via), paceMs: words.includes('slow') ? 4_000 : 900, isMiss: words.includes('miss') }
     $.clock.after(50, () => $.prompt.submit({ text: REQUEST }))
     return { text: 'Playing the scripted turn: watch the status bar, then open Control Room (/cr).' }
 

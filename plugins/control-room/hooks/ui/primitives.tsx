@@ -199,6 +199,20 @@ export function row(
   )
 }
 
+/**
+ * A row set apart from the readings above it: a blank line before it in the
+ * terminal (native surfaces space rows themselves), so a switch never sits
+ * flush under a meter's figures.
+ */
+export function apart(kit: Kit, key: string, element: RenderElement): RenderElement {
+  const { Box } = kit.ui
+  return (
+    <Box key={`apart-${key}`} flexDirection="column" marginTop={kit.surface === 'terminal' ? 1 : 0}>
+      {element}
+    </Box>
+  )
+}
+
 /** The width of a field's label column, in cells. */
 export const FIELD_LABEL = 10
 

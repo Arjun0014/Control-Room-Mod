@@ -8,6 +8,30 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+Planned as 1.2.0. In progress: the prompt-cache model and Cache Guardian are in; their panel
+views, the redesigned status bar and Overview, run-state hardening, the companion, docs and
+screenshots are not.
+
+### Added
+
+- **Cache Guardian** (work in progress). Reads every main-thread request's cache figures (tokens
+  read from the cache, written to it, sent uncached), learns the cache's lifetime (the engine's
+  own on a model switch, or observed: a request after more than five idle minutes that still
+  read the cache proves the one-hour TTL), and explains misses: the change seen before one (a
+  model or effort switch, Control Room's own policies, the output style, the tools, compaction),
+  idling past the lifetime, or nothing seen. Claude Code reports no expiry, hit ratio or miss
+  cause; these are derived from what it does report.
+- **Keep warm** (off by default): refreshes the cache before it lapses while you are away, by
+  re-sending the last request once (`$.model.fork`, which the transcript never sees), ten minutes
+  ahead of the expiry for the one-hour cache and a minute ahead for the five-minute one, for at
+  most a set idle time. It stands down while a handoff is about to clear the context and keeps
+  the cache through a compact fallback. It checks itself: the first request after the expiry a
+  refresh replaced must still read the cache, and it stops itself if refreshes do not hold it.
+- **Cache-aware changes**: a model switch you make is confirmed first when a large warm cache
+  would be lost (with Claude Code's own cost estimate); the model router no longer downgrades the
+  main conversation while its cache is warm; and while the cache is warm, settings changed
+  mid-context reach Claude as a note instead of rewriting the system prompt (Keep policies stable).
+
 ## [1.1.0] - 2026-10-07
 
 A two-line status bar that says what is happening, graphics in the panel, and new ways for Claude

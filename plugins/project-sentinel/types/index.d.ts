@@ -237,7 +237,7 @@ export type CacheMissView = {
 export type CacheView = {
   warmth: CacheWarmth
   ttl: '5m' | '1h' | null
-  ttlSource: 'engine' | 'observed' | 'probe' | 'stored' | null
+  ttlSource: 'engine' | 'observed' | 'probe' | 'stored' | 'plan' | null
   expiresAt: number | null
   lastRequestAt: number | null
   cachedTokens: number

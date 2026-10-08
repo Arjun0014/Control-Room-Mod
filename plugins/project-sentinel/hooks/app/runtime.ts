@@ -751,6 +751,8 @@ export class Runtime {
     const usage = await (withSummary ? host.usageSummary() : host.usage()).catch(() => null)
     if (usage === null) return
     this.applyUsage(usage)
+    // A claude.ai plan's rate-limit windows: the one-hour cache is Claude Code's default for its main conversation.
+    if (usage.rateLimits.some(r => r.kind === 'five_hour' || r.kind === 'seven_day')) this.cache.notePlan()
     if (withSummary) {
       const at = usage.context.breakdown?.autoCompactThreshold
       this.autoCompactAt = usage.context.breakdown?.isAutoCompactEnabled === false ? undefined : at
@@ -1119,6 +1121,9 @@ export class Runtime {
   /** True once a request went out, so an unreached compose hook means it is bypassed. */
   composeObserved = false
 
+  /** When the session's usage was last read for the plan's rate-limit windows (the cache's default lifetime). */
+  private planCheckedAt = 0
+
   /**
    * The run's objective: the person's latest substantial request (a short
    * "yes" or "continue" keeps the one before), cut to its first sentence.
@@ -1257,6 +1262,11 @@ export class Runtime {
     if (result.usage === null) return
     const u = result.usage
     this.cache.stepAnswered(`${e.turnId}:${e.index}`, u)
+    // The plan's rate-limit windows arrive with the first response: with the lifetime unknown, look once a minute at most.
+    if (this.cache.state.ttl === null && !this.cache.isPlan && Date.now() - this.planCheckedAt > 60_000) {
+      this.planCheckedAt = Date.now()
+      void this.refreshUsage()
+    }
     const tokens = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens
     this.usage = { ...this.usage, tokens, pct: this.usage.window ? Math.round((100 * tokens) / this.usage.window) : this.usage.pct }
     if (this.run !== null) this.run = Chain.measure(this.run, { tokens, window: this.usage.window, costUsd: undefined }, Date.now())

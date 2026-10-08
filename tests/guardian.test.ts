@@ -267,4 +267,47 @@ describe('Cache Guardian', () => {
     expect(rt.cache.plan).toEqual({ at: null, reason: 'Nothing cached yet' })
     expect(Views.hudOf(rt).cache).toBeNull()
   })
+
+  test('a long tool call inside a turn keeps the cache warm in the status bar and the panel, the lifetime unknown', async () => {
+    const f = await started(() => undefined)
+    const { rt, advance } = f
+    await turn(f, rt, [{ prompt: 345_000, read: 0 }])
+    // The next turn: one request, then a nine-minute command runs.
+    rt.onTurnStart({ turnId: 'long', text: 'Run the full simulation.' })
+    const e = { turnId: 'long', index: 0, model: OPUS, effort: 'high' as const, messageCount: 5 }
+    const sent = rt.stepRequest(e)
+    await advance(1000)
+    rt.stepResponse(e, sent, { turnId: 'long', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 344_000, cache_creation_input_tokens: 900, model: OPUS } })
+    await advance(9 * MIN + 22_000)
+    expect(rt.cache.state.ttl).toBeNull()
+    const hud = Views.hudOf(rt).cache
+    expect(hud?.warmth).toBe('warm')
+    expect(hud?.text).toBe('warm')
+    expect(rt.cache.view(rt.clock()).warmth).toBe('warm')
+    // After the turn, idle with the lifetime still unknown, it may have lapsed: said so, not hidden.
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
+    await advance(6 * MIN)
+    expect(Views.hudOf(rt).cache?.text).toBe('lapsed?')
+  })
+
+  test("a claude.ai plan's session takes the one-hour cache as the plan's default, named so; a miss after a long gap corrects it", async () => {
+    const f = await started(() => undefined)
+    const { rt, advance } = f
+    f.live.usage = { ...f.live.usage, rateLimits: [{ kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-08T15:00:00Z' }] }
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    expect(rt.cache.state.ttl).toEqual({ value: '1h', source: 'plan' })
+    expect(rt.cache.view(rt.clock()).ttlSource).toBe('plan')
+    await advance(20 * MIN)
+    expect(Views.hudOf(rt).cache?.text).toBe('40m')
+    // Not remembered as if learned: the plan's default is derived again in each session.
+    expect(f.kept.store['cache.v1']).toBeUndefined()
+    // A fresh context keeps the plan's default.
+    rt.cache.resetForContext()
+    expect(rt.cache.state.ttl).toEqual({ value: '1h', source: 'plan' })
+    // A setting or an environment variable gave this session five minutes: the first long gap shows it.
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    await advance(7 * MIN)
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    expect(rt.cache.state.ttl).toEqual({ value: '5m', source: 'observed' })
+  })
 })

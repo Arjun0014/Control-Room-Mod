@@ -68,17 +68,36 @@ export class CacheGuardian {
     this.ctx.changed()
   }
 
+  /** True once the session reported a claude.ai plan's rate-limit windows: the one-hour cache is its default. */
+  isPlan = false
+
   private fresh(): Cache.CacheState {
     const m = this.memory
-    return Cache.emptyCache({ ttl: m.ttl === null ? null : { value: m.ttl, source: 'stored' }, verified: m.verified })
+    const fresh = Cache.emptyCache({ ttl: m.ttl === null ? null : { value: m.ttl, source: 'stored' }, verified: m.verified })
+    return this.isPlan ? Cache.withTtl(fresh, '1h', 'plan') : fresh
+  }
+
+  /**
+   * The session reports a claude.ai plan's rate-limit windows (five-hour, seven-day): Claude Code
+   * gives its main conversation the one-hour cache by default. A hint, below anything learned or
+   * remembered; a miss after more than five idle minutes corrects it.
+   */
+  notePlan(): void {
+    if (this.isPlan) return
+    this.isPlan = true
+    const next = Cache.withTtl(this.state, '1h', 'plan')
+    if (next === this.state) return
+    this.state = next
+    this.ctx.changed()
   }
 
   private remember(patch: Partial<Cache.CacheMemory> = {}): void {
     const s = this.state
     const next: Cache.CacheMemory = {
       v: 1,
-      ttl: s.ttl?.value ?? this.memory.ttl,
-      ttlSource: s.ttl !== null && s.ttl.source !== 'stored' ? s.ttl.source : this.memory.ttlSource,
+      // What this install learned is remembered; the plan's default is derived again each session.
+      ttl: s.ttl !== null && s.ttl.source !== 'plan' ? s.ttl.value : this.memory.ttl,
+      ttlSource: s.ttl !== null && !Cache.isTtlHint(s.ttl.source) ? s.ttl.source : this.memory.ttlSource,
       verified: s.keepWarm.verified === 'unknown' ? this.memory.verified : s.keepWarm.verified,
       verifiedAt: s.keepWarm.verified !== this.memory.verified && s.keepWarm.verified !== 'unknown' ? this.ctx.now() : this.memory.verifiedAt,
       effortRebuilds: this.memory.effortRebuilds,
@@ -232,7 +251,7 @@ export class CacheGuardian {
     }
     if (this.isHoldingPolicies()) return this.delivered === '' ? null : this.delivered
     // A cold cache is rebuilt anyway: only a warm one is lost to the change.
-    if (Cache.warmthOf(this.state, this.ctx.now()) === 'warm') {
+    if (Cache.warmthOf(this.state, this.ctx.now(), this.ctx.isTurnRunning()) === 'warm') {
       this.state = Cache.noteChange(this.state, { cause: 'policy', at: this.ctx.now(), detail: reason === null ? 'Control Room policies changed' : `Control Room policies changed: ${reason}`, by: 'person' })
     }
     this.delivered = current
@@ -247,7 +266,7 @@ export class CacheGuardian {
   /** True while setting changes are told to Claude as notes, so the cached system prompt stays as it is. */
   isHoldingPolicies(): boolean {
     const s = this.ctx.settings().cache
-    return s.stablePolicies && this.delivered !== null && Cache.warmthOf(this.state, this.ctx.now()) === 'warm' && this.state.lastPrefix >= s.minTokens
+    return s.stablePolicies && this.delivered !== null && Cache.warmthOf(this.state, this.ctx.now(), this.ctx.isTurnRunning()) === 'warm' && this.state.lastPrefix >= s.minTokens
   }
 
   /** True when the system prompt carries other policies than the settings now say (held stable). */
@@ -353,7 +372,7 @@ export class CacheGuardian {
     const settings = this.ctx.settings().cache
     const plan = this.plan
     return {
-      warmth: Cache.warmthOf(s, now),
+      warmth: Cache.warmthOf(s, now, this.ctx.isTurnRunning()),
       ttl: s.ttl?.value ?? null,
       ttlSource: s.ttl?.source ?? null,
       expiresAt: Cache.expiresAt(s),
@@ -391,7 +410,8 @@ export class CacheGuardian {
    */
   hud(now: number, isTurnRunning = false): HudModel['cache'] {
     const s = this.state
-    const warmth = Cache.warmthOf(s, now)
+    // While a turn runs, its requests keep the cache warm: on time alone it is never called lapsed then.
+    const warmth = Cache.warmthOf(s, now, isTurnRunning)
     if (warmth === 'none') return null
     const latest = s.misses[0]
     // Only a costly rebuild is worth the status bar's attention, and only for a few minutes.
@@ -435,7 +455,7 @@ export class CacheGuardian {
     const host = this.ctx.host()
     if (host === null || this.ticker !== null) return
     this.ticker = host.every(60_000, () => {
-      const warmth = Cache.warmthOf(this.state, this.ctx.now())
+      const warmth = Cache.warmthOf(this.state, this.ctx.now(), this.ctx.isTurnRunning())
       this.ctx.changed()
       if (warmth !== 'warm') {
         this.ticker?.cancel()

@@ -24,7 +24,7 @@ import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
 import { apart, cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, stateLine, switchControl, textRuns, workTrack } from '../primitives'
 import { ACCENT, G } from '../theme'
-import { cacheState, cacheSummary } from './cache'
+import { cacheState, cacheSummary, lifetimeWords } from './cache'
 import type { PaneData } from './frame'
 
 /** A status as a row's subtitle: quiet unless it needs a look. */
@@ -175,7 +175,8 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
         key: 'life-cache',
         title: 'Cache',
         accent: ACCENT.context,
-        aside: hud.cache === null ? undefined : `${hud.cache.text}`,
+        // The state is the card's first line; the aside says how long the cache lasts.
+        aside: lifetimeWords(cache) ?? undefined,
         link: go('context'),
         footer: cache.warmth === 'none' ? undefined : `Starts over with each fresh context, and ${lapses}.${s.cache.keepWarm ? ' Keep warm holds it while you are away.' : ''}`,
         rows: k =>
@@ -191,7 +192,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
               ]
             : [
                 cacheClock(k, { key: 'cache-clock', fraction: cacheNow.fraction, tone: cacheNow.tone, text: cacheNow.text, isBold: cache.warmth === 'warm' }),
-                pair(k, { key: 'cache-under', left: cacheSummary(cache, kit.now) }),
+                pair(k, { key: 'cache-under', left: cacheSummary(cache) }),
                 apart(
                   k,
                   'sys-keepwarm',

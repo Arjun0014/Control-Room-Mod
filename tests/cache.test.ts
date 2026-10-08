@@ -243,4 +243,31 @@ describe('prompt cache', () => {
     expect(memoryOf({ ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5', 7] })).toEqual({ v: 1, ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5'] })
     expect(memoryOf('garbage')).toEqual({ v: 1, ttl: null, ttlSource: null, verified: 'unknown', verifiedAt: null, effortRebuilds: [] })
   })
+
+  test('while a turn runs, the cache is never called lapsed on time alone, unless a five-minute lifetime is known', () => {
+    const one = req(emptyCache(), T0, 345_000, 0).state
+    // A shell command runs for nine minutes inside the turn: no requests, no reason to think the cache is gone.
+    expect(warmthOf(one, T0 + 9 * MIN, true)).toBe('warm')
+    expect(warmthOf(one, T0 + 9 * MIN, false)).toBe('unknown')
+    // A known five-minute lifetime does lapse during a long call.
+    const fiveMinutes = withTtl(one, '5m', 'observed')
+    expect(warmthOf(fiveMinutes, T0 + 9 * MIN, true)).toBe('cold')
+  })
+
+  test("the plan's default lifetime is a hint: below anything learned, corrected to five minutes by a miss after a long gap", () => {
+    const planned = withTtl(req(emptyCache(), T0, 300_000, 0).state, '1h', 'plan')
+    expect(planned.ttl).toEqual({ value: '1h', source: 'plan' })
+    expect(warmthOf(planned, T0 + 30 * MIN)).toBe('warm')
+    // Anything learned or remembered outranks the plan's default.
+    expect(withTtl(emptyCache({ ttl: { value: '5m', source: 'stored' } }), '1h', 'plan').ttl).toEqual({ value: '5m', source: 'stored' })
+    expect(withTtl(planned, '5m', 'observed').ttl).toEqual({ value: '5m', source: 'observed' })
+    // Six idle minutes later the cache is gone: on a hint the miss is not "surely expired" blame, and it teaches five minutes.
+    const missed = req(planned, T0 + 6 * MIN, 300_000, 0)
+    expect(missed.miss?.cause).toBe('expired')
+    expect(missed.state.ttl).toEqual({ value: '5m', source: 'observed' })
+    // A hit after a long gap proves the hour, replacing the hint.
+    const hit = req(planned, T0 + 20 * MIN, 300_000, 299_000)
+    expect(hit.miss).toBeNull()
+    expect(hit.state.ttl).toEqual({ value: '1h', source: 'observed' })
+  })
 })

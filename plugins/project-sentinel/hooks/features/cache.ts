@@ -20,7 +20,16 @@
  */
 
 export type TtlValue = '5m' | '1h'
-export type TtlSource = 'engine' | 'observed' | 'probe' | 'stored'
+/**
+ * Where the lifetime came from: Claude Code reported it (a model switch), Keep warm's probe or a
+ * request's gap proved it, an earlier session learned it (a hint), or the plan's default (a hint):
+ * Claude Code gives a claude.ai plan's main conversation the one-hour cache unless a setting or an
+ * environment variable says otherwise, and the session reports the plan's rate-limit windows.
+ */
+export type TtlSource = 'engine' | 'observed' | 'probe' | 'stored' | 'plan'
+
+/** A lifetime that is only a hint: what this context observes corrects it. */
+export const isTtlHint = (source: TtlSource | undefined): boolean => source === 'stored' || source === 'plan'
 
 export const TTL_MS: Record<TtlValue, number> = { '5m': 300_000, '1h': 3_600_000 }
 
@@ -143,7 +152,7 @@ export function noteChange(state: CacheState, event: CacheEvent): CacheState {
 
 /** The TTL as the engine reported it (a model switch), which outranks anything observed. */
 export function withTtl(state: CacheState, value: TtlValue, source: TtlSource): CacheState {
-  const rank: Record<TtlSource, number> = { engine: 3, probe: 2, observed: 1, stored: 0 }
+  const rank: Record<TtlSource, number> = { engine: 4, probe: 3, observed: 2, stored: 1, plan: 0 }
   if (state.ttl !== null && state.ttl.value === value && rank[state.ttl.source] >= rank[source]) return state
   if (state.ttl !== null && rank[state.ttl.source] > rank[source]) return state
   return { ...state, ttl: { value, source } }
@@ -159,12 +168,16 @@ export function expiresAt(state: CacheState): number | null {
 
 export type Warmth = 'none' | 'warm' | 'cold' | 'unknown'
 
-/** Warm until the expiry; with the TTL unknown, warm for five minutes (every TTL lasts that long), unknown after. */
-export function warmthOf(state: CacheState, now: number): Warmth {
+/**
+ * Warm until the expiry. With the TTL unknown: warm for five minutes (every TTL lasts that long),
+ * and for as long as a turn is running (`isInUse`): a long tool call sends no requests, but nothing
+ * says the cache is gone, and the next request finds it on the one-hour cache; unknown after.
+ */
+export function warmthOf(state: CacheState, now: number, isInUse = false): Warmth {
   if (state.lastRequestAt === null || state.lastPrefix < MIN_PREFIX) return 'none'
   const at = expiresAt(state)
   if (at !== null) return now < at ? 'warm' : 'cold'
-  return now - state.lastRequestAt < TTL_MS['5m'] ? 'warm' : 'unknown'
+  return isInUse || now - state.lastRequestAt < TTL_MS['5m'] ? 'warm' : 'unknown'
 }
 
 /** Share of the prompt tokens served from the cache, over the conversation's requests in this context (Keep warm's refreshes left out). */
@@ -190,9 +203,10 @@ export function durationWords(ms: number): string {
 /** Why a miss happened, in kind and severity, from the change seen before it or the gap. */
 function classify(state: CacheState, gapMs: number, recached: number, isRefresh: boolean, at: number): Omit<CacheMiss, 'at' | 'recached' | 'prefix' | 'read' | 'gapMs' | 'isRefresh'> {
   const change = ORDER.map(c => state.pending.find(p => p.cause === c)).find(p => p !== undefined)
-  // A lifetime remembered from an earlier session is a hint, not a fact: the account or the plan may
-  // give another one now (an API key, usage over the plan's limit), so only five minutes are sure.
-  const isHint = state.ttl?.source === 'stored'
+  // A lifetime remembered from an earlier session, or the plan's default, is a hint, not a fact: the
+  // account or a setting may give another one now (an API key, usage over the plan's limit), so only
+  // five minutes are sure.
+  const isHint = isTtlHint(state.ttl?.source)
   const ttl = isHint ? null : ttlMs(state)
   // A cache known to have lapsed already was not lost to a change made after it.
   const isSurelyExpired = ttl !== null && gapMs > ttl
@@ -263,12 +277,12 @@ export function observeRequest(
   // a lapse between five minutes and the hour, with nothing else to blame, points to five
   // (also against an hour remembered from an earlier session, which this context may not have).
   if (isComparable && !isMiss && gapMs > TTL_MS['5m'] + 15_000) next = withTtl(next, '1h', isProbe ? 'probe' : 'observed')
-  const isTtlHint = next.ttl === null || next.ttl.source === 'stored'
-  if (miss !== null && miss.cause === 'expired' && isTtlHint && gapMs < TTL_MS['1h']) next = withTtl(next, '5m', isProbe ? 'probe' : 'observed')
+  const isUnsure = next.ttl === null || isTtlHint(next.ttl.source)
+  if (miss !== null && miss.cause === 'expired' && isUnsure && gapMs < TTL_MS['1h']) next = withTtl(next, '5m', isProbe ? 'probe' : 'observed')
   // The probe goes out past five minutes on purpose: finding the cache gone is how it learns the five-minute cache.
   if (miss !== null && isProbe && miss.cause === 'expired') miss = { ...miss, kind: 'lifecycle', severity: 'info', isProbe: true, detail: `Keep warm's probe after ${durationWords(gapMs)}: the cache lasts 5 minutes here` }
   // A refresh timed by a remembered lifetime that turned out wrong did not fail: it was told the wrong expiry.
-  const wasTtlWrong = state.ttl?.source === 'stored' && next.ttl !== null && next.ttl.value !== state.ttl.value
+  const wasTtlWrong = isTtlHint(state.ttl?.source) && next.ttl !== null && state.ttl !== null && next.ttl.value !== state.ttl.value
 
   // Keep warm proves itself on the first request after the expiry a refresh replaced.
   let verdict: Observed['verdict'] = null

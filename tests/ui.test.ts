@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import type { Settings } from '../hooks/core/settings'
+import type { CacheView } from '../types'
+import { cacheState, cacheSummary, lifetimeWords } from '../hooks/ui/pane/cache'
 import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
 import { navRowColumns } from '../hooks/ui/primitives'
 import { ACCENT, TIMELINE, meter } from '../hooks/ui/theme'
@@ -831,6 +833,20 @@ describe('ui', () => {
     await ui.press({ key: 'sys-keepwarm' })
     await w.clock.advance(2000)
     expect(saved(w).cache.keepWarm).toBe(true)
+  })
+
+  test("Overview's Cache card says the cache's state once: the status line, then only what it holds, the lifetime in the aside", () => {
+    const base: CacheView = {
+      warmth: 'unknown', ttl: null, ttlSource: null, expiresAt: null, lastRequestAt: 1, cachedTokens: 345_000, requests: 3, hitRatio: 0.98, read: 1, written: 1, model: null,
+      keepWarm: { isOn: false, nextAt: null, isProbe: false, reason: 'Off', refreshes: 0, lastAt: null, lastRead: null, lastHit: null, verified: 'unknown', maxIdleMinutes: 120, isRefreshing: false, error: null },
+      misses: [], policies: { isStable: true, isHolding: false }, guardModelSwitch: true,
+    }
+    // The status line says it may have lapsed; the line under it says only what the cache holds.
+    expect(cacheState(base, 10).text).toContain('May have lapsed')
+    expect(cacheSummary(base)).toBe('345k cached · 98% read from cache')
+    expect(lifetimeWords(base)).toBeNull()
+    for (const warmth of ['warm', 'cold'] as const) expect(cacheSummary({ ...base, warmth })).not.toMatch(/lapsed|warm/i)
+    expect(lifetimeWords({ ...base, ttl: '1h', ttlSource: 'plan' })).toBe('1-hour cache')
   })
 
   test('Kit, the companion: off by default; on, it walks its own row on its own clock, and a click opens Control Room', async ($, on) => {

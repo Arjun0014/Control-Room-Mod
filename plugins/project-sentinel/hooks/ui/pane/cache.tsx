@@ -21,7 +21,7 @@ const IDLE_STEPS = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480] as co
 
 const LIFETIME: Record<string, string> = { '5m': '5-minute', '1h': '1-hour' }
 
-const SOURCE: Record<string, string> = { engine: 'as Claude Code reports it', observed: 'observed', probe: 'learned by Keep warm', stored: 'learned earlier' }
+const SOURCE: Record<string, string> = { engine: 'as Claude Code reports it', observed: 'observed', probe: 'learned by Keep warm', stored: 'learned earlier', plan: 'the plan’s default' }
 
 const KIND: Record<CacheMissView['kind'], string> = { preventable: 'preventable', lifecycle: 'expected', unavoidable: 'unexplained' }
 
@@ -161,11 +161,15 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
   return out
 }
 
-/** The cache in a line, for Overview's lifecycle card. */
-export function cacheSummary(cache: CacheView, now: number): string {
+/** What the cache holds, in a line, for Overview's lifecycle card: its state is the line above it, said once. */
+export function cacheSummary(cache: CacheView): string {
   if (cache.warmth === 'none') return 'Nothing cached yet'
-  const state = cacheState(cache, now)
   const parts = [`${fmt.tokens(cache.cachedTokens)} cached`]
   if (cache.hitRatio !== null) parts.push(`${Math.round(cache.hitRatio * 100)}% read from cache`)
-  return cache.warmth === 'warm' ? parts.join(' · ') : `${state.text.split(':')[0]} · ${parts.join(' · ')}`
+  return parts.join(' · ')
+}
+
+/** The cache's lifetime in a few words, for a card's aside; null while it is not known. */
+export function lifetimeWords(cache: CacheView): string | null {
+  return cache.ttl === null ? null : `${LIFETIME[cache.ttl]} cache`
 }

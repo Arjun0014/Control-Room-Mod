@@ -2,6 +2,16 @@ import { describe, test } from 'claude-code/testing'
 
 import { SESSION, world } from './fixtures/world'
 
+type Node = { type?: unknown; props?: Record<string, unknown>; children?: unknown[] }
+
+/** The band's tree with Kit's region holding what its surface module drew (the app draws the module inside it). */
+function withKit(tree: unknown, kit: unknown): unknown {
+  if (typeof tree !== 'object' || tree === null) return tree
+  const n = tree as Node
+  if (n.type === 'Client' && n.props?.key === 'kit') return { type: 'Box', props: { key: 'kit-region', flexGrow: 1 }, children: [kit] }
+  return { ...n, children: (n.children ?? []).map(c => withKit(c, kit)) }
+}
+
 const band = (bodyColumns: number) => ({ hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} })
 // From a full window (1400 px, about 175 columns) down to about 500 px (64 columns).
 const WIDTHS = [175, 140, 120, 96, 80, 64]
@@ -33,7 +43,14 @@ describe('preview', () => {
       for (const surface of surfaces) {
         for (const columns of surface === 'desktop' ? WIDTHS : [150, 100, 80]) {
           const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'AbovePrompt', props: band(columns), viewport: { columns, rows: 40 } })
-          console.log(`PREVIEW\t${name}\t${surface}\t${columns}\t${JSON.stringify(await ui.drawn())}`)
+          let tree: unknown = await ui.drawn()
+          // Kit: its region laid out across the band, its clock moved on so it has walked in.
+          if ((await ui.find({ type: 'Client' })) !== undefined) {
+            await ui.resize({ columns, rows: surface === 'desktop' ? 4 : 5, in: 'kit' })
+            await ui.advance(9000)
+            tree = withKit(await ui.drawn(), await ui.drawn({ in: 'kit' }))
+          }
+          console.log(`PREVIEW\t${name}\t${surface}\t${columns}\t${JSON.stringify(tree)}`)
           await ui.unmount()
         }
       }
@@ -74,6 +91,26 @@ describe('preview', () => {
     await $.command.run(cmd('companion on'))
     await w.clock.advance(300)
     await dump('kit', ['desktop', 'terminal'])
+    // Kit through a turn on Desktop, one drawing kept alive: frames along the way.
+    const live = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: band(120), viewport: { columns: 120, rows: 40 } })
+    await live.resize({ columns: 120, rows: 4, in: 'kit' })
+    const frame = async (label: string, ms: number) => {
+      await live.advance(ms)
+      console.log(`PREVIEW\tkit-${label}\tdesktop\t120\t${JSON.stringify(withKit(await live.drawn(), await live.drawn({ in: 'kit' })))}`)
+    }
+    await frame('idle', 3000)
+    await $.turn.start({ text: 'again', turnId: 't2' })
+    await w.clock.advance(300)
+    await live.redraw()
+    await frame('thinking', 4000)
+    await frame('thinking-later', 3000)
+    await $.turn.complete({ answer: 'done', durationMs: 9000, isAborted: false, turnId: 't2', reason: 'answer' })
+    await w.clock.advance(300)
+    await live.redraw()
+    await frame('finished', 1500)
+    await live.pointer({ type: 'down', x: 30, y: 2, button: 'left', in: 'kit' })
+    await frame('touched', 500)
+    await live.unmount()
     // The panel's pages, as a docked pane draws them.
     const pane = { title: 'Control Room', isFocused: true, bodyColumns: PANE, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 80 }, view: {} }
     const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: pane, viewport: { columns: PANE, rows: 80 } })

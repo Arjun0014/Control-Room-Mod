@@ -252,6 +252,12 @@ function face(s: KitState, c: Cursor, dir: number): void {
   push(s, c, act('turn', 220, c.posture))
 }
 
+/** Before an act with something in front of Kit (a keyboard, a book, a fire, a flag): face the open lane, not an edge close by. */
+function faceOpen(s: KitState, c: Cursor): void {
+  if (c.facing === -1 && c.x < 8) face(s, c, 1)
+  else if (c.facing === 1 && c.x > maxX(s) - 8) face(s, c, -1)
+}
+
 function walkTo(s: KitState, c: Cursor, to: number, style: WalkStyle): void {
   const target = clamp(to, 0, maxX(s))
   if (Math.abs(target - c.x) < 0.75) return
@@ -433,15 +439,19 @@ function signals(s: KitState, p: KitProps): void {
     seen.refreshAt = p.refreshAt
   }
   if (moments.length === 0 || s.isGone || s.mood === 'handoff') return
-  interrupt(s)
+  // A mood that changed on this tick has planned its own start (a failure's startle): the moments follow it.
+  if (s.moodAt !== s.t) interrupt(s)
   const c = cursorOf(s)
   for (const kind of moments) {
+    if (s.queue.some(a => a.kind === kind)) continue
     if (kind === 'stamp' || kind === 'dance' || kind === 'greet') {
       toPosture(s, c, 'stand')
+      if (kind === 'stamp') faceOpen(s, c)
       push(s, c, act(kind, kind === 'dance' ? 2600 : kind === 'stamp' ? 2600 : 2000, 'stand'))
       if (kind === 'dance') s.dancedAt = s.t
     } else {
       toPosture(s, c, 'sit')
+      if (kind === 'poke') faceOpen(s, c)
       push(s, c, act(kind, kind === 'poke' ? 1500 : 1700, 'sit'))
     }
   }
@@ -459,7 +469,11 @@ function advance(s: KitState, p: KitProps, dt: number): void {
   let left = dt
   for (let i = 0; i < 4; i++) {
     const a = s.act
-    if (a.kind === 'gone') return
+    // Walked off at a handoff: gone until the mood moves on (even while it was still walking), then a fresh Kit walks in.
+    if (a.kind === 'gone') {
+      if (s.mood !== 'handoff') reenter(s)
+      return
+    }
     if (a.kind === 'walk') {
       const to = a.to ?? s.x
       const speed = a.speed ?? PACE.stroll
@@ -472,6 +486,8 @@ function advance(s: KitState, p: KitProps, dt: number): void {
       s.x = to
       left = Math.max(0, left - (dist / speed) * 1000)
       finish(s, p)
+      // Off the lane: gone for a frame at least before anything walks back in.
+      if (s.isGone) return
       continue
     }
     if (a.kind === 'pounce') s.x = pounceX(s, a)
@@ -586,6 +602,7 @@ function program(s: KitState, p: KitProps): void {
     }
     case 'work': {
       toPosture(s, c, 'sit')
+      faceOpen(s, c)
       if (last === 'type' && rand(s) < 0.4) return push(s, c, act('check', 1300, 'sit'))
       return push(s, c, act('type', Math.round(between(s, 3000, 6000)), 'sit'))
     }
@@ -598,6 +615,7 @@ function program(s: KitState, p: KitProps): void {
         return push(s, c, act('magnify', 1400, 'stand'))
       }
       toPosture(s, c, 'sit')
+      faceOpen(s, c)
       return push(s, c, act('read', Math.round(between(s, 3000, 5000)), 'sit'))
     }
     case 'test':
@@ -630,6 +648,7 @@ function program(s: KitState, p: KitProps): void {
       return push(s, c, act('doze', Math.round(between(s, 4000, 7000)), 'sit'))
     case 'tend':
       toPosture(s, c, 'sit')
+      faceOpen(s, c)
       return push(s, c, last === 'tend' && rand(s) < 0.35 ? act('poke', 1500, 'sit') : act('tend', Math.round(between(s, 3000, 5000)), 'sit'))
     case 'tired': {
       if (!isBusy && last !== 'walk' && rand(s) < 0.15) {
@@ -637,6 +656,7 @@ function program(s: KitState, p: KitProps): void {
         walkTo(s, c, c.x + (c.x < span / 2 ? 1 : -1) * between(s, 2, 4), 'trudge')
       }
       toPosture(s, c, 'sit')
+      if (last !== 'fan') faceOpen(s, c)
       return push(s, c, last === 'fan' ? act('hold', Math.round(between(s, 2000, 3000)), 'sit') : act('fan', Math.round(between(s, 2500, 3500)), 'sit'))
     }
   }
@@ -708,6 +728,7 @@ function notice(s: KitState, x: number): void {
   interrupt(s)
   const c = cursorOf(s)
   const center = c.x + KIT_W / 2
+  if (c.posture === 'down') toPosture(s, c, 'sit')
   face(s, c, x - center)
   push(s, c, act('notice', 900, c.posture))
   if (rand(s) < 0.5) {
@@ -1200,7 +1221,7 @@ export function particlesOf(s: KitState, p: KitProps, pose: Pose): Particle[] {
       if (e % 1500 < 220) add('spark', at.front + f * 1.5, 4.5)
       break
     case 'watchTest':
-      add('spinner', at.cx + f * 9.5, at.top - 1.5, beat(s.t, 110) % 8)
+      add('spinner', at.head + f * 6.5, at.top + 0.5, beat(s.t, 110) % 8)
       break
     case 'dance':
       if (e > 150)
@@ -1232,7 +1253,7 @@ export function particlesOf(s: KitState, p: KitProps, pose: Pose): Particle[] {
     case 'nap':
       for (let k = 0; k < 3; k++) {
         const u = ((e + k * 1300) % 3900) / 3900
-        add(u > 0.5 ? 'bigZ' : 'z', at.head + f * 2 + u * 3 * f, at.top + 1 + u * 6)
+        add(u > 0.5 ? 'bigZ' : 'z', at.head + f * (2 + u * 5) + Math.sin(u * 6) * 0.6, at.top + 1 + u * 7)
       }
       if (a.v % 3 === 0 && e > 3000 && e < 7500) add('bubble', at.head - f * 3, at.top + 3.5, beat(e - 3000, 450) > 1 ? 2 : beat(e - 3000, 450))
       break
@@ -1383,7 +1404,7 @@ export function drawableOf(s: KitState, p: KitProps): Drawable {
     const still = stillOf(s.mood, s.facing)
     const at = anchorOf(s, still.pose)
     const particles: Particle[] =
-      still.mark === null ? [] : [{ kind: still.mark, x: still.mark === 'spinner' ? at.cx + s.facing * 9.5 : at.head + s.facing, y: still.mark === 'spinner' ? at.top - 1.5 : at.top + 2.5, frame: still.mark === 'dots' ? 3 : 0, tone: 0 }]
+      still.mark === null ? [] : [{ kind: still.mark, x: still.mark === 'spinner' ? at.head + s.facing * 6.5 : at.head + s.facing, y: still.mark === 'spinner' ? at.top + 0.5 : at.top + 2.5, frame: still.mark === 'dots' ? 3 : 0, tone: 0 }]
     return { x: s.x, pose: still.pose, particles, isGone: false, isDim: s.mood === 'dim', caption: p.caption }
   }
   const pose = poseOf(s, p)
@@ -1654,10 +1675,11 @@ const T_PROPS: Record<Prop, Px[]> = {
 /** One terminal cell: a glyph and its colors. */
 export type Cell = { glyph: string; color?: string; background?: string }
 
+/** Particles in the terminal: glyphs a terminal font has (Cascadia Mono, Menlo and their kind), one cell wide. */
 const GLYPH: Record<ParticleKind, { glyphs: string[]; colors: string[] }> = {
   heart: { glyphs: ['♥'], colors: ['#E8536B'] },
-  spark: { glyphs: ['✦'], colors: ['#F2C14E', '#F2A33A', '#EBA084', '#F2C14E'] },
-  confetti: { glyphs: ['•', '▪', '✦'], colors: ['#F2C14E', '#6FA8F5', '#E5603F', '#7DBE6A', '#D97757', '#B58CE0'] },
+  spark: { glyphs: ['*'], colors: ['#F2C14E', '#F2A33A', '#EBA084', '#F2C14E'] },
+  confetti: { glyphs: ['•', '▪', '*'], colors: ['#F2C14E', '#6FA8F5', '#E5603F', '#7DBE6A', '#D97757', '#B58CE0'] },
   z: { glyphs: ['z'], colors: ['#9A9AA0'] },
   bigZ: { glyphs: ['Z'], colors: ['#9A9AA0'] },
   bang: { glyphs: ['!'], colors: ['#F2A33A'] },
@@ -1666,8 +1688,8 @@ const GLYPH: Record<ParticleKind, { glyphs: string[]; colors: string[] }> = {
   note: { glyphs: ['♪'], colors: ['#9A9AA0'] },
   sweat: { glyphs: ['·'], colors: ['#6FA8F5'] },
   star: { glyphs: ['*', '+'], colors: ['#F2C14E', '#F2A33A', '#F2C14E'] },
-  butterfly: { glyphs: ['ʚ', 'ɞ'], colors: ['#6FA8F5'] },
-  leaf: { glyphs: ['❦', '❧'], colors: ['#7DBE6A'] },
+  butterfly: { glyphs: ['ж'], colors: ['#6FA8F5'] },
+  leaf: { glyphs: ['♣'], colors: ['#7DBE6A'] },
   bubble: { glyphs: ['°', 'o', 'O'], colors: ['#9A9AA0'] },
   spinner: { glyphs: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'], colors: ['#6FA8F5'] },
   ember: { glyphs: ['·'], colors: ['#F2A33A', '#E5603F'] },
@@ -2193,7 +2215,7 @@ const D_PARTICLE: Record<ParticleKind, { frames: string[][]; colors: string[] }>
   question: { frames: [['.xxx.', 'x...x', '...x.', '..x..', '.....', '..x..']], colors: ['#D97757'] },
   dots: { frames: [['x'], ['x.x'], ['x.x.x'], ['x.x.x']], colors: ['#9A9AA0'] },
   note: { frames: [['.xx', '.x.', '.x.', 'xx.', 'xx.']], colors: ['#9A9AA0'] },
-  sweat: { frames: [['.x.', 'xxx', '.x.']], colors: ['#6FA8F5'] },
+  sweat: { frames: [['.x.', 'xxx', 'xxx', '.x.']], colors: ['#6FA8F5'] },
   star: { frames: [['.x.', 'xxx', '.x.'], ['x.x', '.x.', 'x.x']], colors: ['#F2C14E', '#F2A33A', '#FFE08A'] },
   butterfly: { frames: [['xx.xx', 'xxkxx', '.x.x.'], ['.x.x.', '.xkx.', '..k..']], colors: ['#6FA8F5'] },
   leaf: { frames: [['.xx', 'xxx', 'x..'], ['xx.', 'xxx', '..x']], colors: ['#7DBE6A'] },
@@ -2214,30 +2236,23 @@ export function desktopLanePx(columns: number): number {
 /** Lane units in a Desktop lane `px` wide. */
 export const desktopLaneUnits = (px: number): number => Math.floor(px / (D_PX * 2))
 
-/** The whole lane on Desktop as one SVG: a soft shadow, then one path per color (crisp pixels). */
-export function desktopSvg(d: Drawable, px: number): string {
+/** The Desktop lane as art pixels: a grid of colors (null: see-through), Kit then what floats beside it, and its shadow. */
+export function desktopLane(d: Drawable, px: number): { grid: (string | null)[][]; shadow: { cx: number; rx: number; opacity: number } | null } {
   const w = Math.max(KIT_W * 2, Math.floor(px / D_PX))
   const ht = D_LANE_H
-  const colors = new Map<string, number[][]>()
+  const grid: (string | null)[][] = Array.from({ length: ht }, () => Array.from({ length: w }, () => null))
   const put = (x: number, y: number, color: string) => {
-    if (x < 0 || y < 0 || x >= w || y >= ht) return
-    let rows = colors.get(color)
-    if (rows === undefined) colors.set(color, (rows = Array.from({ length: ht }, () => [])))
-    rows[y]!.push(x)
+    if (x >= 0 && y >= 0 && x < w && y < ht) grid[y]![x] = color
   }
-  let shadow = ''
+  let shadow: { cx: number; rx: number; opacity: number } | null = null
   if (!d.isGone) {
-    const sprite = desktopSprite(d.pose, d.isDim)
     const left = Math.round((d.x + d.pose.dx) * 2)
     const top = ht - D_H - Math.round(d.pose.dy * 2)
-    // Every color goes into its own path; a pixel taken twice keeps the later (props over the body).
-    const taken = new Map<number, string>()
-    sprite.forEach((row, y) => row.forEach((c, x) => c !== null && taken.set((top + y) * w + left + x, c)))
-    for (const [i, c] of taken) put(i % w, Math.floor(i / w), c)
+    desktopSprite(d.pose, d.isDim).forEach((row, y) => row.forEach((c, x) => c !== null && put(left + x, top + y, c)))
     const lifted = Math.max(0, d.pose.dy)
     const body = d.pose.body
     const span = body === 'curl' || body === 'lie' || body === 'roll' || body === 'stretch' ? 14 : 11
-    shadow = `<ellipse cx="${(left + D_W / 2) * D_PX}" cy="${(ht - 1) * D_PX}" rx="${((span - lifted) * D_PX).toFixed(1)}" ry="${(1.5 * D_PX).toFixed(1)}" fill="#000" fill-opacity="${(0.16 - lifted * 0.03).toFixed(2)}" shape-rendering="auto"/>`
+    shadow = { cx: left + D_W / 2, rx: span - lifted, opacity: 0.16 - lifted * 0.03 }
   }
   for (const p of d.particles) {
     const spec = D_PARTICLE[p.kind]
@@ -2253,30 +2268,36 @@ export function desktopSvg(d: Drawable, px: number): string {
     const y0 = cy - Math.floor(rows.length / 2)
     rows.forEach((row, y) => [...row].forEach((ch, x) => ch !== '.' && put(x0 + x, y0 + y, ch === 'k' ? '#2A1B16' : ch === 'b' ? '#6FA8F5' : color)))
   }
-  let paths = ''
-  for (const [color, rows] of colors) {
-    let dPath = ''
-    rows.forEach((xs, y) => {
-      if (xs.length === 0) return
-      xs.sort((a, b) => a - b)
-      let start = xs[0]!
-      let prev = start
-      for (let i = 1; i <= xs.length; i++) {
-        const x = xs[i]
-        if (x !== undefined && (x === prev || x === prev + 1)) {
-          prev = x
-          continue
-        }
-        dPath += `M${start} ${y}h${prev - start + 1}v1h${-(prev - start + 1)}z`
-        if (x !== undefined) start = prev = x
-      }
-    })
-    paths += `<path fill="${color}" d="${dPath}"/>`
-  }
+  return { grid, shadow }
+}
+
+/** The whole lane on Desktop as one SVG: a soft shadow, then one path per color (crisp pixels). */
+export function desktopSvg(d: Drawable, px: number): string {
+  const { grid, shadow } = desktopLane(d, px)
+  const w = grid[0]?.length ?? 0
+  const ht = grid.length
+  // Runs of one color in a row become one rectangle in that color's path.
+  const paths = new Map<string, string>()
+  grid.forEach((row, y) => {
+    let x = 0
+    while (x < w) {
+      const color = row[x]
+      let end = x + 1
+      while (end < w && row[end] === color) end++
+      if (color !== null && color !== undefined) paths.set(color, `${paths.get(color) ?? ''}M${x} ${y}h${end - x}v1h${x - end}z`)
+      x = end
+    }
+  })
   const title = d.caption.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const ground =
+    shadow === null
+      ? ''
+      : `<ellipse cx="${shadow.cx * D_PX}" cy="${(ht - 1) * D_PX}" rx="${(shadow.rx * D_PX).toFixed(1)}" ry="${(1.5 * D_PX).toFixed(1)}" fill="#000" fill-opacity="${shadow.opacity.toFixed(2)}" shape-rendering="auto"/>`
+  let body = ''
+  for (const [color, dPath] of paths) body += `<path fill="${color}" d="${dPath}"/>`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w * D_PX}" height="${ht * D_PX}" viewBox="0 0 ${w * D_PX} ${ht * D_PX}" shape-rendering="crispEdges">` +
-    `<style>:root{color-scheme:light dark}</style><title>${title}</title>${shadow}<g transform="scale(${D_PX})">${paths}</g></svg>`
+    `<style>:root{color-scheme:light dark}</style><title>${title}</title>${ground}<g transform="scale(${D_PX})">${body}</g></svg>`
   )
 }
 

@@ -198,12 +198,12 @@ CSS = (
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(HERE, 'out'))
-    ap.add_argument('--state', default=None, help='only this state (ready, working-no-plan, working, done-failing, away, kit, or a pane page: pane-overview, pane-guardrails, pane-activity)')
+    ap.add_argument('--state', default=None, help='only the states that start with this (ready, working-no-plan, working, done-failing, away, kit (and Kit through a turn: kit-idle, kit-thinking, kit-finished, kit-touched), or a pane page: pane-overview, pane-guardrails, pane-activity)')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     parts = []
     for t in trees_of(args.out):
-        if t['surface'] != 'desktop' or (args.state and t['name'] != args.state):
+        if t['surface'] != 'desktop' or (args.state and not t['name'].startswith(args.state)):
             continue
         kind = 'pane' if t['name'].startswith('pane-') else 'band'
         parts.append(f'<section><h2>{html.escape(t["name"])} · {t["columns"]} columns</h2><div class="{kind}" style="width:{t["columns"]}ch">{render(t["tree"])}</div></section>')

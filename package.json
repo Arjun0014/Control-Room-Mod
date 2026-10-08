@@ -1,14 +1,15 @@
 {
   "name": "project-sentinel-workspace",
   "private": true,
-  "description": "Development workspace for the Control Room Claude Code plugin (the plugin itself has no runtime dependencies).",
+  "description": "Development workspace for the Project Sentinel Claude Code plugin (the plugin itself has no runtime dependencies).",
   "license": "MIT",
   "scripts": {
     "typecheck": "node tools/test/mod.mjs typecheck",
     "validate": "claude plugin validate plugins/project-sentinel --strict && claude plugin validate .",
     "source": "node tools/test/source.mjs",
     "test": "node tools/test/mod.mjs test",
-    "check": "npm run typecheck && npm run validate && npm run source && npm run test"
+    "check": "npm run typecheck && npm run validate && npm run source && npm run test",
+    "snapshot": "node tools/test/snapshot.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

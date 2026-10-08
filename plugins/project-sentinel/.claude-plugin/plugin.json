@@ -9,6 +9,10 @@
   "homepage": "https://github.com/Arjun0014/Control-Room-Mod",
   "repository": "https://github.com/Arjun0014/Control-Room-Mod",
   "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
+  "documentationUrl": "https://github.com/Arjun0014/Control-Room-Mod#readme",
+  "supportUrl": "https://github.com/Arjun0014/Control-Room-Mod/issues",
+  "privacyPolicyUrl": "https://github.com/Arjun0014/Control-Room-Mod/blob/main/SECURITY.md#privacy",
   "keywords": [
     "project-sentinel",
     "control-room",

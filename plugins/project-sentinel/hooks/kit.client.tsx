@@ -1976,7 +1976,7 @@ function geoOf(body: Body, tail: number, breath: boolean): Geo {
           ? [{ cx: 15, cy: 21.5, rx: 2.8, ry: 1.6 }, { cx: 25, cy: 21.5, rx: 2.8, ry: 1.6 }]
           : isBack
             ? []
-            : [{ cx: 15.4, cy: 22.2, rx: 2.5, ry: 1.3 }, { cx: 24.6, cy: 22.2, rx: 2.5, ry: 1.3 }],
+            : [{ cx: 15.6, cy: 21.9, rx: 2.9, ry: 1.7 }, { cx: 24.4, cy: 21.9, rx: 2.9, ry: 1.7 }],
         tail: isBack
           ? [[20, e.cy + e.ry - 1.5], [22 + sw, e.cy + 1], [18.5 - sw, e.cy - 5]]
           : [[30, isStanding ? 17.6 : 21.2], [37.4, isStanding ? 18 : 22.2], [36.2 + sw * 0.4, isStanding ? 9.6 - sw : 15.2 - sw]],
@@ -2080,8 +2080,8 @@ const D_MOUTH: Record<Mouth, string[]> = {
 /** The near arm by gesture, as an offset from the body's middle (facing right), its size, and a far arm. */
 const D_ARM: Record<Arms, { at: Pt; rx: number; ry: number; far?: Pt; front?: Pt } | null> = {
   rest: null,
-  wave: { at: [12, -6.6], rx: 2.1, ry: 2.6 },
-  cheer: { at: [11.6, -8], rx: 2.1, ry: 2.6, far: [-9.6, -8.4] },
+  wave: { at: [11.6, -5.4], rx: 2.1, ry: 2.6, front: [11, -4.4] },
+  cheer: { at: [11.2, -5.8], rx: 2.1, ry: 2.6, far: [-9.4, -6.2], front: [10.8, -5] },
   typeA: { at: [11, 5.2], rx: 2.6, ry: 1.6 },
   typeB: { at: [11.8, 6], rx: 2.6, ry: 1.5 },
   face: { at: [7.4, -2.4], rx: 2.9, ry: 2.5, front: [3.6, -2.2] },
@@ -2092,7 +2092,7 @@ const D_ARM: Record<Arms, { at: Pt; rx: number; ry: number; far?: Pt; front?: Pt
   poke: { at: [12.2, 4.4], rx: 2.8, ry: 1.5 },
   fanA: { at: [11.2, -5], rx: 2.1, ry: 2.3 },
   fanB: { at: [11.8, -2.4], rx: 2.1, ry: 2.3 },
-  reach: { at: [11, -9.6], rx: 2, ry: 2.6 },
+  reach: { at: [10.6, -7.4], rx: 2, ry: 2.6 },
   chin: { at: [7.8, 2.4], rx: 2.2, ry: 2 },
   warm: { at: [11.6, 3.8], rx: 2.5, ry: 1.7, far: [9.6, 4.8] },
 }
@@ -2167,10 +2167,10 @@ export function desktopSprite(pose: Pose, isDim = false): (string | null)[][] {
     else if (pose.ears === 'flick' && i === 1) tip = [tip[0] + 2.6, tip[1] + 3]
     fillTriangle(r, a, b, tip, 4, pal.base)
     if (g.isEarBack === true) continue
-    // The inner ear, pink, inset toward the base.
-    const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+    // The inner ear, pink, the ear drawn smaller about its own middle (and a little lower, into the head).
+    const mid: Pt = [(a[0] + b[0] + tip[0]) / 3, (a[1] + b[1] + tip[1]) / 3 + 0.8]
     const inset = (p: Pt, k: number): Pt => [p[0] + (mid[0] - p[0]) * k, p[1] + (mid[1] - p[1]) * k]
-    fillTriangle(r, inset(a, 0.45), inset(b, 0.45), [tip[0] + (mid[0] - tip[0]) * 0.3, tip[1] + (mid[1] - tip[1]) * 0.3], 4, pal.ear)
+    fillTriangle(r, inset(a, 0.42), inset(b, 0.42), inset(tip, 0.36), 4, pal.ear)
   }
   fillEllipse(r, body, 4, bodyTone)
   if (g.belly !== null) fillEllipse(r, g.belly, 4, (u, v) => (v > 0.45 ? pal.bellyShade : pal.belly))

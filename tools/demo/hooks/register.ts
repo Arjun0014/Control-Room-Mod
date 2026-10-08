@@ -18,7 +18,8 @@
 import type { Register, ToolCallArgs, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 /** Control Room's milestones tool, offered where Claude Code has no task list. */
-const MILESTONES_TOOL = 'mcp__project-sentinel__milestones'
+/** Project Sentinel's milestones tool (or a test snapshot's, `cr-test`), found among the offered tools when /demo runs. */
+let milestonesTool = 'mcp__project-sentinel__milestones'
 
 /** The request the scripted turn answers: the run's objective. */
 const REQUEST = 'The ISS speed test fails. Fix it, add orbitalPeriod with a test, and document the helpers.'
@@ -60,7 +61,7 @@ function milestonesCall(states: readonly State[], objective?: string): Call {
     const status = states[i] ?? 'pending'
     return status === 'in_progress' ? { title, status, doing } : { title, status }
   })
-  return { name: MILESTONES_TOOL, input: objective === undefined ? { milestones } : { objective, milestones } }
+  return { name: milestonesTool, input: objective === undefined ? { milestones } : { objective, milestones } }
 }
 
 /** TodoWrite's whole list for these states, where Claude Code offers it instead. */
@@ -200,9 +201,10 @@ export const register: Register = on => {
   on('command.run', { command: 'demo' }, async ($, e) => {
     const root = (await $.session.root()).replace(/[\\/]+$/, '')
     const names = new Set((await $.tool.list()).map(t => t.name))
+    milestonesTool = [...names].find(n => /^mcp__(project-sentinel|cr-test)__milestones$/.test(n)) ?? milestonesTool
     const args = String(e.args ?? '').trim().toLowerCase()
     if (args === 'calls') return replayCalls()
-    const via = names.has(MILESTONES_TOOL) ? 'milestones' : names.has('TodoWrite') ? 'todos' : null
+    const via = names.has(milestonesTool) ? 'milestones' : names.has('TodoWrite') ? 'todos' : null
     const words = args.split(/\s+/)
     pending = { steps: script(root, via), paceMs: words.includes('slow') ? 4_000 : 900, isMiss: words.includes('miss') }
     $.clock.after(50, () => $.prompt.submit({ text: REQUEST }))
@@ -213,7 +215,7 @@ export const register: Register = on => {
       const shell = (command: string, description: string) => $.tool.call({ tool: 'Bash', command, description }).catch(() => undefined)
       // The task list as Claude would keep it here: Control Room's milestones
       // tool where it is offered, else the Task tools, else TodoWrite.
-      const via = names.has(MILESTONES_TOOL) ? 'milestones' : names.has('TaskCreate') ? 'tasks' : 'todos'
+      const via = names.has(milestonesTool) ? 'milestones' : names.has('TaskCreate') ? 'tasks' : 'todos'
       const ids: string[] = []
       if (via === 'tasks') {
         for (const [subject, activeForm] of MILESTONES) {
@@ -225,7 +227,7 @@ export const register: Register = on => {
       const plan = async (states: readonly State[]) => {
         if (via === 'milestones') {
           // Registered at run time, so the generated tool types do not name it.
-          await $.tool.call({ tool: MILESTONES_TOOL, ...milestonesCall(states).input } as unknown as ToolCallArgs)
+          await $.tool.call({ tool: milestonesTool, ...milestonesCall(states).input } as unknown as ToolCallArgs)
         } else if (via === 'todos') {
           await $.tool.call({ tool: 'TodoWrite', ...todosCall(states).input } as unknown as ToolCallArgs)
         } else {

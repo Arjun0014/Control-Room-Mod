@@ -1,5 +1,5 @@
 # Everything that runs unattended: the type-check against the engine's own declarations, strict
-# validation of the plugin and the marketplace, and the test suite (pure logic, the Runtime over an
+# validation of the plugin and the marketplace, the source rules, and the test suite (pure logic, the Runtime over an
 # in-memory host, and the engine-driven UI and hook tests). No step signs in or calls a model.
 #
 # What CI does not cover: the live CPU and memory sampler on a real machine (only Windows has been
@@ -69,6 +69,9 @@ jobs:
 
       - name: Validate the plugin and the marketplace
         run: npm run validate
+
+      - name: Source rules (what Anthropic's directory reads in the plugin's source)
+        run: npm run source
 
       - name: Test
         run: npm test

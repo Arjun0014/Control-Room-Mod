@@ -36,8 +36,16 @@ function assemble() {
   return SCRATCH
 }
 
+/** An argument as cmd.exe reads it: quoted when it holds a space or a character cmd.exe acts on. */
+const forCmd = arg => (/[\s"&|<>^%]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg)
+
 function run(command, args) {
-  const result = spawnSync(command, args, { stdio: 'inherit', cwd: REPO })
+  // npm installs `claude` on Windows as a `.cmd` shim, which only a shell can start (a bare spawn
+  // fails with ENOENT): there the command line goes through cmd.exe, each argument quoted.
+  const isShim = process.platform === 'win32' && command === 'claude'
+  const result = isShim
+    ? spawnSync([command, ...args].map(forCmd).join(' '), { stdio: 'inherit', cwd: REPO, shell: true })
+    : spawnSync(command, args, { stdio: 'inherit', cwd: REPO })
   if (result.error !== undefined) {
     console.error(`${command}: ${result.error.message}`)
     return 1

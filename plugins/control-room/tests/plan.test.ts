@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { applyTool, emptyPlan, fromTodoWrite, objectiveOf, planOf, progressOf } from '../hooks/features/plan'
+import { applyTool, emptyPlan, fromMilestones, fromTodoWrite, objectiveOf, planOf, progressOf } from '../hooks/features/plan'
 import { continuationContext } from '../hooks/features/prompts'
 
 const todo = (content: string, status: 'pending' | 'in_progress' | 'completed', activeForm = `${content}ing`) => ({ content, status, activeForm })
@@ -12,6 +12,28 @@ describe('run plan', () => {
     expect([p.done, p.total]).toEqual([1, 3])
     expect(p.current?.activeForm).toBe('Writing tests')
     expect(p.next?.subject).toBe('Update docs')
+  })
+
+  test('the milestone in progress is the one under way, ahead of later ones still being verified', () => {
+    // This run's own list after a handoff: an early milestone in hand, later ones built and awaiting review.
+    const plan = fromMilestones(
+      emptyPlan(),
+      {
+        milestones: [
+          { title: 'Understand the code', status: 'completed', evidence: 'read' },
+          { title: 'Verify the cache against the API', status: 'in_progress', doing: 'Checking the second refresh' },
+          { title: 'Verify the handoff', status: 'pending' },
+          { title: 'Redesign the status bar', status: 'verifying', evidence: 'tests pass' },
+          { title: 'Redesign Kit', status: 'verifying', evidence: 'contact sheet' },
+        ],
+      },
+      2,
+      10,
+    )
+    expect(progressOf(plan).current?.subject).toBe('Verify the cache against the API')
+    // With nothing in progress, the latest one being verified is what Claude is on.
+    const checking = fromMilestones(plan, { milestones: [{ title: 'Redesign the status bar', status: 'verifying' }, { title: 'Redesign Kit', status: 'verifying' }] }, 2, 20)
+    expect(progressOf(checking).current?.subject).toBe('Redesign Kit')
   })
 
   test('a rewritten list drops open work it no longer names, but never forgets finished work', () => {

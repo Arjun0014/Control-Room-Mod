@@ -76,7 +76,8 @@ export const G = {
    */
   segFull: '▇',
   segEmpty: '▇',
-  notch: '▌',
+  /** A full-height block: it stands a little proud of the bar's seven-eighths blocks, with no gap beside it. */
+  notch: '█',
   /** The status bar's top edge under Kit: a line at the top of its row, right under Kit's feet. */
   edge: '▔',
   /** Work: one square per milestone, filled when done. Never a line, so it reads apart from context. */

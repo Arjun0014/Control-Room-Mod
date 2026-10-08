@@ -126,10 +126,11 @@ describe('ui', () => {
         expect(await ui.find({ text: /68%/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ text: /\$1\.25/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open' }), `${surface} ${columns}`).toBeDefined()
-        // Names only where there is room for them, the run's cost among them.
-        const isLabelled = columns >= (surface === 'terminal' ? 72 : 64)
-        expect((await ui.find({ text: /CONTEXT/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
-        expect((await ui.find({ text: /RUN/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
+        // The terminal names its readings only where there is room; Desktop captions each cell at every width.
+        const isLabelled = surface === 'terminal' ? columns >= 72 : true
+        const [contextName, runName] = surface === 'terminal' ? [/CONTEXT/, /RUN/] : [/^Context/, /^Run$/]
+        expect((await ui.find({ text: contextName })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
+        expect((await ui.find({ text: runName })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
         await ui.unmount()
       }
     }
@@ -526,11 +527,24 @@ describe('ui', () => {
     expect(small).toContain('▇')
     expect(small).toContain('30%')
     await narrow.unmount()
+    // Desktop: each reading a cell, a caption over its graphic and value; every graphic an image of a fixed size.
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
-    expect(await desktop.find({ type: 'Svg' })).toBeDefined()
-    expect(textOf(await desktop.drawn())).toContain('2/4')
-    expect(textOf(await desktop.drawn())).toContain('CONTEXT')
+    const drawn = await desktop.drawn()
+    expect(textOf(drawn)).toContain('Work2 of 4')
+    expect(textOf(drawn)).toContain('Context')
+    expect(textOf(drawn)).toContain('Run$1.25')
+    each(drawn, n => {
+      if (n.type !== 'Svg') return
+      expect(n.props?.isInteractive, String(n.props?.alt)).toBeUndefined()
+      expect(typeof n.props?.width, String(n.props?.alt)).toBe('number')
+      expect(typeof n.props?.height, String(n.props?.alt)).toBe('number')
+    })
+    for (const key of ['cell-work', 'cell-ctx', 'cell-run']) expect(await desktop.find({ key }), key).toBeDefined()
     await desktop.unmount()
+    // A narrow band takes the compact cells.
+    const compact = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(60) })
+    expect(textOf(await compact.drawn())).toContain('Work2/4')
+    await compact.unmount()
   })
 
   test('once a turn ends, the top line says what it did, and checks show by name', async ($, on) => {
@@ -843,7 +857,10 @@ describe('ui', () => {
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const svg = await kitSvg(desktop)
     expect(String(svg?.props?.alt)).toContain('Kit')
-    expect(svg?.props?.isInteractive).toBe(true)
+    // An image that animates itself, of a fixed size: never a sandboxed frame the surface sizes and paints.
+    expect(svg?.props?.isInteractive).toBeUndefined()
+    expect(svg?.props?.width).toBe(280)
+    expect(String(svg?.props?.source)).toContain('<animate')
     await desktop.unmount()
     await $.command.run({ command: 'cr', args: 'motion off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
     await w.clock.advance(300)

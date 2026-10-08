@@ -291,14 +291,13 @@ export function moodOf(m: MoodInput): Mood {
 export const mirrored = (rows: readonly string[]): string[] => rows.map(r => [...r].reverse().join(''))
 
 // ---------------------------------------------------------------------------
-// Desktop: the same frames as an SVG that animates itself (SMIL), drawn in
-// the app's sandboxed frame with a transparent background, so Kit stands on
-// the status bar's top edge with no box around it.
+// Desktop: the same frames as an SVG that animates itself (SMIL), drawn as
+// an image (transparent, no frame around it) in a short lane above the headline.
 
 /** Desktop pixel size: each sprite pixel is 4 × 4 CSS pixels. */
 const PX = 4
 
-/** The lane: the sprite, room for a bubble above its head, and the ground line it stands on. */
+/** The lane: the sprite and room for a bubble above its head. */
 export const LANE_H = SPRITE_H * PX + 8
 
 function frameRects(rows: readonly string[], palette: Record<string, string>, dy: number): string {
@@ -318,14 +317,13 @@ function frameRects(rows: readonly string[], palette: Record<string, string>, dy
   return out
 }
 
-/** The root style that keeps the sandboxed frame transparent on light and dark themes alike. */
+/** The root style that keeps the drawing transparent on light and dark themes alike, in a frame as well. */
 const TRANSPARENT = '<style>:root{color-scheme:light dark}</style>'
 
 /**
  * Kit as SVG on a lane `width` pixels wide: each frame a group shown in turn,
  * the walk a glide (patrol back and forth with pauses, enter from the left,
- * exit to the right), bubbles beside the head, and a quiet ground line along
- * the bottom: the status bar's top edge. One mood per drawing.
+ * exit to the right) and bubbles beside the head. One mood per drawing.
  */
 export function svgCompanion(a: CompanionAnimation, width: number): string {
   const w = Math.max(120, Math.round(width))
@@ -353,11 +351,11 @@ export function svgCompanion(a: CompanionAnimation, width: number): string {
       })
       .join('')
   }
-  const ground = `<line x1="0" x2="${w}" y1="${h - 0.5}" y2="${h - 0.5}" stroke="#8E8E93" stroke-opacity="0.45" stroke-width="1"/>`
-  const head = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${TRANSPARENT}<title>${escapeXml(a.caption)}</title>${ground}`
+  const head = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${TRANSPARENT}<title>${escapeXml(a.caption)}</title>`
   const still = (x: number) => `<g transform="translate(${x} 0)">${groups('right')}${bubble(spriteW - 8)}</g>`
   const span = Math.max(1, w - spriteW - 24)
-  const rest = Math.round(span * 0.35)
+  // At rest it lines up with the band's left edge, over the headline's mark.
+  const rest = 0
   if (a.fps === 0 || a.walk === 'none') return `${head}${still(rest)}</svg>`
   if (a.walk === 'enter' || a.walk === 'exit') {
     // Once across, then still: in from the left edge to its resting place, or from it off to the right.
@@ -373,7 +371,7 @@ export function svgCompanion(a: CompanionAnimation, width: number): string {
   const k = (t: number) => (t / total).toFixed(4)
   const keyTimes = `0;${k(leg)};${k(leg + pause)};${k(2 * leg + pause)};1`
   const right = `<g><animate attributeName="display" values="inline;none" keyTimes="0;${k(leg + pause)}" dur="${total.toFixed(2)}s" calcMode="discrete" repeatCount="indefinite"/>${groups('right')}${bubble(spriteW - 8)}</g>`
-  const left = `<g display="none"><animate attributeName="display" values="none;inline" keyTimes="0;${k(leg + pause)}" dur="${total.toFixed(2)}s" calcMode="discrete" repeatCount="indefinite"/>${groups('left')}${bubble(-14)}</g>`
+  const left = `<g display="none"><animate attributeName="display" values="none;inline" keyTimes="0;${k(leg + pause)}" dur="${total.toFixed(2)}s" calcMode="discrete" repeatCount="indefinite"/>${groups('left')}${bubble(2)}</g>`
   return (
     `${head}<g><animateTransform attributeName="transform" type="translate" values="12 0;${(12 + span).toFixed(1)} 0;${(12 + span).toFixed(1)} 0;12 0;12 0" keyTimes="${keyTimes}" dur="${total.toFixed(2)}s" repeatCount="indefinite"/>${right}${left}</g>` +
     `</svg>`

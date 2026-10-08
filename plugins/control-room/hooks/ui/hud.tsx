@@ -17,7 +17,8 @@
  * CACHE a clock face (shown only while it can matter: when you are away, or
  * after a costly rebuild), and the whole run's cost on the right.
  *
- * Kit, when on, walks a lane of its own and stands on the HUD's top edge.
+ * Kit, when on, walks a lane of its own: in the terminal it stands on the
+ * HUD's top edge; on Desktop it is a short animated image above the headline.
  * A handoff that needs the person takes a line of its own above everything.
  *
  * Width decides the detail: the richest tier whose instruments all fit,
@@ -35,7 +36,11 @@ import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
 import { G, STATE_MARK, STOP_LOOK, clockGlyph, meterCells, scaleTrack, svgClock, svgContextMeter, svgStateIcon, svgWorkTrack, toneProps } from './theme'
 
-type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean }
+/**
+ * A run of text in one style. `isTrack` draws the empty part of a graphic in the theme's quietest
+ * gray (`subtle`): dim text varies from terminal to terminal, and a dim block reads as a slab.
+ */
+type Span = { text: string; tone?: Tone; isDim?: boolean; isBold?: boolean; isTrack?: boolean }
 
 /** A graphic drawn as SVG on the remote surfaces, in place of its glyphs: `cells` wide. */
 type Graphic = { source: string; cells: number; alt: string; height: number }
@@ -59,6 +64,9 @@ const INDENT = 2
 
 /** The pixels a cell of a status-bar graphic takes as SVG. */
 const CELL_PX = 8
+
+/** Kit's lane on the remote surfaces, in CSS pixels. */
+const KIT_LANE_W = 280
 
 const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).reduce((n, p) => n + p.text.length, 0)
 
@@ -95,7 +103,7 @@ function merged(spans: readonly Span[]): Span[] {
   const out: Span[] = []
   for (const span of spans) {
     const last = out[out.length - 1]
-    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold) last.text += span.text
+    if (last !== undefined && last.tone === span.tone && last.isDim === span.isDim && last.isBold === span.isBold && last.isTrack === span.isTrack) last.text += span.text
     else out.push({ ...span })
   }
   return out
@@ -105,7 +113,7 @@ function merged(spans: readonly Span[]): Span[] {
 function meterSpans(fraction: number, marker: number | null, tone: Tone, width: number): Span[] {
   const c = meterCells(fraction, width, marker)
   return merged(
-    Array.from({ length: c.width }, (_, i): Span => (i === c.marker ? { text: G.notch, tone: 'accent' } : i < c.filled ? { text: G.segFull, tone } : { text: G.segEmpty, isDim: true })),
+    Array.from({ length: c.width }, (_, i): Span => (i === c.marker ? { text: G.notch, tone: 'accent' } : i < c.filled ? { text: G.segFull, tone } : { text: G.segEmpty, isTrack: true })),
   )
 }
 
@@ -212,7 +220,7 @@ export function fitSegments(segments: readonly Segment[], width: number, gap = G
 
 function spanEl(kit: Kit, key: string, span: Span): RenderElement {
   const { Text } = kit.ui
-  const props = span.tone === undefined ? {} : toneProps(span.tone)
+  const props = span.isTrack === true ? { color: 'subtle' as const } : span.tone === undefined ? {} : toneProps(span.tone)
   return (
     <Text key={key} {...props} dimColor={span.isDim === true ? true : undefined} bold={span.isBold === true ? true : undefined}>
       {span.text}
@@ -301,13 +309,14 @@ function headlineRow(kit: Kit, hud: HudModel): RenderElement {
   const chips = chipsThatFit(hud.chips, Math.max(0, Math.floor((kit.columns - buttonWidth) * 0.45)))
   return (
     <Box key="hud-head" flexDirection="row" alignItems="center" columnGap={3}>
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} alignItems="center" {...clip(kit)}>
-        <Box width={INDENT} flexShrink={0}>
-          {Svg !== undefined ? <Svg key="mark" source={svgStateIcon(line.state)} alt={line.state} height={16} /> : <Text {...toneProps(mark.tone)}>{mark.glyph}</Text>}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} alignItems="center" columnGap={Svg !== undefined ? 1 : 0} {...clip(kit)}>
+        {/* The terminal's mark takes the indent the instruments line up under; an icon takes its own size. */}
+        <Box width={Svg !== undefined ? undefined : INDENT} flexShrink={0}>
+          {Svg !== undefined ? <Svg key="mark" source={svgStateIcon(line.state)} alt={line.state} width={16} height={16} /> : <Text {...toneProps(mark.tone)}>{mark.glyph}</Text>}
         </Box>
         <Box flexShrink={1} {...clip(kit)}>
           <Text wrap="truncate-end">
-            <Text bold={isStrong ? true : undefined} dimColor={isQuiet ? true : undefined} {...(line.state === 'failing' ? toneProps('warn') : {})}>
+            <Text bold={isStrong ? true : undefined} dimColor={isQuiet ? true : undefined}>
               {line.text}
             </Text>
             {line.detail === null || line.detail === '' ? null : <Text dimColor>{` · ${line.detail}`}</Text>}
@@ -391,7 +400,7 @@ function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderEleme
 /**
  * Kit's lane, only while the companion is on: the terminal's surface module
  * (made by the hooks module, which alone may name it), or on Desktop an SVG
- * that animates itself, its ground line the HUD's top edge.
+ * that animates itself, in a short lane above the headline.
  */
 function laneRow(kit: Kit, hud: HudModel, stage: RenderElement | null): RenderElement | null {
   const { Box, Svg } = kit.ui
@@ -405,10 +414,11 @@ function laneRow(kit: Kit, hud: HudModel, stage: RenderElement | null): RenderEl
     )
   }
   if (Svg === undefined) return null
-  const width = Math.min(1100, Math.max(240, kit.columns * 7))
+  // A short lane of a fixed size, drawn as an image (it animates itself): it fits any band, and an
+  // image is never boxed in a frame the surface sizes and paints on its own.
   return (
     <Box key="hud-lane" flexDirection="row">
-      <Svg key="companion" source={svgCompanion(companion as CompanionAnimation, width)} alt={companion.caption} height={LANE_H} isInteractive={companion.fps > 0 ? true : undefined} />
+      <Svg key="companion" source={svgCompanion(companion as CompanionAnimation, KIT_LANE_W)} alt={companion.caption} width={KIT_LANE_W} height={LANE_H} />
     </Box>
   )
 }
@@ -418,17 +428,145 @@ function edgeRow(kit: Kit, hud: HudModel, hasLane: boolean): RenderElement | nul
   const { Text } = kit.ui
   if (kit.surface !== 'terminal') return null
   return (
-    <Text key="hud-edge" dimColor wrap="truncate-end">
+    <Text key="hud-edge" color="subtle" wrap="truncate-end">
       {(hasLane ? G.edge : G.lineEmpty).repeat(Math.max(4, kit.columns))}
     </Text>
   )
 }
 
+// ---------------------------------------------------------------------------
+// Desktop and mobile: the same readings laid out by the surface, not by counted cells.
+//
+//   (▸) Running tests · step 8 of 10                              ▲ 1 issue   [◆ Control Room]
+//   Work                 Context · hands off at 80%    Cache                         Run
+//   ●━●━◉─○─○  2 of 10   ▬▬▬▬▬▬▬▬┃▬▬▬  24%            ◔ 42m left                 $43.00
+//
+// Each reading is a cell of an equal share of the row: a quiet caption over its
+// graphic and value, so the row never overflows and nothing drifts. Every
+// graphic is an image of a fixed size (never a sandboxed frame, which Desktop
+// sizes on its own and may paint opaque).
+
+/** One instrument on the remote surfaces: its caption, its graphic and its value. */
+export type Cell = { key: string; caption: Span[]; graphic?: { source: string; alt: string; width: number; height: number }; value: Span[]; isEnd?: boolean }
+
+/** The instruments as cells, `isCompact` in a narrow band (fewer stops, a shorter meter, terse values). */
+export function hudCells(hud: HudModel, isCompact: boolean): Cell[] {
+  const cells: Cell[] = []
+  const work = hud.work
+  if (work !== null && work.total > 0) {
+    const isDone = work.done === work.total
+    const stops = scaleTrack(work.track.length === work.total ? work.track : fallbackTrack(work.done, work.total, work.current !== null), isCompact ? 7 : 12)
+    const pitch = isCompact ? 14 : 17
+    const height = 14
+    const source = svgWorkTrack({ stops, height, pitch })
+    const width = Math.round(2 * (Math.max(3, height / 2 - 2) + 1.5) + (stops.length - 1) * pitch)
+    cells.push({
+      key: 'work',
+      caption: [{ text: 'Work', isDim: true }],
+      graphic: { source, alt: `Work: ${work.done} of ${work.total} milestones done`, width, height },
+      value: [{ text: isCompact ? `${work.done}/${work.total}` : `${work.done} of ${work.total}`, tone: isDone ? 'good' : undefined, isBold: true }],
+    })
+  }
+
+  const ctx = hud.ctx
+  const event = hud.autopilot.isOn && hud.autopilot.state !== 'armed' && hud.autopilot.state !== 'off' ? hud.autopilot.text : null
+  if (ctx.pct === null || ctx.tokens === null || ctx.window === null || ctx.window <= 0) {
+    cells.push({ key: 'ctx', caption: [{ text: 'Context', isDim: true }], value: [{ text: G.none, isDim: true }] })
+  } else {
+    const fraction = ctx.tokens / ctx.window
+    const marker = ctx.threshold === null ? null : ctx.threshold / ctx.window
+    const tone: Tone = ctx.tone === 'muted' || ctx.tone === 'normal' ? 'good' : ctx.tone
+    const note: Span[] =
+      event !== null
+        ? [{ text: ` · ${event}`, tone: 'accent' }]
+        : marker !== null && hud.autopilot.isOn && !isCompact
+          ? [{ text: ` · hands off at ${Math.round(marker * 100)}%`, isDim: true }]
+          : []
+    const width = isCompact ? 80 : 144
+    cells.push({
+      key: 'ctx',
+      caption: [{ text: 'Context', isDim: true }, ...note],
+      graphic: { source: svgContextMeter({ fraction, marker, tone, width, height: 14 }), alt: `Context ${ctx.pct}% used`, width, height: 14 },
+      value: [{ text: `${ctx.pct}%`, tone: valueTone(ctx.tone), isBold: true }],
+    })
+  }
+
+  const cache = hud.cache
+  if (cache !== null && cache.isShown) {
+    const word = cache.recentMiss === null && cache.warmth === 'warm' && cache.leftMs !== null && !isCompact ? `${cache.text} left` : cache.text
+    const glyphTone: Tone = cache.tone === 'normal' ? 'info' : cache.tone
+    const alt = cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
+    cells.push({
+      key: 'cache',
+      caption: [{ text: 'Cache', isDim: true }],
+      graphic: { source: svgClock({ fraction: cache.fraction, tone: glyphTone, size: 14 }), alt, width: 14, height: 14 },
+      value: [{ text: word, tone: cache.tone === 'warn' ? 'warn' : undefined, isDim: cache.tone === 'muted' ? true : undefined }],
+    })
+  }
+
+  const run = hud.cost.runUsd ?? hud.cost.usd
+  cells.push({
+    key: 'run',
+    caption: [{ text: 'Run', isDim: true }],
+    value: [{ text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null, isBold: run !== null }],
+    isEnd: true,
+  })
+  return cells
+}
+
+/** Below this many columns the remote surfaces take the compact cells. */
+const COMPACT_BELOW = 80
+
+function cellsRow(kit: Kit, hud: HudModel): RenderElement {
+  const { Box, Text, Svg } = kit.ui
+  const cells = hudCells(hud, kit.columns < COMPACT_BELOW)
+  const line = (key: string, spans: readonly Span[]) => <Text key={key} wrap="truncate-end">{spans.map((p, i) => spanEl(kit, `${key}-${i}`, p))}</Text>
+  return (
+    <Box key="hud-cells" flexDirection="row" columnGap={3} alignItems="flex-start">
+      {cells.map(c => (
+        <Box
+          key={`cell-${c.key}`}
+          flexDirection="column"
+          // The readings share the row equally; the run's cost takes what it needs at the right edge.
+          flexGrow={c.isEnd === true ? 0 : 1}
+          flexShrink={c.isEnd === true ? 0 : 1}
+          width={c.isEnd === true ? undefined : 0}
+          alignItems={c.isEnd === true ? 'flex-end' : 'flex-start'}
+          {...clip(kit)}
+        >
+          {line(`cell-${c.key}-caption`, c.caption)}
+          <Box flexDirection="row" alignItems="center" columnGap={1} {...clip(kit)}>
+            {c.graphic === undefined || Svg === undefined ? null : (
+              <Box flexShrink={0}>
+                <Svg key={`cell-${c.key}-svg`} source={c.graphic.source} alt={c.graphic.alt} width={c.graphic.width} height={c.graphic.height} />
+              </Box>
+            )}
+            {line(`cell-${c.key}-value`, c.value)}
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function nativeHud(kit: Kit, hud: HudModel): RenderElement {
+  const { Box } = kit.ui
+  return (
+    <Box flexDirection="column" rowGap={1}>
+      {hud.alert === null ? null : alertLine(kit, hud.alert)}
+      {laneRow(kit, hud, null)}
+      {headlineRow(kit, hud)}
+      {cellsRow(kit, hud)}
+    </Box>
+  )
+}
+
 export function hudView(kit: Kit, hud: HudModel, stage: RenderElement | null = null): RenderElement {
   const { Box } = kit.ui
+  if (kit.surface !== 'terminal') return nativeHud(kit, hud)
   const lane = laneRow(kit, hud, stage)
   return (
-    <Box flexDirection="column" rowGap={isNative(kit) ? 1 : 0}>
+    <Box flexDirection="column">
       {hud.alert === null ? null : alertLine(kit, hud.alert)}
       {lane}
       {edgeRow(kit, hud, lane !== null)}

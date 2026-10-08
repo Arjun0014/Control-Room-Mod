@@ -214,7 +214,7 @@ export function fromMilestones(plan: Plan, input: Record<string, unknown>, sessi
 export type Progress = {
   done: number
   total: number
-  /** The task under way: the latest one marked in progress or being verified. */
+  /** The task under way: the latest one marked in progress, else the latest being verified. */
   current: PlanTask | null
   /** The first open task after it. */
   next: PlanTask | null
@@ -226,7 +226,10 @@ export type Progress = {
 
 export function progressOf(plan: Plan): Progress {
   const done = plan.tasks.filter(t => t.status === 'completed').length
-  const current = [...plan.tasks].reverse().find(t => isActive(t.status)) ?? null
+  // Work in hand outranks work being checked: with one milestone in progress and others done but
+  // still being verified, the one in progress is what Claude is doing.
+  const latest = (status: PlanStatus) => [...plan.tasks].reverse().find(t => t.status === status) ?? null
+  const current = latest('in_progress') ?? latest('verifying')
   const next = plan.tasks.find(t => t.status === 'pending') ?? null
   return { done, total: plan.tasks.length, current, next, blocked: plan.tasks.filter(t => t.status === 'blocked'), waiting: plan.tasks.filter(t => t.status === 'waiting') }
 }

@@ -50,6 +50,21 @@ describe('prompt cache', () => {
     expect(expiresAt(s)).toBeNull()
   })
 
+  test("Keep warm's refreshes move the expiry but are no requests of the conversation, as Claude Code counts them", () => {
+    // The live 1-hour test: two requests (31,367 then 60,669 read), Claude Code's hit ratio 0.6219.
+    let s = observeRequest(emptyCache(), { at: T0, input: 2, read: 31_367, written: 29_302, model: 'claude-sonnet-5-5', effort: null }).state
+    s = observeRequest(s, { at: T0 + 3_000, input: 2, read: 60_669, written: 26_661, model: 'claude-sonnet-5-5', effort: null }).state
+    s = withTtl(s, '1h', 'probe')
+    const ratio = hitRatio(s)
+    s = req(s, T0 + 6 * MIN, 87_332, 87_330, { isRefresh: true }).state
+    s = req(s, T0 + 56 * MIN, 87_332, 87_330, { isRefresh: true }).state
+    expect(s.requests).toBe(2)
+    expect(hitRatio(s)).toBe(ratio)
+    expect(Math.round((ratio ?? 0) * 10_000)).toBe(6219)
+    expect(s.keepWarm.refreshes).toBe(2)
+    expect(expiresAt(s)).toBe(T0 + 56 * MIN + 60 * MIN)
+  })
+
   test('a model change before a request that misses is named, preventable, with the tokens re-cached', () => {
     let s = req(emptyCache(), T0, 400_000, 0).state
     const r = req(s, T0 + MIN, 401_000, 0, { model: 'claude-sonnet-5-5' })

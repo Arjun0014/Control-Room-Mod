@@ -413,7 +413,7 @@ export function workTrack(kit: Kit, input: { key: string; done: number; total: n
     const isAnimated = input.isAnimated === true && stops.includes('now')
     return (
       <Box key={input.key} flexDirection="row" alignItems="center" columnGap={1}>
-        <Svg key={`${input.key}-svg`} source={svgTrack({ stops, width: stops.length * 14 + 2, height: 12, isAnimated })} alt={`${input.done} of ${input.total} milestones done`} height={12} isInteractive={isAnimated ? true : undefined} />
+        <Svg key={`${input.key}-svg`} source={svgTrack({ stops, width: stops.length * 14 + 2, height: 12, isAnimated })} alt={`${input.done} of ${input.total} milestones done`} width={stops.length * 14 + 2} height={12} />
         <Text>{caption}</Text>
       </Box>
     )

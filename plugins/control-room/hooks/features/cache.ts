@@ -165,7 +165,7 @@ export function warmthOf(state: CacheState, now: number): Warmth {
   return now - state.lastRequestAt < TTL_MS['5m'] ? 'warm' : 'unknown'
 }
 
-/** Share of the prompt tokens served from the cache, over every request of this context. */
+/** Share of the prompt tokens served from the cache, over the conversation's requests in this context (Keep warm's refreshes left out). */
 export function hitRatio(state: CacheState): number | null {
   const total = state.read + state.written + state.uncached
   return total === 0 ? null : state.read / total
@@ -294,12 +294,14 @@ export function observeRequest(
       }
     }
   }
+  // The conversation's figures count its own requests, as Claude Code's do: a refresh is no request
+  // of the conversation (the engine counts it as a touch), and its reads would flatter the hit ratio.
   next = {
     ...next,
-    requests: next.requests + 1,
-    read: next.read + req.read,
-    written: next.written + req.written,
-    uncached: next.uncached + req.input,
+    requests: isRefresh ? next.requests : next.requests + 1,
+    read: isRefresh ? next.read : next.read + req.read,
+    written: isRefresh ? next.written : next.written + req.written,
+    uncached: isRefresh ? next.uncached : next.uncached + req.input,
     lastRequestAt: req.at,
     lastPrefix: isRefresh ? state.lastPrefix || prompt : prompt,
     model: isRefresh ? state.model : (req.model ?? state.model),

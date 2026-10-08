@@ -95,13 +95,15 @@ describe('companion', () => {
     expect(busy.walk).toBe('slow')
   })
 
-  test('Desktop draws Kit as a transparent SVG that animates itself, standing on a ground line, and holds still under reduced motion', () => {
+  test('Desktop draws Kit as a transparent SVG that animates itself, inside its own bounds, and holds still under reduced motion', () => {
     const pacing = svgCompanion(animationOf('think', { isReduced: false, isBusy: false }), 300)
     expect(pacing).toContain('<style>:root{color-scheme:light dark}</style>')
     expect(pacing).toContain('<animateTransform')
     expect(pacing).toContain('calcMode="discrete"')
     expect(pacing).toContain('<title>Kit paces while Claude thinks</title>')
-    expect(pacing).toContain('<line x1="0" x2="300"')
+    // No ground line of its own (the lane sits above the headline, not on an edge), and nothing drawn off the image.
+    expect(pacing).not.toContain('<line')
+    for (const m of pacing.matchAll(/<text x="(-?[\d.]+)"/g)) expect(Number(m[1]) + 12).toBeGreaterThanOrEqual(0)
     const leaving = svgCompanion(animationOf('handoff', { isReduced: false, isBusy: false }), 300)
     expect(leaving).toContain('fill="freeze"')
     const sitting = svgCompanion(animationOf('test', { isReduced: false, isBusy: false }), 300)

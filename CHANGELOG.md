@@ -10,7 +10,11 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 Work in progress toward the next release (likely 1.3.0): a verification pass against the live API
 and a redesign of the status bar and Kit. Not yet released; the items below are implemented and
-pass the test suite (236 tests) unless marked otherwise.
+pass the test suite (238 tests) unless marked otherwise. Open before the release, from the
+person's review of 1.3.0-rc.5 in Claude Desktop: the status bar must keep its four readings on
+Desktop (it collapsed to two when there were no milestones and the cache was hidden), Kit is too
+small there, and the panel needs a Desktop tidy-up (permission groups that read as headings,
+aligned pickers, the cache icon, the Now card's mark, the turn legend's colors).
 
 ### Changed
 

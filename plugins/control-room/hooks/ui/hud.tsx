@@ -65,8 +65,9 @@ const INDENT = 2
 /** The pixels a cell of a status-bar graphic takes as SVG. */
 const CELL_PX = 8
 
-/** Kit's lane on the remote surfaces, in CSS pixels. */
-const KIT_LANE_W = 280
+/** Kit's lane on the remote surfaces, in CSS pixels: room for a few of its widths to pace in. */
+const KIT_LANE_W = 360
+const KIT_LANE_MIN = 200
 
 const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).reduce((n, p) => n + p.text.length, 0)
 
@@ -414,11 +415,12 @@ function laneRow(kit: Kit, hud: HudModel, stage: RenderElement | null): RenderEl
     )
   }
   if (Svg === undefined) return null
-  // A short lane of a fixed size, drawn as an image (it animates itself): it fits any band, and an
-  // image is never boxed in a frame the surface sizes and paints on its own.
+  // A short lane of a fixed size, drawn as an image (it animates itself): narrower in a phone-sized
+  // band, and an image is never boxed in a frame the surface sizes and paints on its own.
+  const width = Math.min(KIT_LANE_W, Math.max(KIT_LANE_MIN, kit.columns * 6))
   return (
     <Box key="hud-lane" flexDirection="row">
-      <Svg key="companion" source={svgCompanion(companion as CompanionAnimation, KIT_LANE_W)} alt={companion.caption} width={KIT_LANE_W} height={LANE_H} />
+      <Svg key="companion" source={svgCompanion(companion as CompanionAnimation, width)} alt={companion.caption} width={width} height={LANE_H} />
     </Box>
   )
 }
@@ -442,18 +444,30 @@ function edgeRow(kit: Kit, hud: HudModel, hasLane: boolean): RenderElement | nul
 //   ●━●━◉─○─○  2 of 10   ▬▬▬▬▬▬▬▬┃▬▬▬  24%            ◔ 42m left                 $43.00
 //
 // Each reading is a cell of an equal share of the row: a quiet caption over its
-// graphic and value, so the row never overflows and nothing drifts. Every
-// graphic is an image of a fixed size (never a sandboxed frame, which Desktop
-// sizes on its own and may paint opaque).
+// graphic and value, so the row never overflows and nothing drifts. The four
+// readings always hold their cells, a quiet word standing in for one with
+// nothing to show yet, so the row keeps its rhythm instead of collapsing into
+// two readings far apart. Every graphic is an image of a fixed size (never a
+// sandboxed frame, which Desktop sizes on its own and may paint opaque).
 
 /** One instrument on the remote surfaces: its caption, its graphic and its value. */
 export type Cell = { key: string; caption: Span[]; graphic?: { source: string; alt: string; width: number; height: number }; value: Span[]; isEnd?: boolean }
+
+/** The prompt cache's words in its cell: "warm" while a turn keeps it so, else its time left, or what became of it. */
+function cacheWord(cache: NonNullable<HudModel['cache']>, isCompact: boolean): string {
+  if (cache.recentMiss !== null || cache.warmth !== 'warm' || cache.leftMs === null) return cache.text
+  // A turn's requests keep the cache warm; its time left matters only near the expiry (a long call).
+  if (cache.isInUse && cache.tone !== 'warn') return 'warm'
+  return isCompact ? cache.text : `${cache.text} left`
+}
 
 /** The instruments as cells, `isCompact` in a narrow band (fewer stops, a shorter meter, terse values). */
 export function hudCells(hud: HudModel, isCompact: boolean): Cell[] {
   const cells: Cell[] = []
   const work = hud.work
-  if (work !== null && work.total > 0) {
+  if (work === null || work.total === 0) {
+    cells.push({ key: 'work', caption: [{ text: 'Work', isDim: true }], value: [{ text: isCompact ? 'None' : 'No milestones yet', isDim: true }] })
+  } else {
     const isDone = work.done === work.total
     const stops = scaleTrack(work.track.length === work.total ? work.track : fallbackTrack(work.done, work.total, work.current !== null), isCompact ? 7 : 12)
     const pitch = isCompact ? 14 : 17
@@ -492,8 +506,10 @@ export function hudCells(hud: HudModel, isCompact: boolean): Cell[] {
   }
 
   const cache = hud.cache
-  if (cache !== null && cache.isShown) {
-    const word = cache.recentMiss === null && cache.warmth === 'warm' && cache.leftMs !== null && !isCompact ? `${cache.text} left` : cache.text
+  if (cache === null || cache.warmth === 'none') {
+    cells.push({ key: 'cache', caption: [{ text: 'Cache', isDim: true }], value: [{ text: G.none, isDim: true }] })
+  } else {
+    const word = cacheWord(cache, isCompact)
     const glyphTone: Tone = cache.tone === 'normal' ? 'info' : cache.tone
     const alt = cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
     cells.push({

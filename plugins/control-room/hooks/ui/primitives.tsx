@@ -20,11 +20,12 @@
 
 import type { RenderElement } from 'claude-code'
 
-import type { Tone } from '../../types'
+import type { HudState, Tone } from '../../types'
 import type { Kit } from './kit'
 import {
   CHECK_DOT,
   G,
+  STATE_MARK,
   TIMELINE,
   type TimelineSpan,
   clockGlyph,
@@ -32,11 +33,12 @@ import {
   meterCells,
   sparkline,
   svgBar,
-  svgClock,
   svgColumns,
   svgDiff,
   svgRing,
   svgSpark,
+  svgStateIcon,
+  svgSwatch,
   svgTimeline,
   svgTrack,
   timelineCells,
@@ -200,16 +202,19 @@ export function row(
 }
 
 /**
- * A group's name inside a card: small, dim and in capitals, so it orders the
- * rows under it without competing with them. `isSpaced` sets it apart from
- * the group above.
+ * What closes a run of cards that belong together (Guardrails' permission
+ * groups): their shared actions, then a short dim note, aligned with a card's
+ * own footnote. A group's name is a card's title, never a line among its
+ * rows: on Desktop a heading inside a box reads as one more row.
  */
-export function subhead(kit: Kit, key: string, title: string, isSpaced = false): RenderElement {
+export function footnote(kit: Kit, input: { key: string; text: string; actions?: Parameters<typeof buttons>[1] }): RenderElement {
   const { Box, Text } = kit.ui
+  const actions = input.actions === undefined ? null : buttons(kit, input.actions, `${input.key}-actions`, true)
   return (
-    <Box key={`subhead-${key}`} marginTop={isSpaced && kit.surface === 'terminal' ? 1 : 0}>
-      <Text dimColor bold>
-        {title.toUpperCase()}
+    <Box key={`foot-${input.key}`} flexDirection="column" paddingX={1} marginTop={actions !== null && isNative(kit) ? 1 : 0} rowGap={isNative(kit) ? 1 : 0}>
+      {actions}
+      <Text dimColor wrap="wrap">
+        {input.text}
       </Text>
     </Box>
   )
@@ -398,6 +403,49 @@ export function listItem(
   )
 }
 
+/** A text line's height on the remote surfaces, in CSS pixels: an icon beside a block lines up with its first line. */
+const LINE_PX = 24
+
+/**
+ * What the run is doing, with its state's mark: the glyph in the terminal, the
+ * status bar's 16-pixel icon elsewhere, set on the first line when the words
+ * wrap or carry a detail line under them.
+ */
+export function stateLine(kit: Kit, input: { key: string; state: HudState; text: string; detail?: string | null; isBold?: boolean; isDim?: boolean }): RenderElement {
+  const { Box, Text, Svg } = kit.ui
+  const mark = STATE_MARK[input.state]
+  const words = (
+    <Box flexGrow={1} flexShrink={1} flexDirection="column" {...clip(kit)}>
+      <Text bold={input.isBold === true ? true : undefined} dimColor={input.isDim === true ? true : undefined} wrap="wrap">
+        {input.text}
+      </Text>
+      {input.detail === undefined || input.detail === null || input.detail === '' ? null : (
+        <Text key={`${input.key}-detail`} dimColor wrap="wrap">
+          {input.detail}
+        </Text>
+      )}
+    </Box>
+  )
+  if (Svg === undefined) {
+    return (
+      <Box key={input.key} flexDirection="row" columnGap={1}>
+        <Box width={2} flexShrink={0}>
+          <Text {...toneProps(mark.tone)}>{mark.glyph}</Text>
+        </Box>
+        {words}
+      </Box>
+    )
+  }
+  return (
+    <Box key={input.key} flexDirection="row" columnGap={1} alignItems="flex-start">
+      <Box flexShrink={0}>
+        <Svg key={`${input.key}-mark`} source={svgStateIcon(input.state, LINE_PX)} alt={input.state} width={16} height={LINE_PX} />
+      </Box>
+      {words}
+    </Box>
+  )
+}
+
 /**
  * Milestone progress as a track: one stop per milestone (● done, ◉ the one
  * under way, ○ to come) joined by a thin line in the terminal, SVG circles
@@ -441,20 +489,14 @@ export function workTrack(kit: Kit, input: { key: string; done: number; total: n
   )
 }
 
-/** The prompt cache's time left: a clock face emptying (SVG on the remote surfaces), and its words beside it. */
+/**
+ * The prompt cache's state as a status line: a small dot emptying as its time runs out (`●` `◕` `◑`
+ * `◔` `○`, a glyph on every surface, as Context's own status reads), and its words beside it.
+ * A drawn clock face at this size read as a selected radio button on Desktop.
+ */
 export function cacheClock(kit: Kit, input: { key: string; fraction: number | null; tone: Tone; text: string; isBold?: boolean }): RenderElement {
-  const { Box, Text, Svg } = kit.ui
+  const { Text } = kit.ui
   const textTone: Tone = input.tone === 'warn' ? 'warn' : input.tone === 'muted' ? 'muted' : 'normal'
-  if (Svg !== undefined) {
-    return (
-      <Box key={input.key} flexDirection="row" alignItems="center" columnGap={1}>
-        <Svg key={`${input.key}-svg`} source={svgClock({ fraction: input.fraction, tone: input.tone === 'normal' ? 'info' : input.tone, size: 14 })} alt={input.text} height={14} />
-        <Text {...toneProps(textTone)} bold={input.isBold === true ? true : undefined}>
-          {input.text}
-        </Text>
-      </Box>
-    )
-  }
   return (
     <Text key={input.key} wrap="truncate-end">
       <Text {...toneProps(input.tone === 'normal' ? 'info' : input.tone)}>{`${clockGlyph(input.fraction)} `}</Text>
@@ -756,16 +798,29 @@ export function timelineStrip(kit: Kit, input: { key: string; spans: readonly Ti
 }
 
 /** A legend of colored marks and words, set apart by gaps rather than padding. */
-export function legend(kit: Kit, key: string, items: readonly { label: string; color: string }[]): RenderElement {
-  const { Box, Text } = kit.ui
+/**
+ * The kinds of work in a strip, each a colored square and a dim word. `color` is a theme key (the
+ * terminal's glyph); `svg`, when given, is the exact color the strip draws with on the remote
+ * surfaces, where the square is drawn too, so the legend and the strip never disagree (a theme
+ * key and an SVG fill are two palettes there).
+ */
+export function legend(kit: Kit, key: string, items: readonly { label: string; color: string; svg?: string }[]): RenderElement {
+  const { Box, Text, Svg } = kit.ui
   return (
-    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={2}>
-      {items.map(item => (
-        <Text key={`${key}-${item.label}`}>
-          <Text color={item.color}>{G.square}</Text>
-          <Text dimColor>{` ${item.label}`}</Text>
-        </Text>
-      ))}
+    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={2} rowGap={isNative(kit) ? 1 : 0}>
+      {items.map(item =>
+        Svg !== undefined && item.svg !== undefined ? (
+          <Box key={`${key}-${item.label}`} flexDirection="row" alignItems="center" columnGap={1}>
+            <Svg key={`${key}-${item.label}-swatch`} source={svgSwatch(item.svg)} alt={item.label} width={10} height={10} />
+            <Text dimColor>{item.label}</Text>
+          </Box>
+        ) : (
+          <Text key={`${key}-${item.label}`}>
+            <Text color={item.color}>{G.square}</Text>
+            <Text dimColor>{` ${item.label}`}</Text>
+          </Text>
+        ),
+      )}
     </Box>
   )
 }

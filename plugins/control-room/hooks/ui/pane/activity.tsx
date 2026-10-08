@@ -44,7 +44,7 @@ import {
   timelineStrip,
   workTrack,
 } from '../primitives'
-import { ACCENT, G, STATE_MARK, TIMELINE, toneProps } from '../theme'
+import { ACCENT, G, STATE_MARK, SVG_COLOR, TIMELINE, toneProps } from '../theme'
 
 const CALL_STATUS: Record<string, { glyph: string; tone: Tone }> = {
   running: { glyph: G.run, tone: 'info' },
@@ -208,8 +208,8 @@ function questCard(kit: Kit, quest: QuestView): RenderElement {
 /** The legend under a turn's time strip: the kinds of work that appear in it. */
 function timelineLegend(kit: Kit, timeline: TurnTimelineView): RenderElement {
   const kinds = (['read', 'edit', 'run', 'check', 'web', 'agent', 'other'] as const).filter(kind => timeline.spans.some(s => s.kind === kind))
-  const items = kinds.map(kind => ({ label: TIMELINE[kind].label, color: TIMELINE[kind].key }))
-  if (timeline.spans.some(s => s.isFailed)) items.push({ label: 'failed', color: 'error' })
+  const items = kinds.map(kind => ({ label: TIMELINE[kind].label, color: TIMELINE[kind].key, svg: TIMELINE[kind].svg }))
+  if (timeline.spans.some(s => s.isFailed)) items.push({ label: 'failed', color: 'error', svg: SVG_COLOR.bad })
   return legend(kit, 'turn-legend', items)
 }
 

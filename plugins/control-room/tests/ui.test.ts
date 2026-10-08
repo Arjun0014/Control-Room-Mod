@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import type { Settings } from '../hooks/core/settings'
 import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
 import { navRowColumns } from '../hooks/ui/primitives'
-import { meter } from '../hooks/ui/theme'
+import { ACCENT, TIMELINE, meter } from '../hooks/ui/theme'
 import { SESSION, world } from './fixtures/world'
 
 const ENGINE_ROW = { type: 'Text' as const, props: {}, children: ['ENGINE ROW'] }
@@ -539,7 +539,7 @@ describe('ui', () => {
       expect(typeof n.props?.width, String(n.props?.alt)).toBe('number')
       expect(typeof n.props?.height, String(n.props?.alt)).toBe('number')
     })
-    for (const key of ['cell-work', 'cell-ctx', 'cell-run']) expect(await desktop.find({ key }), key).toBeDefined()
+    for (const key of ['cell-work', 'cell-ctx', 'cell-cache', 'cell-run']) expect(await desktop.find({ key }), key).toBeDefined()
     await desktop.unmount()
     // A narrow band takes the compact cells.
     const compact = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(60) })
@@ -766,12 +766,14 @@ describe('ui', () => {
     await band.redraw()
     expect((await band.find({ type: 'Box', key: 'open-chip' }))?.props.backgroundColor).toBe('claude')
     await band.unmount()
-    // Desktop: the state's mark, the track and the meter as SVG, each transparent on the app's theme.
+    // Desktop: the state's mark, the track, the meter and the clock as SVG, each transparent on the app's theme.
+    // The cache keeps its cell while Claude works: warm, its time left no reading while requests keep it so.
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const svgs: Node[] = []
     each(await desktop.drawn(), n => void (n.type === 'Svg' ? svgs.push(n) : undefined))
-    expect(svgs.map(s => String(s.props?.alt))).toEqual(['working', 'Work: 1 of 3 milestones done', 'Context 30% used'])
+    expect(svgs.map(s => String(s.props?.alt))).toEqual(['working', 'Work: 1 of 3 milestones done', 'Context 30% used', expect.stringMatching(/^Prompt cache warm/)])
     for (const svg of svgs) expect(String(svg.props?.source)).toContain('color-scheme:light dark')
+    expect(textOf(await desktop.find({ key: 'cell-cache' }))).toBe('Cachewarm')
     expect((await desktop.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('primary')
     await desktop.unmount()
     // Once the turn ends and the person is away, the cache shows how long it has left.
@@ -780,6 +782,35 @@ describe('ui', () => {
     const away = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(textOf(await away.drawn())).toMatch(/CACHE ● (1h|59m) left/)
     await away.unmount()
+    for (const [columns, expected] of [[120, /^Cache(1h|59m) left$/], [60, /^Cache(1h|59m)$/]] as const) {
+      const remote = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(columns) })
+      expect(textOf(await remote.find({ key: 'cell-cache' })), String(columns)).toMatch(expected)
+      await remote.unmount()
+    }
+  })
+
+  test('on Desktop the four readings keep their cells, a quiet word standing in for one with nothing yet', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await boot($, w)
+    // Mobile leaves the band to the engine.
+    for (const surface of ['desktop'] as const) {
+      for (const [columns, none] of [[120, 'No milestones yet'], [60, 'None']] as const) {
+        const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'AbovePrompt', props: bandProps(columns) })
+        const where = `${surface} ${columns}`
+        // Before any milestone and before anything is cached: Work and Cache keep their place, in dim words.
+        const work = await ui.find({ key: 'cell-work' })
+        expect(textOf(work), where).toBe(`Work${none}`)
+        expect(textOf(await ui.find({ key: 'cell-cache' })), where).toBe('Cache—')
+        let dimmed = 0
+        each(work, n => void (n.type === 'Text' && n.props?.dimColor === true && textOf(n) === none ? dimmed++ : undefined))
+        expect(dimmed, where).toBe(1)
+        // The three readings share the row equally; the run's cost takes what it needs at the right edge.
+        for (const key of ['cell-work', 'cell-ctx', 'cell-cache']) expect((await ui.find({ key }))?.props.flexGrow, `${where} ${key}`).toBe(1)
+        expect((await ui.find({ key: 'cell-run' }))?.props.flexGrow, where).toBe(0)
+        await ui.unmount()
+      }
+    }
   })
 
   test('Overview leads with the run, then Work, Context and Cache, each with how it starts over', async ($, on) => {
@@ -859,9 +890,14 @@ describe('ui', () => {
     expect(String(svg?.props?.alt)).toContain('Kit')
     // An image that animates itself, of a fixed size: never a sandboxed frame the surface sizes and paints.
     expect(svg?.props?.isInteractive).toBeUndefined()
-    expect(svg?.props?.width).toBe(280)
+    expect(svg?.props?.width).toBe(360)
+    expect(svg?.props?.height).toBe(68)
     expect(String(svg?.props?.source)).toContain('<animate')
     await desktop.unmount()
+    // A narrow band gives it a narrower lane, never one wider than the band.
+    const narrowBand = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(40) })
+    expect((await kitSvg(narrowBand))?.props?.width).toBe(240)
+    await narrowBand.unmount()
     await $.command.run({ command: 'cr', args: 'motion off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
     await w.clock.advance(300)
     const still = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
@@ -915,8 +951,14 @@ describe('ui', () => {
       await ui.press({ key: 'tab-guardrails' })
       await w.clock.advance(300)
       text = textOf(await ui.drawn())
-      const order = ['PROJECT', 'Project edits', 'NETWORK', 'Network access', 'GIT', 'Git push', 'EXTERNAL', 'Deploy', 'SAFETY', 'Dangerous commands']
+      const order = ['PROJECT', 'Project edits', 'NETWORK', 'Network access', 'GIT', 'Git push', 'EXTERNAL', 'Deploy', 'SAFETY', 'Dangerous commands', 'Deny stops an action', 'SUBAGENTS']
       for (let i = 1; i < order.length; i++) expect(text.indexOf(order[i - 1]!), `${surface}: ${order[i]}`).toBeLessThan(text.indexOf(order[i]!))
+      // Each group is a card of its own, titled in the section's accent: a heading inside a box reads as a row on Desktop.
+      for (const id of ['project', 'network', 'git', 'external', 'safety']) {
+        const colors = new Set<unknown>()
+        each(await ui.find({ key: `card-perm-${id}-head` }), n => void (n.type === 'Text' && n.props?.color !== undefined ? colors.add(n.props.color) : undefined))
+        expect([...colors], `${surface} ${id}`).toEqual([ACCENT.guardrails])
+      }
       // Overview: Now is what Claude is doing; the machine's readings sit with Guardrails.
       await ui.press({ key: 'tab-overview' })
       await w.clock.advance(300)
@@ -926,6 +968,71 @@ describe('ui', () => {
       expect(now, surface).not.toContain('Memory')
       await ui.unmount()
     }
+  })
+
+  test('panel details: the permissions’ shared footnote after the last group, the Now mark, the cache’s dot, the turn legend in the strip’s colors', async ($, on) => {
+    on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+    const w = world(on, { tokens: 300_000, settings: { permissions: { commit: 'ask' } } as never })
+    w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.step', async function* ($, e) {
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000, model: e.model } }
+    })
+    await boot($, w)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
+    await $.tool.call({ tool: 'Read', file_path: '/work/a.ts' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'npm run build' })
+    await w.clock.advance(300)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      // Overview: Now carries the state's mark (the status bar's icon on Desktop, set on its first line); the cache a small dot.
+      await ui.press({ key: 'tab-overview' })
+      await w.clock.advance(300)
+      const nowMark: Node[] = []
+      each(await ui.find({ key: 'card-now' }), n => void (n.type === 'Svg' ? nowMark.push(n) : undefined))
+      if (surface === 'desktop') {
+        expect(nowMark.map(n => [n.props?.alt, n.props?.width, n.props?.height])).toEqual([['thinking', 16, 24]])
+        expect(String(nowMark[0]?.props?.source)).toContain('translate(0 4)')
+      } else expect(nowMark).toEqual([])
+      const cacheCard = await ui.find({ key: 'card-life-cache' })
+      let clockFaces = 0
+      each(cacheCard, n => void (n.type === 'Svg' ? clockFaces++ : undefined))
+      expect(clockFaces, surface).toBe(0)
+      expect(textOf(cacheCard), surface).toMatch(/● Warm/)
+      // Guardrails: Restore safe defaults and the footnote close the permission groups, after the last card.
+      await ui.press({ key: 'tab-guardrails' })
+      await w.clock.advance(300)
+      const keys: string[] = []
+      each(await ui.drawn(), n => void (keyOf(n) !== '' ? keys.push(keyOf(n)) : undefined))
+      const at = (key: string) => keys.indexOf(key)
+      expect(at('card-perm-safety'), surface).toBeGreaterThan(-1)
+      expect(at('card-perm-safety'), surface).toBeLessThan(at('foot-permissions'))
+      expect(at('foot-permissions'), surface).toBeLessThan(at('perm-reset'))
+      expect(at('perm-reset'), surface).toBeLessThan(at('card-agents'))
+      expect(textOf(await ui.find({ key: 'foot-permissions' })), surface).toContain('Deny stops an action')
+      // Activity: on Desktop the legend's squares are drawn in the strip's own colors.
+      await ui.press({ key: 'tab-activity' })
+      await w.clock.advance(300)
+      const swatches: Node[] = []
+      each(await ui.find({ key: 'turn-legend' }), n => void (n.type === 'Svg' ? swatches.push(n) : undefined))
+      if (surface === 'desktop') {
+        expect(swatches.map(s => s.props?.alt)).toEqual(['read', 'check'])
+        expect(String(swatches[0]?.props?.source)).toContain(`fill="${TIMELINE.read.svg}"`)
+        expect(String(swatches[1]?.props?.source)).toContain(`fill="${TIMELINE.check.svg}"`)
+      } else {
+        expect(swatches).toEqual([])
+        expect(textOf(await ui.find({ key: 'turn-legend' }))).toContain('■ read')
+      }
+      await ui.unmount()
+    }
+    // Restore safe defaults puts every permission back.
+    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    await ui.press({ key: 'tab-guardrails' })
+    await w.clock.advance(300)
+    await ui.press({ key: 'perm-reset' })
+    await w.clock.advance(2000)
+    expect(saved(w).permissions.commit).toBe('default')
   })
 
   test('on Desktop no text of the panel or the status bar trips the app’s monospace rule', async ($, on) => {

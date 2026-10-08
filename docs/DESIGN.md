@@ -32,7 +32,7 @@ This page records the decisions behind the UI, so later changes keep it that way
 | Level | Terminal | Use |
 | --- | --- | --- |
 | Title | bold | the panel's name |
-| Card title | bold small caps in the section's accent | `PERMISSIONS`, `AUTOPILOT` |
+| Card title | bold small caps in the section's accent | `NETWORK`, `HANDOFF` |
 | Value | default color | what a row says or is set to |
 | Secondary | dim | details, footnotes, units |
 | Brand | Claude orange | the brand mark, a threshold tick |
@@ -40,7 +40,10 @@ This page records the decisions behind the UI, so later changes keep it that way
 | Status | green, amber, red | only state that needs a look |
 
 A page is a stack of cards. A card is a small-caps title (with an optional aside or *Open ›* link),
-a rounded box of rows, and at most a short footnote under it. A row reads like a settings list:
+a rounded box of rows, and at most a short footnote under it. Rows that need a group's name get a
+card of their own (Guardrails' Project, Network, Git, External and Safety), never a heading inside
+a box: on Desktop a heading among rows reads as one more row. What a run of such cards shares (an
+action, a footnote) follows the last of them (`footnote`). A row reads like a settings list:
 the label, with a one-line dim description under it, on the left; the control on the right edge,
 at every width. A wide control (a segmented choice) moves under the label when it would take over
 half the row, or when the label or description would no longer fit beside it, so text never wraps
@@ -58,6 +61,14 @@ flush under text. A page is at most 80 columns wide: in a wider frame (the frame
 in a wide terminal, a Desktop pane at full size) it is centred, because a label and its control
 drift apart past that. The frame above the prompt is short, so its tabs sit right under the
 title.
+
+Desktop lays the tree out in CSS (read from the app's own renderer): a `Box` is a flex box whose
+widths, column gaps and horizontal spacing are `ch` and whose heights are `lh`, while row gaps and
+vertical spacing count half lines; a `Text` wraps unless it truncates. A row box that sets no
+alignment centers its texts, buttons and images on the row, so a mark beside a block of two lines
+sits between them: a mark that belongs to the first line aligns its row to the top and is drawn
+one line tall (`stateLine`). Its picker is the app's own, as wide as the value it shows, with no
+width to set: pickers in a column line up on the right, as pop-up menus do in a settings list.
 
 On Desktop a line that cuts short (a tool call, a file name, a card's aside) sits in a box allowed
 to narrow below its text (`clip`). A browser keeps a flex item at least as wide as its content, so
@@ -81,21 +92,23 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | --- | --- | --- | --- |
 | `switchControl` | `● On` / `○ Off` | native button, primary when on | native button |
 | `segmented` | `● Standard  ○ Strict` | native buttons, the chosen one primary | native buttons |
-| `picker` | `Ask ▾`, options open in place with hints | native popup (Select) | options open in place |
+| `picker` | `Ask ▾`, options open in place with hints | native popup (Select), as wide as its value | options open in place |
 | `stepper` | `−  70%  +` | native − and + buttons | native buttons |
 | `link` | `No limit ›`, goes to the section that owns it | native button | native button |
 | `meterBar` | thin line `━━━━──┃──` with the threshold tick | SVG bar | SVG bar |
 | `spark` | `▁▂▄▆█` | SVG area chart with a dashed ceiling | SVG |
 | `navBar` | labels with the section's accent underline under the current one | native buttons in one row with an even gap when all fit; otherwise three equal cells per row, each button centred | same as Desktop |
 | `workTrack` | a track of milestones, one stop each: `●` done (blue), `◉` the one under way (bold), `○` to come, joined by `─`; scaled past its width, with `4 of 7` beside it. A track of stops, never a filling bar, so it cannot be read as the context meter | SVG circles on a line, the current one pulsing unless *Reduce motion* is on | SVG |
-| `cacheClock` | the prompt cache's time left: a clock face emptying (`●` `◕` `◑` `◔` `○`) in blue, and its words beside it | an SVG clock face | SVG |
+| `cacheClock` | the prompt cache's state as a status line: a dot emptying as its time runs out (`●` `◕` `◑` `◔` `○`) in blue, and its words beside it | the same glyph, as Context's own status reads (a drawn clock face read as a selected radio button there) | same |
+| `stateLine` | what the run is doing with its state's mark (the status bar's glyph), wrapping, a dim detail line under it | the status bar's 16-pixel icon, set on the first line | same as Desktop |
+| `footnote` | what a run of cards shares, after the last of them: its actions, then a dim note | same, native buttons | same |
 | `callout` | rounded border in the status color, title, line, actions | same, drawn natively | same |
 | `gauge` | label and %, line meter with ceiling tick, sparkline | label and %, SVG bar | SVG bar |
 | `steps` | numbered lines in the accent | same | same |
 | `field` | dim label in a 10-cell column, the reading after it | same | same |
 | `listItem` | glyph, text, a note at the right edge, and an optional dim second line (why it failed, which command ran) | same | same |
 | `timelineStrip` | the turn across the row: `▅` per cell in the color of the kind of work (read, edit, run, check, web, agent), red where a call failed, `▁` where Claude was thinking | SVG strip | SVG strip |
-| `legend` | a colored `■` and a dim word per kind, set apart by gaps | same | same |
+| `legend` | a colored `■` and a dim word per kind, set apart by gaps | a square drawn in the exact color the strip uses (a theme key and an SVG fill are two palettes there) | same as Desktop |
 | `columns` | one pair of block glyphs per value (a run's sessions, each its peak context), amber past the handoff line, the current one bright | SVG columns with a dashed handoff line | SVG |
 | `diffSquares` | five squares per file, green for lines added and red for removed, dim for the rest | rounded SVG squares | SVG |
 | `dots` | one `●` per run of a check, oldest first, in its outcome's color | same | same |
@@ -165,8 +178,11 @@ Desktop the native button, primary while the panel is open.
   cell that stands a little proud of the bar. Then the percentage, and Autopilot's point or the
   step under way (`· hands off 80%`, `· Writing the handoff`).
 - **Cache** is a clock face emptying as the prompt cache's lifetime runs out (`◕ 42m left`),
-  shown only while it can matter: when you are away, or for a few minutes after a costly rebuild
-  (`● rebuilt 446k`, amber). While Claude works, its requests keep the cache warm.
+  shown in the terminal only while it can matter: when you are away, or for a few minutes after a
+  costly rebuild (`● rebuilt 446k`, amber). While Claude works, its requests keep the cache warm.
+  On Desktop it keeps its cell: `warm` while Claude works (its time left once it nears the
+  expiry, as a long call can let it), the time left while you are away, `—` before anything is
+  cached.
 - **Run** is the whole run's cost on the right edge, which a fresh context never resets.
 
 Settings (a profile, the threshold) are never shown. A handoff that needs the person takes a line
@@ -184,8 +200,11 @@ drop. Docked beside the panel (about 80 columns) the whole line still fits.
 
 **On Desktop the surface lays the row out, not counted cells.** Each reading is a cell of an
 equal share of the row: a quiet caption over its graphic and value. The run's cost takes what it
-needs at the right edge. So the row never overflows and nothing drifts, from 500 pixels to a full
-window; below 80 columns the cells turn compact (fewer stops, a shorter meter, `2/10`). Every
+needs at the right edge. The four readings always keep their cells, a dim word standing in for
+one with nothing yet (`No milestones yet`, `—`): a row that dropped them collapsed to two readings
+with a wide empty middle (1.3.0-rc.5, seen in the app). So the row never overflows, nothing
+drifts and its rhythm holds, from 500 pixels to a full window; below 80 columns the cells turn
+compact (fewer stops, a shorter meter, `2/10`, `None`). Every
 graphic is an image of a fixed size (`Svg` with `width` and `height`), never an interactive
 frame: Desktop sizes a frame on its own (300 pixels without a width) and may paint it opaque,
 which drew 1.2.0's work track as a white bar.
@@ -217,7 +236,9 @@ a busy machine it plays at two frames a second at most and stops walking; a mach
 holds it still; *Reduce motion* holds one frame. In the terminal it is five rows of half blocks
 played by a surface module on its own frame clock (the plugin does no work between frames), and it
 stands on the HUD's top edge, a quiet line; a click on it opens Control Room. On Desktop it is a
-280 × 48 pixel image that animates itself, above the headline, lined up with its left edge. If
+360 × 68 pixel image that animates itself (each sprite pixel 6 × 6, drawn with crisp edges so no
+seam shows between its rows at a display scale like 125%; at 4 × 4 it read as a speck beside the
+app's text), above the headline, lined up with its left edge, in a narrower lane in a narrow band. If
 its module ever fails to draw, it is left out until the plugin reloads, and the status bar draws
 without it.
 
@@ -227,10 +248,11 @@ Overview leads with the run: its number and session, its whole cost and its obje
 the terminal the Git branch with the uncommitted files (`main · 3 uncommitted · 2 ahead`; Desktop
 shows Git itself). Then the three lifecycles as cards, in the order they last: **Work** (the
 track; carries across handoffs), **Context** (the meter and Autopilot's switch; starts over at
-each handoff) and **Cache** (the clock, what it holds and Keep warm's switch; starts over with
-each fresh context and lapses when left idle). Each card's footnote says how it starts over,
-which is the one thing that tells the three apart. Then **Now** (the top line, what needs a look,
-the machine), the profile, and one card per remaining section.
+each handoff) and **Cache** (its state after a dot that empties as its time runs out, what it
+holds and Keep warm's switch; starts over with each fresh context and lapses when left idle).
+Each card's footnote says how it starts over, which is the one thing that tells the three apart.
+Then **Now** (the status bar's headline in full, with its state's mark, and what needs a look; the
+machine's readings sit with Guardrails), the profile, and one card per remaining section.
 
 ## The prompt cache
 

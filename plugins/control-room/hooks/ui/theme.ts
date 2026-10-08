@@ -349,7 +349,7 @@ export const STATE_MARK: Record<HudState, { glyph: string; tone: Tone }> = {
 }
 
 /** The same marks drawn as 16-pixel icons. */
-export function svgStateIcon(state: HudState): string {
+export function svgStateIcon(state: HudState, lineHeight = 16): string {
   const s = 16
   const c = SVG_COLOR[STATE_MARK[state].tone]
   const ring = (fill: string, extra = '') => `<circle cx="8" cy="8" r="6.2" fill="${fill}" stroke="${c}" stroke-width="1.6"${extra}/>`
@@ -388,7 +388,9 @@ export function svgStateIcon(state: HudState): string {
       body = ring('none')
       break
   }
-  return svgDoc(s, s, body)
+  // Centred in a canvas one text line tall, so lined up with the top of a block it sits on that line.
+  const h = Math.max(s, lineHeight)
+  return svgDoc(s, h, h === s ? body : `<g transform="translate(0 ${(h - s) / 2})">${body}</g>`)
 }
 
 /** The cache's time left as a clock-face glyph: ● full, ◕ ◑ ◔ emptying, ○ none. */
@@ -503,6 +505,9 @@ export function svgTimeline(input: { spans: readonly TimelineSpan[]; from: numbe
     `</svg>`
   )
 }
+
+/** A legend's square in the exact color a strip draws with: rounded as the strip's bars are. */
+export const svgSwatch = (fill: string): string => svgDoc(10, 10, `<rect x="0" y="0" width="10" height="10" rx="2" fill="${fill}"/>`)
 
 /** Columns of 0–1 values (a run's sessions, each its peak context) with a dashed line at `marker`. */
 export function svgColumns(input: { values: readonly number[]; marker?: number | null; current?: number; width: number; height?: number }): string {

@@ -22,8 +22,8 @@ import * as fmt from '../../core/format'
 import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
-import { apart, cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, switchControl, textRuns, workTrack } from '../primitives'
-import { ACCENT, G, STATE_MARK } from '../theme'
+import { apart, cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, stateLine, switchControl, textRuns, workTrack } from '../primitives'
+import { ACCENT, G } from '../theme'
 import { cacheState, cacheSummary } from './cache'
 import type { PaneData } from './frame'
 
@@ -209,11 +209,10 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
         title: 'Now',
         accent: ACCENT.overview,
         rows: k => [
-          // What Claude is doing, or what the run waits for: the status bar's headline, in full.
-          listItem(k, {
+          // What Claude is doing, or what the run waits for: the status bar's headline, in full, with its mark.
+          stateLine(k, {
             key: 'now-line',
-            glyph: STATE_MARK[line.state].glyph,
-            tone: STATE_MARK[line.state].tone,
+            state: line.state,
             text: line.text,
             detail: line.detail,
             isBold: line.state === 'working' || line.state === 'validating' || line.state === 'handoff' || line.state === 'blocked' || line.state === 'waitingUser' || line.state === 'waitingExternal',

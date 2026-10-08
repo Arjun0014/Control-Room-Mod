@@ -1,7 +1,9 @@
 /**
  * Guardrails: what Claude may do, how many helpers it may run, and how hard
- * it may push the machine. Three cards. Every value reads as a word ("Ask",
- * "Deny"); its options open in place with one line on what each means.
+ * it may push the machine. The permissions come first, one card per group a
+ * person thinks in (Project, Network, Git, External, Safety), then Subagents
+ * and Machine load. Every value reads as a word ("Ask", "Deny"); its options
+ * open in place with one line on what each means.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -12,7 +14,7 @@ import { DEFAULT_PERMISSIONS, PERMISSION_CATEGORIES, PERMISSION_LABEL } from '..
 import { CATEGORY_INFO } from '../../features/permissions/categories'
 import { statesFor } from '../../features/permissions/decide'
 import type { Kit } from '../kit'
-import { buttons, card, gauge, listItem, note, picker, row, stepper, subhead, switchControl } from '../primitives'
+import { buttons, card, footnote, gauge, listItem, note, picker, row, stepper, switchControl } from '../primitives'
 import { ACCENT, G, readingTone, toneOfLevel } from '../theme'
 
 const STATE: Record<PermissionState, { label: string; hint: string }> = {
@@ -65,16 +67,15 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
 
   return (
     <Box flexDirection="column">
-      {card(kit, {
-        key: 'permissions',
-        title: 'Permissions',
-        accent,
-        aside: activity,
-        footer: 'Deny stops an action before any prompt, in every mode. Your organisation’s rules always win. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
-        rows: k => [
-          ...GROUPS.flatMap((g, gi) => [
-            subhead(k, `perm-group-${g.id}`, g.title, gi > 0),
-            ...g.categories.map(c =>
+      {/* The permissions: one card per group, each titled in the section's accent, then what they share. */}
+      {GROUPS.map((g, gi) =>
+        card(kit, {
+          key: `perm-${g.id}`,
+          title: g.title,
+          accent,
+          aside: gi === 0 ? activity : undefined,
+          rows: k =>
+            g.categories.map(c =>
               row(k, {
                 key: `perm-${c}`,
                 label: PERMISSION_LABEL[c],
@@ -87,9 +88,12 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
                 }),
               }),
             ),
-          ]),
-          isDefault ? null : buttons(k, [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }], 'perm-actions'),
-        ],
+        }),
+      )}
+      {footnote(kit, {
+        key: 'permissions',
+        actions: isDefault ? undefined : [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }],
+        text: 'Deny stops an action before any prompt, in every mode. Your organisation’s rules always win. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
       })}
 
       {recent.length === 0

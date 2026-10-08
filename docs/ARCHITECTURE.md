@@ -37,6 +37,7 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 | Keep the cache warm | `$.model.fork({ prompt })` from a `$.clock.after` timer | ✅ live on 2.1.293 (Sonnet 5.5, 1-hour cache): a fork re-sends the main thread's last request plus one user message, never added to the transcript (0 rows), and returns the request's usage. The engine counts a fork that reads the cache as a *touch*, not a request: its own expiry moved 05:38 → 05:44 → 06:34 with each refresh (requests stayed 2). A real prompt 66 minutes after the last one, past the expiry the refreshes replaced, read the cache (0 misses), and Keep warm marked itself verified. Each refresh of an 87k context cost about $0.02. On a 5-minute cache too: the probe learned the lifetime (it found the cache gone, as a probe past five minutes must), refreshes every four minutes read the whole 141k, and a prompt after a replaced expiry hit. ⚠ Claude Code's own tracker touches the expiry only for a fork that *reads* the cache, so after a probe that rebuilt it the status line says cold while the cache is warm (the next refresh read all of it). `nothing-to-fork` before the first response. |
 | A drawing with its own clock | a `Client` element naming a surface module (`module` must be a string literal in `register.tsx`); the module gets `surface.every`, `setState`, `onPointer`, `post`; `ui.message` carries its posts to the hooks module, `ui.fault` reports a module that failed | ✅ terminal, live in a real console (Kit). Desktop draws an SVG instead. |
 | Graphics on Desktop | `Svg` with `source`, `alt`, `width`, `height`; `isInteractive` draws it in a script-less sandboxed frame instead of an image | ⚠ A frame with no `width` takes the browser's default (300 px), and a frame whose color scheme differs from the page's is painted opaque: 1.2.0's animated work track showed as a white bar on Desktop. SMIL animates inside a plain image too (checked in Chromium). So Control Room draws every graphic as an image with an explicit size and never asks for a frame. |
+| How Desktop lays a tree out | the app's own renderer (Claude Desktop 2.26454, read from its bundle) | A `Box` is a flex `div`: `width`, `minWidth`, `columnGap` and horizontal margin and padding in `ch`; `height` and `minHeight` in `lh`; `rowGap` and vertical margin and padding in half lines (`--engine-row-unit`, `.5lh`); a bordered box gets the app's border, radius and padding. A `Text` is a `span` that wraps (`pre-wrap`) unless it truncates. A row box that sets no `alignItems` centers its texts, buttons, images and pickers on the row (so a mark beside two lines sits between them). `Select` is the app's combobox: a button `width: fit-content`, no width prop, so pickers are as wide as their value. An `Svg` without `isInteractive` is an `img` (`display: block`, `max-width: 100%`, its width and height in px). `tools/desktop-preview` renders with these rules. |
 | A trace nobody sees | `$.ui.log(text, { to: 'debug' })` | ✅ lines appear in Claude Code's debug log (`--debug`, `--debug-file`) under the plugin's name, never on screen. Autopilot traces each step and turn there. |
 | What a stopped turn leaves running | `classic.Stop` input `background_tasks` (id, type, description) and `session_crons` (schedule, recurring) | ✅ in the engine harness (2.1.293): the status bar says *Waiting for …* instead of *done* while a job or a wake-up will bring the turn back. |
 | The project's Git state | `$.session.repo()` (the repository root, or null) and `$.process.run(['git', 'status', '--porcelain=v1', '--branch', ...], { timeoutMs: 10_000 })` | ✅ live in a real console: `master · clean`, then `master · 4 uncommitted` after a turn that changed four files. |
@@ -398,7 +399,9 @@ crossing the threshold again never starts a second handoff.
   as half blocks on its own clock and posts `{ open: true }` on a click
   (`ui.message` → toggle the panel); a `ui.fault` leaves Kit out until the
   plugin reloads. Desktop draws `svgCompanion` as a plain image of a fixed
-  size (280 × 48 px) that animates itself with SMIL, above the headline.
+  size (360 × 68 px, narrower in a narrow band; `crispEdges`, so no seam
+  shows between sprite rows at a fractional display scale) that animates
+  itself with SMIL, above the headline.
   While Kit is on, a one-minute tick lets its mood move on with time.
 * **Git** — terminal only (Desktop shows Git natively): `$.session.repo()`
   once, then `git status --porcelain=v1 --branch` at session start and after
@@ -418,7 +421,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (238 tests in 21 files, run on 2.1.293, and in CI on the latest
+* `claude plugin test` (240 tests in 21 files, run on 2.1.293, and in CI on the latest
   Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux):
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity,
@@ -473,9 +476,15 @@ only. Unknown future events/props → passed through untouched.
   a model switch confirmed first and declined, then made; policy and effort
   changes while warm. The 1.3.0 status bar and every panel section in a real
   console at 80, 100 and 150 columns during the demo driver's turn.
-* The Desktop layout through `tools/desktop-preview`: the status bar's
-  `desktop` element trees rendered as HTML at 512 to 960 pixels.
-* Not yet done: visual review of 1.3.0 inside the Claude Desktop app (Claude
-  cannot capture its own window; 1.2.0's bar was seen in the person's
-  screenshot), the answer styles with a real model, and live sampling on
+* The Desktop layout through `tools/desktop-preview`: the status bar's and
+  the panel's `desktop` element trees rendered as HTML with the CSS the
+  app's own renderer gives them, the bar at 512 to 960 pixels.
+* 1.3.0 inside the Claude Desktop app (2.26454): the person's review of
+  rc.5 (screenshots), then rc.6 installed and loaded by a fresh session,
+  captured read-only from the app's window (`PrintWindow`, no input sent):
+  the status bar's four cells while Claude works and after the turn, Kit
+  at its new size, and Overview with the cache's dot and Now's mark on its
+  first line. Kit's seams at a 125% display scale were reproduced in
+  headless Chrome and fixed there.
+* Not yet done: the answer styles with a real model, and live sampling on
   macOS and Linux.

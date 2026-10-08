@@ -10,11 +10,7 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 Work in progress toward the next release (likely 1.3.0): a verification pass against the live API
 and a redesign of the status bar and Kit. Not yet released; the items below are implemented and
-pass the test suite (238 tests) unless marked otherwise. Open before the release, from the
-person's review of 1.3.0-rc.5 in Claude Desktop: the status bar must keep its four readings on
-Desktop (it collapsed to two when there were no milestones and the cache was hidden), Kit is too
-small there, and the panel needs a Desktop tidy-up (permission groups that read as headings,
-aligned pickers, the cache icon, the Now card's mark, the turn legend's colors).
+pass the test suite (240 tests) unless marked otherwise.
 
 ### Changed
 
@@ -32,19 +28,27 @@ aligned pickers, the cache icon, the Now card's mark, the turn legend's colors).
 - **On Desktop the status bar is laid out by the app, as a grid.** Each reading is a cell of an
   equal share of the row, a quiet caption over its graphic and value, with the run's cost at the
   right edge; nothing overflows from 500 pixels to a full window, and a narrow band takes compact
-  cells. Every graphic is an image of a fixed size.
+  cells. The four readings always keep their cells, a dim word standing in for one with nothing
+  yet (`No milestones yet`, `—`), and the cache stays in view while Claude works (`warm`): a row
+  that dropped them showed two readings far apart (seen in the app on a release candidate). Every
+  graphic is an image of a fixed size.
 - **Kit is redrawn**: larger (18×10 pixels, five terminal rows), a small Claude-orange creature
   with ears and expressive eyes, fifteen moods (idle glances, pacing while Claude thinks, busy
   while it works, a magnifier while it reads, watching a check, hopping at a green finish,
   startled by a failure, a question mark when waiting, sweating on a busy machine, tending a fire
   while Keep warm holds the cache, fading as the cache nears its expiry, carrying the notes off at
   a handoff and walking back in with the fresh context). It stands on the HUD's top edge with no
-  box around it; a machine at its limit holds it still.
-- **Panel**: Overview's Now is what Claude is doing (machine readings moved to Guardrails' card);
-  the empty Cache cards are one compact row; Guardrails groups permissions (Project, Network,
-  Git, External, Safety); Setup lists the four most telling changes from the profile, then
-  *View all*; Activity's Now tells idle, waiting for you, waiting for a result, blocked and
-  complete apart.
+  box around it; a machine at its limit holds it still. On Desktop each of its pixels is 6 × 6
+  (360 × 68 in all): at 4 × 4 it read as a speck beside the app's text.
+- **Panel**: Overview's Now is what Claude is doing (machine readings moved to Guardrails' card),
+  with the status bar's mark (on Desktop its icon, set on the first line); the empty Cache cards
+  are one compact row, and Overview's cache reads as a status line after a small dot (a drawn
+  clock face looked like a selected radio button on Desktop); Guardrails groups permissions in
+  cards of their own (Project, Network, Git, External, Safety), each titled in the section's
+  color, with *Restore safe defaults* and the footnote after the last (headings inside one box read
+  as rows on Desktop); Setup lists the four most telling changes from the profile, then *View
+  all*; Activity's Now tells idle, waiting for you, waiting for a result, blocked and complete
+  apart.
 - **Milestones** are asked to be outcomes, never single reads or commands, and may be *waiting*
   (for a result that will come by itself) as well as *blocked* (on the person). After a handoff the
   fresh context is given the whole list, finished milestones included, and the run's objective,
@@ -63,9 +67,18 @@ aligned pickers, the cache icon, the Now card's mark, the turn legend's colors).
   past all that before any work began waits for you instead of handing off again. Seen live with a
   64k threshold: a fresh context started at 44k and read 20k in, and five handoffs in a row did
   one roadmap step each.
+- **Development: `tools/desktop-preview`** renders the status bar and the panel's pages on the
+  `desktop` surface as HTML, laid out with the CSS Claude Desktop's own renderer gives them (`ch`
+  and `lh` units, half-line row gaps, row alignment, the picker), for a look before a build is
+  installed and opened in the app.
 
 ### Fixed
 
+- **Activity's turn legend disagreed with its strip on Desktop** (a run teal in the strip, green
+  in the legend): the legend took theme colors, the strip SVG fills. On Desktop its squares are now
+  drawn in the strip's own colors.
+- **Kit drew a faint seam between its pixel rows on Desktop** at a display scale like 125%, where a
+  sprite pixel is not a whole number of screen pixels; it is now drawn with crisp edges.
 - **Desktop drew a white bar in the middle of the status bar** (the work track, Kit's lane): an
   animated SVG was drawn in a sandboxed frame, which Desktop sized at the browser's default 300
   pixels (no width was given) and painted opaque. Every graphic is now a plain image with an
@@ -239,6 +252,11 @@ pays XP only for progress Control Room can count.
 
 ### Fixed
 
+- **Activity's turn legend disagreed with its strip on Desktop** (a run teal in the strip, green
+  in the legend): the legend took theme colors, the strip SVG fills. On Desktop its squares are now
+  drawn in the strip's own colors.
+- **Kit drew a faint seam between its pixel rows on Desktop** at a display scale like 125%, where a
+  sprite pixel is not a whole number of screen pixels; it is now drawn with crisp edges.
 - **Desktop: rows drawn in a monospace face.** The app draws a text with spaced-out runs of blanks
   as a table; rows now separate their parts with " · " on Desktop.
 - Attention read "all clear" while a call was still running; it says "still running".
@@ -301,6 +319,11 @@ needs a look, and a reload mid-handoff can no longer start a second one.
 
 ### Fixed
 
+- **Activity's turn legend disagreed with its strip on Desktop** (a run teal in the strip, green
+  in the legend): the legend took theme colors, the strip SVG fills. On Desktop its squares are now
+  drawn in the strip's own colors.
+- **Kit drew a faint seam between its pixel rows on Desktop** at a display scale like 125%, where a
+  sprite pixel is not a whole number of screen pixels; it is now drawn with crisp edges.
 - **Autopilot: a reload mid-handoff started a second one.** A hot reload or `/reload-plugins`
   starts a fresh runtime with empty memory, so a handoff in progress was forgotten and the context
   crossing the threshold again began another. The step under way is now kept in `$.state`, which
@@ -332,6 +355,11 @@ Desktop fixes after a look at the panel in Claude Desktop's Code tab.
 
 ### Fixed
 
+- **Activity's turn legend disagreed with its strip on Desktop** (a run teal in the strip, green
+  in the legend): the legend took theme colors, the strip SVG fills. On Desktop its squares are now
+  drawn in the strip's own colors.
+- **Kit drew a faint seam between its pixel rows on Desktop** at a display scale like 125%, where a
+  sprite pixel is not a whole number of screen pixels; it is now drawn with crisp edges.
 - **Desktop: lines ran past their cards.** In Activity, a long tool call pushed past the card's
   edge and hid its duration. A browser keeps a flex item as wide as its text, so lines that should
   end in an ellipsis overflowed instead. They now cut at the card's edge, and so do file names,
@@ -392,6 +420,11 @@ fixes Autopilot's handoff in the interactive terminal.
 
 ### Fixed
 
+- **Activity's turn legend disagreed with its strip on Desktop** (a run teal in the strip, green
+  in the legend): the legend took theme colors, the strip SVG fills. On Desktop its squares are now
+  drawn in the strip's own colors.
+- **Kit drew a faint seam between its pixel rows on Desktop** at a display scale like 125%, where a
+  sprite pixel is not a whole number of screen pixels; it is now drawn with crisp edges.
 - **Autopilot in the interactive terminal:** its `/clear` was taken for one of yours. The terminal
   finishes the reset after the command returns (the Desktop host protocol does it before), so the
   run recorded "cleared" instead of a handoff, the fresh context missed its continuation note, and
@@ -448,6 +481,11 @@ A redesign of everything you see, for the terminal and Desktop. The design is re
 
 ### Fixed
 
+- **Activity's turn legend disagreed with its strip on Desktop** (a run teal in the strip, green
+  in the legend): the legend took theme colors, the strip SVG fills. On Desktop its squares are now
+  drawn in the strip's own colors.
+- **Kit drew a faint seam between its pixel rows on Desktop** at a display scale like 125%, where a
+  sprite pixel is not a whole number of screen pixels; it is now drawn with crisp edges.
 - Terminal choices could get stuck open: Claude Code's terminal dropdown opens on a click, but its
   options could not be clicked and it could not be closed with the pointer. The terminal no longer
   uses dropdowns. Every choice works with a click or with Tab and Enter, and closes on a pick or a

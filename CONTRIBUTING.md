@@ -118,9 +118,13 @@ Unit tests don't paint. Before a release:
   installed copy in the test project's `.claude/settings.local.json`
   (`"enabledPlugins": { "control-room@control-room": false }`). Claude Code's `/effort` and
   `/model` save your default for new sessions: put it back after a test.
-- Desktop cannot be captured from inside Claude. [`tools/desktop-preview`](tools/desktop-preview/README.md)
-  renders the status bar's `desktop` element trees as HTML, faithful in layout and graphics; the
-  app itself still has the last word.
+- Desktop first through [`tools/desktop-preview`](tools/desktop-preview/README.md): it renders
+  the status bar's and the panel's `desktop` element trees as HTML with the CSS the app's own
+  renderer gives them (units, row alignment, the picker), so layout and graphics are faithful; the
+  font, the design tokens and the colors are close guesses. Then the app itself, which has the last
+  word: install the build (bump the pre-release number, `claude plugin update`), start a fresh
+  session so it loads it, and look. Never drive Claude's own window with simulated input; a
+  read-only capture of it is fine when the person agrees.
 - On macOS and Linux, turn machine load on and confirm `/cr status` shows live CPU and memory.
 
 ## Releases

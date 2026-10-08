@@ -4,6 +4,7 @@ import { SESSION, world } from './fixtures/world'
 
 const band = (bodyColumns: number) => ({ hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} })
 const WIDTHS = [120, 96, 64]
+const PANE = 90
 const cmd = (args: string) => ({ command: 'cr', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 120 } })
 
 describe('preview', () => {
@@ -37,6 +38,10 @@ describe('preview', () => {
     }
     await dump('ready')
     await $.turn.start({ text: 'go', turnId: 't1' })
+    // A turn under way before Claude lists milestones, the cache warm from its first request.
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
+    await w.clock.advance(300)
+    await dump('working-no-plan')
     await $.tool.call({
       tool: 'mcp__control-room__milestones',
       milestones: [
@@ -52,12 +57,12 @@ describe('preview', () => {
         { title: 'Release', status: 'pending' },
       ],
     } as never)
-    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
+    for await (const _ of $.turn.step({ turnId: 't1', index: 1, model: 'claude-opus-5-5', effort: 'high', messageCount: 3 })) void _
     await w.clock.advance(300)
     await dump('working')
     await $.tool.call({ tool: 'Bash', command: 'npm test' })
     await $.tool.call({ tool: 'Bash', command: 'npm run lint' })
-    for await (const _ of $.turn.step({ turnId: 't1', index: 1, model: 'claude-opus-5-5', effort: 'high', messageCount: 4 })) void _
+    for await (const _ of $.turn.step({ turnId: 't1', index: 2, model: 'claude-opus-5-5', effort: 'high', messageCount: 4 })) void _
     await $.turn.complete({ answer: 'done', durationMs: 46_000, isAborted: false, turnId: 't1', reason: 'answer' })
     await w.clock.advance(300)
     await dump('done-failing')
@@ -67,5 +72,14 @@ describe('preview', () => {
     await $.command.run(cmd('companion on'))
     await w.clock.advance(300)
     await dump('kit', ['desktop', 'terminal'])
+    // The panel's pages, as a docked pane draws them.
+    const pane = { title: 'Control Room', isFocused: true, bodyColumns: PANE, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 80 }, view: {} }
+    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: pane, viewport: { columns: PANE, rows: 80 } })
+    for (const tab of ['overview', 'context', 'behavior', 'guardrails', 'activity', 'setup']) {
+      await ui.press({ key: `tab-${tab}` })
+      await w.clock.advance(300)
+      console.log(`PREVIEW\tpane-${tab}\tdesktop\t${PANE}\t${JSON.stringify(await ui.drawn())}`)
+    }
+    await ui.unmount()
   })
 })

@@ -417,6 +417,7 @@ export class CacheGuardian {
       nextRefreshAt: this.plan.at,
       recentMiss: recent === null ? null : { label: Cache.CAUSE_LABEL[recent.cause], recached: recent.recached, severity: recent.severity, at: recent.at },
       isShown: recent !== null || (!isTurnRunning && s.lastPrefix >= this.ctx.settings().cache.minTokens),
+      isInUse: isTurnRunning,
     }
   }
 

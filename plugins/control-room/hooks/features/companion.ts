@@ -294,11 +294,14 @@ export const mirrored = (rows: readonly string[]): string[] => rows.map(r => [..
 // Desktop: the same frames as an SVG that animates itself (SMIL), drawn as
 // an image (transparent, no frame around it) in a short lane above the headline.
 
-/** Desktop pixel size: each sprite pixel is 4 × 4 CSS pixels. */
-const PX = 4
+/** Desktop pixel size: each sprite pixel is 6 × 6 CSS pixels (at 4 Kit read as a speck beside 15-pixel text). */
+const PX = 6
 
 /** The lane: the sprite and room for a bubble above its head. */
 export const LANE_H = SPRITE_H * PX + 8
+
+/** A bubble's text beside the head, in proportion to the sprite. */
+const BUBBLE_FONT = 15
 
 function frameRects(rows: readonly string[], palette: Record<string, string>, dy: number): string {
   let out = ''
@@ -347,11 +350,13 @@ export function svgCompanion(a: CompanionAnimation, width: number): string {
       .map((b, i) => {
         const values = Array.from({ length: t }, (_, j) => (j === i ? 'inline' : 'none')).join(';')
         const anim = t > 1 && a.fps > 0 ? `<animate attributeName="display" values="${values}" dur="${t / Math.max(1, a.fps)}s" calcMode="discrete" repeatCount="indefinite"/>` : ''
-        return b.text === '' ? '' : `<text x="${bx}" y="${top + 9}" font-size="12" font-family="system-ui,sans-serif" font-weight="600" fill="${b.color}" display="${i === 0 ? 'inline' : 'none'}">${anim}${escapeXml(b.text)}</text>`
+        return b.text === '' ? '' : `<text x="${bx}" y="${top + BUBBLE_FONT - 3}" font-size="${BUBBLE_FONT}" font-family="system-ui,sans-serif" font-weight="600" fill="${b.color}" display="${i === 0 ? 'inline' : 'none'}">${anim}${escapeXml(b.text)}</text>`
       })
       .join('')
   }
-  const head = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${TRANSPARENT}<title>${escapeXml(a.caption)}</title>`
+  // Crisp edges: at a display scale like 125% a sprite pixel is not whole device pixels, and smoothed
+  // edges drew a faint seam between every two rows of the sprite.
+  const head = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges">${TRANSPARENT}<title>${escapeXml(a.caption)}</title>`
   const still = (x: number) => `<g transform="translate(${x} 0)">${groups('right')}${bubble(spriteW - 8)}</g>`
   const span = Math.max(1, w - spriteW - 24)
   // At rest it lines up with the band's left edge, over the headline's mark.

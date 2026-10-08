@@ -98,6 +98,8 @@ describe('companion', () => {
   test('Desktop draws Kit as a transparent SVG that animates itself, inside its own bounds, and holds still under reduced motion', () => {
     const pacing = svgCompanion(animationOf('think', { isReduced: false, isBusy: false }), 300)
     expect(pacing).toContain('<style>:root{color-scheme:light dark}</style>')
+    // Whole pixels at any display scale: smoothed edges drew a seam between the sprite's rows at 125%.
+    expect(pacing).toContain('shape-rendering="crispEdges"')
     expect(pacing).toContain('<animateTransform')
     expect(pacing).toContain('calcMode="discrete"')
     expect(pacing).toContain('<title>Kit paces while Claude thinks</title>')

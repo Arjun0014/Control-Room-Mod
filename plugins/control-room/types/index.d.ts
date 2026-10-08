@@ -216,6 +216,8 @@ export type HudCache = {
    * time left, or that it lapsed), or just after a costly rebuild; never while Claude works.
    */
   isShown: boolean
+  /** A turn is running: its requests keep the cache warm, so its time left is not worth a reading. */
+  isInUse: boolean
 }
 
 export type CacheMissView = {

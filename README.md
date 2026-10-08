@@ -7,7 +7,7 @@ did. For the terminal CLI and for local sessions in Claude Desktop's Code tab.
 Project Sentinel was called **Control Room** until 1.4.0; its panel still is, and `/cr` still
 opens it. An existing install moves over by itself (see [Coming from Control Room](#coming-from-control-room)).
 
-[![Check](https://github.com/Arjun0014/Control-Room-Mod/actions/workflows/check.yml/badge.svg)](https://github.com/Arjun0014/Control-Room-Mod/actions/workflows/check.yml)
+[![Check](https://github.com/Arjun0014/project-sentinel/actions/workflows/check.yml/badge.svg)](https://github.com/Arjun0014/project-sentinel/actions/workflows/check.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Claude Code 2.1.289 or newer](https://img.shields.io/badge/Claude%20Code-%E2%89%A5%202.1.289-d97757)
 
@@ -36,7 +36,7 @@ One plugin gives you:
 - **Kit**, if you like: a small Claude-orange creature above the status bar that shows what Claude
   is doing, and answers a click
 
-> **Status: 1.4.0.** Project Sentinel is built on Claude Code's function-hooks plugin API ("mods"),
+> **Status: 1.4.2.** Project Sentinel is built on Claude Code's function-hooks plugin API ("mods"),
 > which is still early access and may change between Claude Code releases. It is verified on
 > Claude Code **2.1.289**, **2.1.292** and **2.1.293** (the engine the CLI and Claude Desktop run
 > now) on Windows 11. See [Compatibility](#compatibility).
@@ -176,7 +176,7 @@ from the token counts Claude Code reports, and the panel says so. Nothing is est
 Add the repository as a marketplace, then install:
 
 ```bash
-claude plugin marketplace add Arjun0014/Control-Room-Mod
+claude plugin marketplace add Arjun0014/project-sentinel
 ```
 
 ```bash
@@ -185,9 +185,9 @@ claude plugin install project-sentinel@control-room
 
 The marketplace keeps its name, `control-room`; the plugin in it is `project-sentinel`. Or do
 both from inside a session (Claude Code 2.1.275 or newer):
-`/plugin install project-sentinel --marketplace Arjun0014/Control-Room-Mod`.
+`/plugin install project-sentinel --marketplace Arjun0014/project-sentinel`.
 
-A local clone works too: `claude plugin marketplace add /path/to/Control-Room-Mod`. The terminal
+A local clone works too: `claude plugin marketplace add /path/to/project-sentinel`. The terminal
 reads an installed folder marketplace straight from the folder, so after you pull changes, run
 `/reload-plugins` in a session. Desktop's Code tab may load the copy Claude Code made when you
 installed, so it needs `claude plugin update project-sentinel@control-room` after a new version,
@@ -226,7 +226,7 @@ choose **Enable auto-update**. It is off by default for marketplaces you add you
 ### Try it for one session
 
 ```bash
-claude --plugin-dir /path/to/Control-Room-Mod/plugins/project-sentinel
+claude --plugin-dir /path/to/project-sentinel/plugins/project-sentinel
 ```
 
 Nothing is installed. The plugin loads from that folder for that session, and edits to it reload live.
@@ -240,7 +240,7 @@ the Desktop app starts:
 
 ```json
 {
-  "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/Control-Room-Mod/plugins/project-sentinel" }
+  "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/project-sentinel/plugins/project-sentinel" }
 }
 ```
 

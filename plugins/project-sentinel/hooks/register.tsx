@@ -114,45 +114,14 @@ function hostOf($: EngineInterface): Host {
     formerHud: () => $.state.get(FORMER_HUD).then(read => read.value),
     isStandbyNoted: () => $.state.get(STANDBY).then(read => read.value?.isNoted === true),
     noteStandby: () => $.state.set(STANDBY, { isNoted: true }).then(() => undefined),
-    // The CPU and memory sampler, written out in full (machine-wide totals only, nothing else read).
+    // The CPU and memory samplers: each one program by name with fixed arguments, no shell, reading
+    // machine-wide totals only (the 2 in each is SAMPLER_EVERY_SEC).
     spawnSampler: platform =>
       platform === 'windows'
-        ? $.process.spawn({
-            argv: [
-              'powershell.exe',
-              '-NoProfile',
-              '-NonInteractive',
-              '-Command',
-              `$ErrorActionPreference='Stop'
-$sec=2
-try {
-Add-Type -TypeDefinition @"
-using System; using System.Runtime.InteropServices;
-public static class CrSys {
-  [StructLayout(LayoutKind.Sequential)] public struct FT { public uint L; public uint H; }
-  [StructLayout(LayoutKind.Sequential)] public struct MS { public uint Len; public uint Load; public ulong Total; public ulong Avail; public ulong TP; public ulong AP; public ulong TV; public ulong AV; public ulong AE; }
-  [DllImport("kernel32.dll")] static extern bool GetSystemTimes(out FT i, out FT k, out FT u);
-  [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx(ref MS m);
-  static ulong V(FT f){ return ((ulong)f.H<<32)|f.L; }
-  public static ulong[] Times(){ FT i,k,u; GetSystemTimes(out i,out k,out u); return new ulong[]{V(i),V(k),V(u)}; }
-  public static ulong[] Mem(){ MS m=new MS(); m.Len=(uint)Marshal.SizeOf(typeof(MS)); GlobalMemoryStatusEx(ref m); return new ulong[]{m.Total,m.Avail}; }
-}
-"@
-$a=[CrSys]::Times()
-while ($true) { Start-Sleep -Seconds $sec; $b=[CrSys]::Times(); $idle=$b[0]-$a[0]; $tot=($b[1]-$a[1])+($b[2]-$a[2]); $cpu= if ($tot -gt 0) { [math]::Round(100*($tot-$idle)/$tot,1) } else { 0 }; $m=[CrSys]::Mem(); [Console]::Out.WriteLine("P $cpu $($m[1]) $($m[0])"); [Console]::Out.Flush(); $a=$b }
-} catch {
-$ErrorActionPreference='SilentlyContinue'
-while ($true) { $p=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; $o=Get-CimInstance Win32_OperatingSystem; [Console]::Out.WriteLine("C $p $($o.FreePhysicalMemory) $($o.TotalVisibleMemorySize)"); [Console]::Out.Flush(); Start-Sleep -Seconds $sec }
-}`,
-            ],
-          })
-        : $.process.spawn({
-            argv: [
-              '/bin/sh',
-              '-c',
-              'top -l 0 -s 2 -n 0 | while IFS= read -r line; do case "$line" in "CPU usage:"*) echo "M $line ## $(sysctl -n kern.memorystatus_level 2>/dev/null)";; "PhysMem:"*) echo "R $line";; esac; done',
-            ],
-          }),
+        ? $.process.spawn({ argv: ['typeperf.exe', '\\Processor(_Total)\\% Processor Time', '\\Memory\\Available Bytes', '-si', '2'] })
+        : $.process.spawn({ argv: ['top', '-l', '0', '-s', '2', '-n', '0'] }),
+    systemInfo: () => $.process.run(['systeminfo.exe', '/fo', 'csv', '/nh'], { timeoutMs: 30_000 }),
+    memoryLevel: () => $.process.run(['sysctl', '-n', 'kern.memorystatus_level'], { timeoutMs: 5_000 }),
     repoRoot: () => $.session.repo().then(r => r?.root ?? null),
     gitStatus: () => $.process.run(['git', 'status', '--porcelain=v1', '--branch', '--untracked-files=normal'], { timeoutMs: 10_000 }),
 

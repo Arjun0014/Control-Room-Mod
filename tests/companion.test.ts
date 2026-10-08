@@ -98,7 +98,7 @@ function seeded(seed: number): () => number {
 }
 
 /** Bodies by how Kit holds itself: a change between two classes goes through a transition frame. */
-const CLASS: Record<Body, string> = { stand: 'S', walkA: 'S', walkB: 'S', frontStand: 'S', hop: 'S', stretch: 'S', sit: 'T', front: 'T', back: 'T', crouch: 'C', lie: 'L', curl: 'D', roll: 'D' }
+const CLASS: Record<Body, string> = { stand: 'S', walkA: 'S', walkB: 'S', frontStand: 'S', hop: 'S', stretch: 'S', sit: 'T', front: 'T', back: 'T', crouch: 'C', lie: 'L', ball: 'D', roll: 'D' }
 // Crouching down and lying flat are one motion: a crouch may meet a lie.
 const NEXT_TO = new Set(['SS', 'TT', 'CC', 'LL', 'DD', 'SC', 'CS', 'TC', 'CT', 'TL', 'LT', 'LD', 'DL', 'CL', 'LC'])
 const FACING_FREE: ReadonlySet<Body> = new Set<Body>(['front', 'frontStand', 'back'])
@@ -150,7 +150,7 @@ describe('companion', () => {
   })
 
   test('every pose draws: twenty by ten letters in the terminal, forty by twenty-four colors on Desktop, mirrored facing left', () => {
-    const bodies: Body[] = ['stand', 'walkA', 'walkB', 'sit', 'crouch', 'hop', 'curl', 'lie', 'stretch', 'roll', 'front', 'frontStand', 'back']
+    const bodies: Body[] = ['stand', 'walkA', 'walkB', 'sit', 'crouch', 'hop', 'ball', 'lie', 'stretch', 'roll', 'front', 'frontStand', 'back']
     for (const body of bodies) {
       const pose = { body, facing: 1 as const, eyes: 'open' as const, mouth: 'smile' as const, ears: 'up' as const, tail: 0, arms: 'rest' as const, blush: true, props: [], dy: 0, dx: 0, breath: false }
       const t = terminalSprite(pose)

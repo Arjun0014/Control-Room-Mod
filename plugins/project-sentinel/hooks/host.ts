@@ -114,8 +114,15 @@ export type Host = {
   isStandbyNoted(): Promise<boolean>
   noteStandby(): Promise<void>
 
-  /** Starts the machine-wide CPU and memory sampler for the platform: a fixed command, one line every SAMPLER_EVERY_SEC. */
+  /**
+   * Starts the machine-wide CPU and memory sampler for the platform, one program by name with fixed
+   * arguments (no shell), a reading every SAMPLER_EVERY_SEC: `typeperf` on Windows, `top` on macOS.
+   */
   spawnSampler(platform: 'windows' | 'macos'): SpawnStream
+  /** Windows: `systeminfo /fo csv /nh`, once, for the machine's total physical memory. */
+  systemInfo(): Promise<ProcessRunResult>
+  /** macOS: `sysctl -n kern.memorystatus_level`, the percentage of memory the kernel counts free. */
+  memoryLevel(): Promise<ProcessRunResult>
   /** Whether the session's folder is in a Git repository (its root), else null. */
   repoRoot(): Promise<string | null>
   /** `git status --porcelain=v1 --branch` in the session's folder (read-only; Git runs with repo hooks off). */

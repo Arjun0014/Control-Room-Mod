@@ -23,13 +23,13 @@
  * Pure except `readFormerStore`, which reads through the Host.
  */
 
-import { LIMITS, STORE_KEYS } from '../constants'
+import { LIMITS, STORE_ENTRIES } from '../constants'
 import type { Host } from '../host'
 
 export const FORMER_NAME = 'control-room'
 
 /** Set once the carry-over has been looked into, whatever it found. */
-export const CARRIED_KEY = 'migrated.v1'
+export const CARRIED_MARK = 'migrated.v1'
 
 export type CarriedMarker = { from: string | null; at: number; keys: number }
 
@@ -115,16 +115,16 @@ export type CurrentStore = {
 export function carriedWrites(former: unknown, current: CurrentStore): Record<string, unknown> {
   if (!isRecord(former)) return {}
   const out: Record<string, unknown> = {}
-  if (!current.settings && isRecord(former[STORE_KEYS.settings])) out[STORE_KEYS.settings] = former[STORE_KEYS.settings]
-  if (!current.quest && isRecord(former[STORE_KEYS.quest])) out[STORE_KEYS.quest] = former[STORE_KEYS.quest]
-  if (!current.cache && isRecord(former[STORE_KEYS.cache])) out[STORE_KEYS.cache] = former[STORE_KEYS.cache]
-  const counter = former[STORE_KEYS.runCounter]
-  if (typeof counter === 'number' && Number.isFinite(counter) && Math.floor(counter) > current.counter) out[STORE_KEYS.runCounter] = Math.floor(counter)
-  const formerIndex = Array.isArray(former[STORE_KEYS.runsIndex]) ? (former[STORE_KEYS.runsIndex] as unknown[]).filter((x): x is string => typeof x === 'string') : []
-  const carried = formerIndex.filter(id => !current.index.includes(id) && isRecord(former[`${STORE_KEYS.runPrefix}${id}`]))
+  if (!current.settings && isRecord(former[STORE_ENTRIES.settings])) out[STORE_ENTRIES.settings] = former[STORE_ENTRIES.settings]
+  if (!current.quest && isRecord(former[STORE_ENTRIES.quest])) out[STORE_ENTRIES.quest] = former[STORE_ENTRIES.quest]
+  if (!current.cache && isRecord(former[STORE_ENTRIES.cache])) out[STORE_ENTRIES.cache] = former[STORE_ENTRIES.cache]
+  const counter = former[STORE_ENTRIES.runCounter]
+  if (typeof counter === 'number' && Number.isFinite(counter) && Math.floor(counter) > current.counter) out[STORE_ENTRIES.runCounter] = Math.floor(counter)
+  const formerIndex = Array.isArray(former[STORE_ENTRIES.runsIndex]) ? (former[STORE_ENTRIES.runsIndex] as unknown[]).filter((x): x is string => typeof x === 'string') : []
+  const carried = formerIndex.filter(id => !current.index.includes(id) && isRecord(former[`${STORE_ENTRIES.runPrefix}${id}`]))
   const index = [...current.index, ...carried].slice(0, LIMITS.runsKept)
-  for (const id of carried) if (index.includes(id)) out[`${STORE_KEYS.runPrefix}${id}`] = former[`${STORE_KEYS.runPrefix}${id}`]
-  if (carried.some(id => index.includes(id))) out[STORE_KEYS.runsIndex] = index
+  for (const id of carried) if (index.includes(id)) out[`${STORE_ENTRIES.runPrefix}${id}`] = former[`${STORE_ENTRIES.runPrefix}${id}`]
+  if (carried.some(id => index.includes(id))) out[STORE_ENTRIES.runsIndex] = index
   return out
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CARRIED_KEY, carriedWrites, configDirFromEnv, configDirOf, formerStorePaths, isFormerHud, newestFirst, sourceOf, storeFileName } from '../hooks/app/formerStore'
+import { CARRIED_MARK, carriedWrites, configDirFromEnv, configDirOf, formerStorePaths, isFormerHud, newestFirst, sourceOf, storeFileName } from '../hooks/app/formerStore'
 import { Runtime } from '../hooks/app/runtime'
 import { defaultSettings } from '../hooks/core/settings'
 import type { Settings } from '../hooks/core/settings'
@@ -107,7 +107,7 @@ describe('the store kept under the former name', () => {
     expect(rt.run?.number).toBe(33)
     expect(f.kept.store['runs.index.v1']).toContain('r32')
     expect(f.kept.store['run.v1.r32']).toBeDefined()
-    expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json', keys: 6 })
+    expect(f.kept.store[CARRIED_MARK]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json', keys: 6 })
     // Said once, as a toast: not a warning pinned at the top of the panel.
     expect(f.kept.toasts.join(' ')).toContain('Project Sentinel is Control Room renamed')
     expect(rt.notes.join(' ')).not.toContain('renamed')
@@ -154,7 +154,7 @@ describe('the store kept under the former name', () => {
     expect(rt.settings.permissions.delete).toBe('default')
     expect(rt.settings.permissions.gitDestructive).toBe('default')
     expect(rt.run?.number).toBe(33)
-    expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
+    expect(f.kept.store[CARRIED_MARK]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
     await f.advance(2000)
     expect(f.kept.toasts.join(' ')).toContain('Project Sentinel is Control Room renamed')
   })
@@ -167,11 +167,11 @@ describe('the store kept under the former name', () => {
     const rt = new Runtime()
     rt.bind(f.host)
     await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    expect(f.kept.store[CARRIED_KEY]).toBeUndefined()
+    expect(f.kept.store[CARRIED_MARK]).toBeUndefined()
     expect(rt.settings.autopilot.enabled).toBe(false)
     await rt.onClassicSessionStart({ source: 'startup', sessionId: 'session-1', transcriptPath: '/home/a/.claude/projects/-work/session-1.jsonl' })
     expect(rt.settings.autopilot.enabled).toBe(true)
-    expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
+    expect(f.kept.store[CARRIED_MARK]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
   })
 
   test('beside a Control Room that still runs in the session, it stands by and says so once', async () => {
@@ -203,7 +203,7 @@ describe('the store kept under the former name', () => {
     rt.bind(f.host)
     await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await rt.onClassicSessionStart({ source: 'startup', sessionId: 'session-1', transcriptPath: '/home/a/.claude/projects/-work/session-1.jsonl' })
-    expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: null, keys: 0 })
+    expect(f.kept.store[CARRIED_MARK]).toMatchObject({ from: null, keys: 0 })
     await f.advance(2000)
     expect(f.kept.toasts.join(' ')).not.toContain('renamed')
   })
@@ -214,6 +214,6 @@ describe('the store kept under the former name', () => {
     rt.bind(f.host)
     await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await rt.onClassicSessionStart({ source: 'startup', sessionId: 'session-1' })
-    expect(f.kept.store[CARRIED_KEY]).toBeUndefined()
+    expect(f.kept.store[CARRIED_MARK]).toBeUndefined()
   })
 })

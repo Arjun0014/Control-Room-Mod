@@ -171,15 +171,24 @@ describe('register', () => {
     expect((await $.tool.check({ tool: 'Bash', input: { command: 'git push origin main' } })).decision).toBe('deny')
   })
 
-  test('machine load on Windows starts the one fixed sampler command: machine-wide totals, no policy change', async ($, on) => {
+  test('machine load on Windows runs typeperf by name with fixed arguments (no shell), and systeminfo once for the total memory', async ($, on) => {
     const w = world(on, { settings: withSettings(s => void (s.resources.level = 'medium')) })
     await $.session.start({ ...SESSION, cwd: 'C:\\work' })
     await w.clock.advance(500)
-    const argv = w.kept.spawned[0] ?? []
-    expect(argv.slice(0, 4)).toEqual(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command'])
-    expect(argv[4]).toContain('GetSystemTimes')
-    expect(argv[4]).toContain('$sec=2')
-    expect(argv.join(' ')).not.toContain('ExecutionPolicy')
+    expect(w.kept.spawned).toEqual([['typeperf.exe', '\\Processor(_Total)\\% Processor Time', '\\Memory\\Available Bytes', '-si', '2']])
+    expect(w.kept.ran.filter(argv => argv[0] === 'systeminfo.exe')).toEqual([['systeminfo.exe', '/fo', 'csv', '/nh']])
+  })
+
+  test('machine load on macOS runs top by name with fixed arguments (no shell), and sysctl for the memory level at a reading', async ($, on) => {
+    const w = world(on, {
+      settings: withSettings(s => void (s.resources.level = 'medium')),
+      exists: ['/System/Library/CoreServices/SystemVersion.plist'],
+      samplerLines: ['CPU usage: 5.26% user, 10.52% sys, 84.21% idle '],
+    })
+    await $.session.start({ ...SESSION, cwd: '/Users/a/work' })
+    await w.clock.advance(500)
+    expect(w.kept.spawned).toEqual([['top', '-l', '0', '-s', '2', '-n', '0']])
+    expect(w.kept.ran.filter(argv => argv[0] === 'sysctl')).toEqual([['sysctl', '-n', 'kern.memorystatus_level']])
   })
 
   test('Subagent Control: Off blocks and hides, Max N counts, Ask asks', async ($, on) => {

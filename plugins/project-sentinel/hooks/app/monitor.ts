@@ -16,10 +16,13 @@ import {
   type ProcStat,
   type Sample,
   cpuBetween,
-  parseMacLine,
+  cpuOfTopLine,
+  memoryOfLevel,
   parseMeminfo,
+  parsePhysMem,
   parseProcStat,
-  parseWindowsLine,
+  parseSysteminfoTotal,
+  parseTypeperfLine,
   SAMPLER_EVERY_SEC,
   platformOf,
 } from '../features/resources/sampler'
@@ -105,9 +108,16 @@ export class ResourceMonitor {
     let buffer = ''
     // The sampler reports every SAMPLER_EVERY_SEC; a reading is taken at the interval the person set.
     let takenAt = 0
+    const isDue = (at: number): boolean => at - takenAt >= this.interval * 1000 - SAMPLER_EVERY_SEC * 500
+    // macOS: memory in use from top's last PhysMem line, for when the kernel's level cannot be read.
+    let physUsed: number | null = null
+    // The first line that was not a reading (typeperf's "Error: No valid counters."), to say why it stopped.
+    let note = ''
     try {
       const stream = host.spawnSampler(platform)
       this.stream = stream
+      // Windows: the machine's total memory, read once while typeperf takes its first sample.
+      const total = platform === 'windows' ? await this.totalMemory(host) : null
       for await (const chunk of stream) {
         if (generation !== this.generation) break
         if (chunk.stream !== 'stdout') continue
@@ -117,15 +127,27 @@ export class ResourceMonitor {
           const line = buffer.slice(0, i).replace(/\r$/, '')
           buffer = buffer.slice(i + 1)
           const at = Date.now()
-          const sample = platform === 'windows' ? parseWindowsLine(line, at) : parseMacLine(line, at)
-          if (sample !== null && at - takenAt >= this.interval * 1000 - SAMPLER_EVERY_SEC * 500) {
-            takenAt = at
-            this.push(sample)
+          if (platform === 'windows') {
+            const sample = parseTypeperfLine(line, at, total)
+            if (sample === null && note === '' && line.trim() !== '' && !line.startsWith('"')) note = line.trim()
+            if (sample !== null && isDue(at)) {
+              takenAt = at
+              this.push(sample)
+            }
+            continue
           }
+          if (line.trimStart().startsWith('PhysMem:')) physUsed = parsePhysMem(line)
+          const cpu = cpuOfTopLine(line)
+          if (cpu === null || !isDue(at)) continue
+          takenAt = at
+          const ram = (await this.memoryLevel(host)) ?? physUsed
+          if (generation !== this.generation) break
+          this.push({ at, cpu, ram })
         }
+        if (generation !== this.generation) break
         if (buffer.length > 4096) buffer = buffer.slice(-1024)
       }
-      if (generation === this.generation) this.fail('the sampler exited')
+      if (generation === this.generation) this.fail(note === '' || /^exiting/i.test(note) ? 'the sampler exited' : `the sampler exited: ${note.slice(0, 120)}`)
     } catch (error) {
       if (generation === this.generation) this.fail(error instanceof Error ? error.message : String(error))
     } finally {
@@ -137,6 +159,30 @@ export class ResourceMonitor {
         if (generation === this.generation && (this.ceilings !== null || this.isWanted)) void this.start(host, cwd)
       })
     }
+  }
+
+  /** Windows: the machine's total memory in bytes, from `systeminfo` once; null when it cannot be read (asked again at the next start). */
+  private total: Promise<number | null> | null = null
+
+  private async totalMemory(host: Host): Promise<number | null> {
+    this.total ??= host.systemInfo().then(
+      r => (r.exitCode === 0 ? parseSysteminfoTotal(r.stdout) : null),
+      () => null,
+    )
+    const total = await this.total
+    if (total === null) this.total = null
+    return total
+  }
+
+  /** macOS: memory in use by the kernel's level; null, and not asked again, once `sysctl` cannot give it (PhysMem stands in). */
+  private hasMemoryLevel = true
+
+  private async memoryLevel(host: Host): Promise<number | null> {
+    if (!this.hasMemoryLevel) return null
+    const r = await host.memoryLevel().catch(() => null)
+    const used = r !== null && r.exitCode === 0 ? memoryOfLevel(r.stdout) : null
+    if (used === null) this.hasMemoryLevel = false
+    return used
   }
 
   private async readProc(host: Host, generation: number): Promise<void> {

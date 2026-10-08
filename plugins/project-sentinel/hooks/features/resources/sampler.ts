@@ -1,14 +1,17 @@
 /**
- * Host CPU/RAM sampling, lightweight and dependency-free.
+ * Host CPU/RAM sampling, lightweight and dependency-free. Each sampler is one
+ * program, named and given fixed arguments where it is started (`hostOf` in
+ * register.tsx), never a shell:
  *
- * - Windows: one long-lived PowerShell process. It P/Invokes
- *   GetSystemTimes/GlobalMemoryStatusEx (true interval CPU %, near-zero
- *   steady-state cost) and falls back to CIM queries where Add-Type is not
- *   allowed (constrained language mode). It runs as `-Command` text, which
- *   the execution policy does not govern, so it changes no policy.
- * - macOS: one long-lived `top -l 0` for CPU, plus `sysctl
+ * - Windows: one long-lived `typeperf` (Windows' own performance-counter
+ *   reader) for the processor time and the available memory, every
+ *   SAMPLER_EVERY_SEC; the machine's total memory comes once from
+ *   `systeminfo`. Counter paths are English, as Windows names them in an
+ *   English install; where the install names them in another language,
+ *   `typeperf` finds none and machine load reads "unavailable".
+ * - macOS: one long-lived `top -l 0` for CPU, plus `sysctl -n
  *   kern.memorystatus_level` (the kernel's memory-free percentage, i.e.
- *   memory pressure) per sample.
+ *   memory pressure) per reading.
  * - Linux: no process at all — /proc/stat and /proc/meminfo are read on a timer.
  *
  * Only machine-wide aggregates are read: no process lists, names or
@@ -34,32 +37,46 @@ export function platformOf(input: { cwd: string; hasProcStat: boolean; hasMacSys
  */
 export const SAMPLER_EVERY_SEC = 2
 
-/** One line of the Windows sampler: `P <cpu%> <availBytes> <totalBytes>` or `C <cpu%> <freeKB> <totalKB>`. */
-export function parseWindowsLine(line: string, at: number): Sample | null {
-  const m = /^([PC])\s+([\d.]+)\s+(\d+)\s+(\d+)\s*$/.exec(line.trim())
-  if (!m) return null
-  const cpu = Number(m[2])
-  const avail = Number(m[3])
-  const total = Number(m[4])
-  if (!Number.isFinite(cpu) || !(total > 0)) return null
-  return { at, cpu: clampPct(cpu), ram: clampPct(100 * (1 - avail / total)) }
+/**
+ * One line of `typeperf`'s CSV on Windows: `"<time>","<CPU %>","<available bytes>"`. Its header,
+ * its closing words and a missed sample (a blank value) read as null. Memory needs the machine's
+ * total, from `systeminfo` (null while unknown: the line then gives the CPU alone).
+ */
+export function parseTypeperfLine(line: string, at: number, totalBytes: number | null): Sample | null {
+  const cells = csvCells(line)
+  if (cells.length < 3) return null
+  const cpu = decimal(cells[1]!)
+  if (cpu === null) return null
+  const available = decimal(cells[2]!)
+  const ram = totalBytes !== null && totalBytes > 0 && available !== null ? clampPct(100 * (1 - available / totalBytes)) : null
+  return { at, cpu: clampPct(cpu), ram }
 }
 
-const lastPhys: { used: number | null } = { used: null }
+/**
+ * The machine's physical memory in bytes, from `systeminfo /fo csv /nh`: its 23rd field, Total
+ * Physical Memory, in megabytes grouped as the locale writes numbers (`11,642 MB`, `11.642 MB`).
+ */
+export function parseSysteminfoTotal(stdout: string): number | null {
+  const line = stdout.split('\n').find(l => l.trim() !== '')
+  const field = line === undefined ? undefined : csvCells(line)[22]
+  const digits = field?.replace(/\D/g, '') ?? ''
+  const mb = digits === '' ? NaN : Number(digits)
+  return Number.isFinite(mb) && mb >= 64 && mb <= 64 * 1024 * 1024 ? mb * 1024 * 1024 : null
+}
 
-/** macOS: `M CPU usage: 5.26% user, 10.52% sys, 84.21% idle ## 63` (63 = % memory free). */
-export function parseMacLine(line: string, at: number): Sample | null {
+/** macOS `top -l`: the CPU in use, from its `CPU usage: 5.26% user, 10.52% sys, 84.21% idle` line; null for any other line. */
+export function cpuOfTopLine(line: string): number | null {
   const t = line.trim()
-  if (t.startsWith('R ')) {
-    lastPhys.used = parsePhysMem(t.slice(2))
-    return null
-  }
-  if (!t.startsWith('M ')) return null
+  if (!t.startsWith('CPU usage:')) return null
   const idle = /([\d.]+)%\s*idle/.exec(t)
-  const cpu = idle ? clampPct(100 - Number(idle[1])) : null
-  const freeMatch = /##\s*(\d+)\s*$/.exec(t)
-  const ram = freeMatch ? clampPct(100 - Number(freeMatch[1])) : lastPhys.used
-  return { at, cpu, ram }
+  return idle ? clampPct(100 - Number(idle[1])) : null
+}
+
+/** macOS: memory in use from `sysctl -n kern.memorystatus_level`, the percentage the kernel counts free. */
+export function memoryOfLevel(stdout: string): number | null {
+  const t = stdout.trim()
+  if (!/^\d{1,3}$/.test(t) || Number(t) > 100) return null
+  return clampPct(100 - Number(t))
 }
 
 /** `PhysMem: 15G used (2588M wired, 1092M compressor), 81M unused.` → used %. */
@@ -106,3 +123,16 @@ export function parseMeminfo(text: string): number | null {
 }
 
 const clampPct = (n: number): number => Math.max(0, Math.min(100, Math.round(n * 10) / 10))
+
+/** The fields of one CSV line whose fields are all quoted, as `typeperf` and `systeminfo` write it. */
+function csvCells(line: string): string[] {
+  const out: string[] = []
+  for (const m of line.matchAll(/"((?:[^"]|"")*)"/g)) out.push(m[1]!.replace(/""/g, '"'))
+  return out
+}
+
+/** A plain decimal (a point or the locale's comma before the fraction), else null. */
+function decimal(text: string): number | null {
+  const t = text.trim().replace(',', '.')
+  return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null
+}

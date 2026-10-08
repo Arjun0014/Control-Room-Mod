@@ -1,6 +1,8 @@
 import type { On, SessionUsage } from 'claude-code'
 import { mock } from 'claude-code/testing'
 
+import { SYSTEMINFO_10000_MB } from './fake-host'
+
 /**
  * A session the plugin runs in, answered from memory beneath it: every
  * engine call Control Room makes has an answer here, and what the plugin
@@ -8,7 +10,18 @@ import { mock } from 'claude-code/testing'
  */
 export type World = ReturnType<typeof world>
 
-export function world(on: On, options: { settings?: unknown; window?: number; tokens?: number; isHandoffWritten?: boolean; samplerLines?: string[] } = {}) {
+export function world(
+  on: On,
+  options: {
+    settings?: unknown
+    window?: number
+    tokens?: number
+    isHandoffWritten?: boolean
+    samplerLines?: string[]
+    /** Paths that exist (`fs.exists`); none by default. */
+    exists?: string[]
+  } = {},
+) {
   const clock = mock.clock(on, { now: 1_000_000 })
   const store: Record<string, unknown> = options.settings === undefined ? {} : { 'settings.v1': options.settings }
   const kept = {
@@ -23,6 +36,8 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
     opened: [] as string[],
     asked: [] as string[],
     spawned: [] as string[][],
+    /** `$.process.run` calls, by their argument vectors. */
+    ran: [] as string[][],
     invalidated: [] as string[],
   }
   const live = {
@@ -79,7 +94,9 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
   on('model.classify', () => ({ value: 'premature' }))
   on('settings.read', () => ({ value: {} }))
 
-  on('fs.exists', () => ({ value: false }))
+  // Compared as POSIX paths: on Windows the engine resolves `/System/...` onto the current drive.
+  const posix = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
+  on('fs.exists', ($, e) => ({ value: options.exists?.includes(posix(e.path)) ?? false }))
   on('fs.read', () => ({ deny: 'no files in this world' }))
   on('fs.stat', ($, e) => {
     if (e.path.endsWith('NEXT_SESSION_PROMPT.md')) {
@@ -98,6 +115,14 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
       await new Promise<never>(() => undefined)
     }
     return { value: { code: 0, signal: null } }
+  })
+  // The samplers' one-shot programs: a 10,000 MB Windows machine, a Mac whose kernel counts 63% free.
+  on('process.run', ($, e, next) => {
+    kept.ran.push([...e.argv])
+    const answered = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === 'systeminfo.exe') return answered(SYSTEMINFO_10000_MB)
+    if (e.argv[0] === 'sysctl') return answered('63\n')
+    return next(e)
   })
 
   on('store.get', ($, e) => ({ value: store[e.key] }))

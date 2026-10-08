@@ -16,8 +16,8 @@ export const COMMAND = 'control-room'
 /** A short alias, registered only when no other command already uses it. */
 export const SHORT_COMMAND = 'cr'
 
-/** Keys in the plugin's `$.store` (one JSON file per plugin, shared by all sessions). */
-export const STORE_KEYS = {
+/** The names of the entries in the plugin's `$.store` (one JSON file per plugin, shared by all sessions). */
+export const STORE_ENTRIES = {
   settings: 'settings.v1',
   runsIndex: 'runs.index.v1',
   runCounter: 'runs.counter.v1',
@@ -70,8 +70,8 @@ export const LIMITS = {
   guardSwitchTokens: 100_000,
 } as const
 
-/** The plugin's version, as in .claude-plugin/plugin.json (kept in step on release). */
-export const VERSION = '1.4.1'
+/** The plugin's version, as in its manifest (kept in step on release). */
+export const VERSION = '1.4.2'
 
 /** Version floor this release was verified on (Desktop 2.1.289, CLI 2.1.292). */
 export const MIN_ENGINE = '2.1.289'

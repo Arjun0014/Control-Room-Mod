@@ -17,7 +17,7 @@
 import type { ModelForkResult, Timer } from 'claude-code'
 
 import type { CacheMissView, CacheView, HudModel } from '../../types'
-import { STORE_KEYS } from '../constants'
+import { STORE_ENTRIES } from '../constants'
 import type { Settings } from '../core/settings'
 import * as Cache from '../features/cache'
 import { KEEP_WARM_PROMPT } from '../features/prompts'
@@ -63,7 +63,7 @@ export class CacheGuardian {
   async load(): Promise<void> {
     const host = this.ctx.host()
     if (host === null) return
-    this.memory = Cache.memoryOf(await host.storeGet(STORE_KEYS.cache).catch(() => undefined))
+    this.memory = Cache.memoryOf(await host.storeGet(STORE_ENTRIES.cache).catch(() => undefined))
     this.state = this.fresh()
     this.ctx.changed()
   }
@@ -105,7 +105,7 @@ export class CacheGuardian {
     }
     if (JSON.stringify(next) === JSON.stringify(this.memory)) return
     this.memory = next
-    void this.ctx.host()?.storeSet(STORE_KEYS.cache, next).catch(() => undefined)
+    void this.ctx.host()?.storeSet(STORE_ENTRIES.cache, next).catch(() => undefined)
   }
 
   /** A fresh context (/clear): its cache starts empty; the system prompt may change freely. */

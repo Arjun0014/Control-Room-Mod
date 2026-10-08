@@ -245,7 +245,7 @@ function toPosture(s: KitState, c: Cursor, want: Posture): void {
   }
 }
 
-/** Turns to face `dir` (sitting up first: a curled-up Kit does not turn round where it lies). */
+/** Turns to face `dir` (sitting up first: a Kit lying in a ball does not turn round where it lies). */
 function face(s: KitState, c: Cursor, dir: number): void {
   if (dir === 0 || c.facing === Math.sign(dir)) return
   if (c.posture === 'down') toPosture(s, c, 'sit')
@@ -741,7 +741,7 @@ function notice(s: KitState, x: number): void {
 // ---------------------------------------------------------------------------
 // Poses: what is drawn, the same words for both surfaces
 
-export type Body = 'stand' | 'walkA' | 'walkB' | 'sit' | 'crouch' | 'hop' | 'curl' | 'lie' | 'stretch' | 'roll' | 'front' | 'frontStand' | 'back'
+export type Body = 'stand' | 'walkA' | 'walkB' | 'sit' | 'crouch' | 'hop' | 'ball' | 'lie' | 'stretch' | 'roll' | 'front' | 'frontStand' | 'back'
 export type Eyes = 'open' | 'blink' | 'closed' | 'happy' | 'wide' | 'up' | 'down' | 'back' | 'focus' | 'half' | 'dizzy' | 'squint'
 export type Mouth = 'none' | 'smile' | 'open' | 'yawn' | 'gasp' | 'wavy' | 'blep' | 'cat'
 export type Ears = 'up' | 'back' | 'flick' | 'perk' | 'droop'
@@ -790,10 +790,10 @@ export type Particle = { kind: ParticleKind; x: number; y: number; frame: number
 export type Drawable = { x: number; pose: Pose; particles: Particle[]; isGone: boolean; isDim: boolean; caption: string }
 
 /** How high Kit's ear tips are above the ground, in half units, by body. */
-const TOP: Record<Body, number> = { stand: 9, walkA: 9, walkB: 9, hop: 9, frontStand: 9, sit: 8, front: 8, back: 8, crouch: 7, curl: 5, lie: 6, stretch: 7, roll: 6 }
-const SIDE: ReadonlySet<Body> = new Set<Body>(['stand', 'walkA', 'walkB', 'sit', 'crouch', 'hop', 'curl', 'lie', 'stretch', 'roll'])
+const TOP: Record<Body, number> = { stand: 9, walkA: 9, walkB: 9, hop: 9, frontStand: 9, sit: 8, front: 8, back: 8, crouch: 7, ball: 5, lie: 6, stretch: 7, roll: 6 }
+const SIDE: ReadonlySet<Body> = new Set<Body>(['stand', 'walkA', 'walkB', 'sit', 'crouch', 'hop', 'ball', 'lie', 'stretch', 'roll'])
 
-const bodyOf = (posture: Posture): Body => (posture === 'stand' ? 'stand' : posture === 'sit' ? 'sit' : 'curl')
+const bodyOf = (posture: Posture): Body => (posture === 'stand' ? 'stand' : posture === 'sit' ? 'sit' : 'ball')
 const beat = (e: number, ms: number): number => Math.floor(e / ms)
 const alt = (e: number, ms: number): boolean => beat(e, ms) % 2 === 0
 const isBlink = (t: number, v: number): boolean => (t + (v % 997)) % (3100 + (v % 5) * 260) < 150
@@ -861,7 +861,7 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       return o
     }
     case 'turn':
-      o.body = s.posture === 'down' ? 'curl' : frontOf(s.posture)
+      o.body = s.posture === 'down' ? 'ball' : frontOf(s.posture)
       o.eyes = s.posture === 'down' ? 'closed' : 'open'
       return o
     case 'sitDown':
@@ -1013,7 +1013,7 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       o.mouth = 'gasp'
       o.ears = 'up'
       if (e < 220) o.dy = 1
-      if (s.posture === 'down') o.body = 'curl'
+      if (s.posture === 'down') o.body = 'ball'
       return o
     case 'facepalm':
       o.body = frontOf(s.posture === 'down' ? 'sit' : s.posture)
@@ -1043,7 +1043,7 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       o.mouth = 'smile'
       return o
     case 'nap':
-      o.body = 'curl'
+      o.body = 'ball'
       o.eyes = 'closed'
       o.ears = e % 5000 > 4700 ? 'flick' : 'up'
       o.tail = 0
@@ -1156,7 +1156,7 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       return o
     case 'startled':
       if (s.posture === 'down') {
-        o.body = 'curl'
+        o.body = 'ball'
         o.eyes = e < 700 ? 'wide' : 'half'
         o.dy = e < 200 ? 1 : 0
       } else {
@@ -1168,7 +1168,7 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       return o
     case 'glance':
       o.body = frontOf(s.posture === 'down' ? 'sit' : s.posture)
-      if (s.posture === 'down') o.body = 'curl'
+      if (s.posture === 'down') o.body = 'ball'
       o.eyes = 'open'
       o.ears = 'perk'
       return o
@@ -1181,7 +1181,7 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       o.mouth = 'wavy'
       o.ears = 'droop'
       o.dx = beat(e, 200) % 2 === 0 ? 0 : 0.5
-      if (s.posture === 'down') o.body = 'curl'
+      if (s.posture === 'down') o.body = 'ball'
       return o
   }
 }
@@ -1376,7 +1376,7 @@ export function stillOf(mood: KitMood, facing: 1 | -1): { pose: Pose; mark: Part
       o.ears = 'droop'
       break
     case 'sleep':
-      o.body = 'curl'
+      o.body = 'ball'
       o.eyes = 'closed'
       mark = 'z'
       break
@@ -1535,7 +1535,7 @@ const T_FEET: Record<'stand' | 'walkA' | 'walkB' | 'tucked', string> = {
 
 /** Whole sprites for the bodies that are not the round body upright: box coordinates, facing right. */
 const T_WHOLE: Partial<Record<Body, string[]>> = {
-  curl: [
+  ball: [
     '....................',
     '....................',
     '....................',
@@ -1601,10 +1601,10 @@ export function terminalSprite(pose: Pose): string[] {
   if (whole !== undefined) {
     whole.forEach((line, r) => [...line].forEach((ch, x) => ch !== '.' && put(r, x, ch)))
     // Eyes and faces on the whole sprites, at their own places.
-    const face: Record<string, { row: number; cols: [number, number] }> = { curl: { row: 8, cols: [12, 15] }, lie: { row: 8, cols: [12, 15] }, stretch: { row: 7, cols: [14, 17] }, roll: { row: 7, cols: [15, 18] } }
+    const face: Record<string, { row: number; cols: [number, number] }> = { ball: { row: 8, cols: [12, 15] }, lie: { row: 8, cols: [12, 15] }, stretch: { row: 7, cols: [14, 17] }, roll: { row: 7, cols: [15, 18] } }
     const at = face[pose.body]
     if (at !== undefined) {
-      const eyes = pose.body === 'curl' && pose.eyes !== 'wide' && pose.eyes !== 'half' ? 'closed' : pose.eyes
+      const eyes = pose.body === 'ball' && pose.eyes !== 'wide' && pose.eyes !== 'half' ? 'closed' : pose.eyes
       const shift = at.row - 5
       for (const [r, c, ch] of eyePixels(eyes, at.cols)) put(r + shift, c, ch)
       if (pose.blush) {
@@ -1612,7 +1612,7 @@ export function terminalSprite(pose: Pose): string[] {
         put(at.row + 1, at.cols[1] + 2, 'p')
       }
     }
-    if (pose.body === 'roll' || pose.body === 'curl') {
+    if (pose.body === 'roll' || pose.body === 'ball') {
       // The tail sways: its tip moves a pixel.
       if (pose.body === 'roll' && pose.tail > 0.3) put(6, 2, 'n')
     }
@@ -1988,7 +1988,7 @@ function geoOf(body: Body, tail: number, breath: boolean): Geo {
         face: isBack ? 'none' : 'front',
       }
     }
-    case 'curl':
+    case 'ball':
     case 'lie': {
       // A loaf: the round body settled on the ground (its bottom cut flat), the head at the front.
       const isLie = body === 'lie'
@@ -2177,7 +2177,7 @@ export function desktopSprite(pose: Pose, isDim = false): (string | null)[][] {
   // The face, on the body's own layer (no outline round it), under any paw raised to it.
   const faceColors: Record<string, string> = { k: isDim ? '#3A2A24' : D_COLOR.eye, w: D_COLOR.shine, d: pal.shade, p: pal.blush, r: pal.tongue }
   if (g.eyes !== null) {
-    const eyes = pose.body === 'curl' && (pose.eyes === 'open' || pose.eyes === 'blink') ? 'closed' : pose.eyes
+    const eyes = pose.body === 'ball' && (pose.eyes === 'open' || pose.eyes === 'blink') ? 'closed' : pose.eyes
     g.eyes.forEach((at, i) => stamp(r, at[0] + (eyes === 'back' ? -1 : eyes === 'happy' || eyes === 'dizzy' || eyes === 'squint' ? -0.5 : 0), at[1], eyeRows(eyes, i), faceColors, 4))
     const mouth = D_MOUTH[pose.mouth]
     if (g.mouth !== null && mouth.length > 0) stamp(r, g.mouth[0] - mouth[0]!.length / 2, g.mouth[1], mouth, faceColors, 4)
@@ -2251,7 +2251,7 @@ export function desktopLane(d: Drawable, px: number): { grid: (string | null)[][
     desktopSprite(d.pose, d.isDim).forEach((row, y) => row.forEach((c, x) => c !== null && put(left + x, top + y, c)))
     const lifted = Math.max(0, d.pose.dy)
     const body = d.pose.body
-    const span = body === 'curl' || body === 'lie' || body === 'roll' || body === 'stretch' ? 14 : 11
+    const span = body === 'ball' || body === 'lie' || body === 'roll' || body === 'stretch' ? 14 : 11
     shadow = { cx: left + D_W / 2, rx: span - lifted, opacity: 0.16 - lifted * 0.03 }
   }
   for (const p of d.particles) {

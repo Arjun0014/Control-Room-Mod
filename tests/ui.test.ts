@@ -7,6 +7,7 @@ import { cacheState, cacheSummary, lifetimeWords } from '../hooks/ui/pane/cache'
 import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
 import { navRowColumns } from '../hooks/ui/primitives'
 import { ACCENT, TIMELINE, meter } from '../hooks/ui/theme'
+import { typeperfLine } from './fixtures/fake-host'
 import { SESSION, world } from './fixtures/world'
 
 const ENGINE_ROW = { type: 'Text' as const, props: {}, children: ['ENGINE ROW'] }
@@ -823,7 +824,7 @@ describe('ui', () => {
   })
 
   test('the Machine cell: CPU and memory as level bars with their percentages, toned near a ceiling; on Desktop the headline does not repeat them', async ($, on) => {
-    const w = world(on, { tokens: 300_000, samplerLines: ['P 34 1500000000 10000000000'] })
+    const w = world(on, { tokens: 300_000, samplerLines: [typeperfLine(34, 1500)] })
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await $.session.start({ ...SESSION, cwd: 'C:\\work' })
     await w.clock.advance(500)

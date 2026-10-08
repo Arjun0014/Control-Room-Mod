@@ -6,7 +6,7 @@
  * a corrupt or foreign value falls back to defaults, never throws.
  */
 
-import { LIMITS, STORE_KEYS } from '../constants'
+import { LIMITS, STORE_ENTRIES } from '../constants'
 import { type Run, isRun, updateIndex } from '../features/chain'
 import { PERMISSION_CATEGORIES, PERMISSION_LABEL, type Settings, normalizeSettings } from '../core/settings'
 import type { Host } from '../host'
@@ -14,7 +14,7 @@ import type { Host } from '../host'
 export async function loadSettings(
   host: Host,
 ): Promise<{ settings: Settings; isFresh: boolean; wasRepaired: boolean; allowRemoved: string[] }> {
-  const raw = await host.storeGet(STORE_KEYS.settings).catch(() => undefined)
+  const raw = await host.storeGet(STORE_ENTRIES.settings).catch(() => undefined)
   if (raw === undefined || raw === null) return { settings: normalizeSettings(undefined), isFresh: true, wasRepaired: false, allowRemoved: [] }
   const settings = normalizeSettings(raw)
   const { value, allowRemoved } = withAllowRemoved(raw)
@@ -64,12 +64,12 @@ export function hasChangedValues(raw: unknown, normalized: unknown): boolean {
 }
 
 export async function loadRun(host: Host, id: string): Promise<Run | null> {
-  const raw = await host.storeGet(`${STORE_KEYS.runPrefix}${id}`).catch(() => undefined)
+  const raw = await host.storeGet(`${STORE_ENTRIES.runPrefix}${id}`).catch(() => undefined)
   return isRun(raw) ? raw : null
 }
 
 export async function loadIndex(host: Host): Promise<string[]> {
-  const raw = await host.storeGet(STORE_KEYS.runsIndex).catch(() => undefined)
+  const raw = await host.storeGet(STORE_ENTRIES.runsIndex).catch(() => undefined)
   return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string').slice(0, LIMITS.runsKept) : []
 }
 
@@ -83,17 +83,17 @@ export async function findRunBySession(host: Host, sessionId: string): Promise<R
 }
 
 export async function nextRunNumber(host: Host): Promise<number> {
-  const raw = await host.storeGet(STORE_KEYS.runCounter).catch(() => undefined)
+  const raw = await host.storeGet(STORE_ENTRIES.runCounter).catch(() => undefined)
   const n = (typeof raw === 'number' && Number.isFinite(raw) ? Math.floor(raw) : 0) + 1
-  await host.storeSet(STORE_KEYS.runCounter, n).catch(() => undefined)
+  await host.storeSet(STORE_ENTRIES.runCounter, n).catch(() => undefined)
   return n
 }
 
 export async function saveRun(host: Host, run: Run): Promise<void> {
-  await host.storeSet(`${STORE_KEYS.runPrefix}${run.id}`, run)
+  await host.storeSet(`${STORE_ENTRIES.runPrefix}${run.id}`, run)
   const { index, dropped } = updateIndex(await loadIndex(host), run.id)
-  await host.storeSet(STORE_KEYS.runsIndex, index)
-  for (const old of dropped) await host.storeDelete(`${STORE_KEYS.runPrefix}${old}`).catch(() => undefined)
+  await host.storeSet(STORE_ENTRIES.runsIndex, index)
+  for (const old of dropped) await host.storeDelete(`${STORE_ENTRIES.runPrefix}${old}`).catch(() => undefined)
 }
 
 export async function loadHistory(host: Host, exceptId: string | null): Promise<Run[]> {

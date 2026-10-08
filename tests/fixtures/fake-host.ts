@@ -8,6 +8,13 @@ export async function flush(rounds = 60): Promise<void> {
   for (let i = 0; i < rounds; i++) await Promise.resolve()
 }
 
+/** `systeminfo /fo csv /nh` for a machine with 10,000 MB of memory (its 23rd field is the total). */
+export const SYSTEMINFO_10000_MB = `${'"-",'.repeat(22)}"10,000 MB","4,000 MB"\r\n`
+
+/** One `typeperf` sample on Windows: the CPU % and the memory available, in MB of SYSTEMINFO_10000_MB's 10,000. */
+export const typeperfLine = (cpu: number, availableMb: number): string =>
+  `"10/08/2026 20:14:26.719","${cpu.toFixed(6)}","${(availableMb * 1024 * 1024).toFixed(6)}"`
+
 /**
  * The engine as the Runtime sees it, in memory: a manual clock and a record
  * of every effect, so Runtime behaviour is tested without an engine at all.
@@ -16,6 +23,10 @@ export function fakeHost(
   options: {
     cwd?: string
     samplerLines?: string[]
+    /** What `systeminfo` writes on Windows (a 10,000 MB machine by default). */
+    systemInfo?: string
+    /** What `sysctl -n kern.memorystatus_level` writes on macOS ('63' by default: 37% in use). */
+    memoryLevel?: string
     handoffMtime?: () => number | null
     files?: Record<string, string>
     /** When each of `files` was last written (1 when not given). */
@@ -41,6 +52,8 @@ export function fakeHost(
     store: {} as Record<string, unknown>,
     published: {} as Record<string, unknown>,
     spawned: [] as string[][],
+    /** One-shot programs the samplers ran (`systeminfo`, `sysctl`). */
+    ran: [] as string[],
     compacted: 0,
     scrolledToTop: 0,
     registeredTools: [] as string[],
@@ -152,6 +165,14 @@ export function fakeHost(
       }
       const g = gen()
       return Object.assign(g, { result: Promise.resolve({ code: 0, signal: null }) }) as SpawnStream
+    },
+    systemInfo: async () => {
+      kept.ran.push('systeminfo')
+      return { exitCode: 0, stdout: options.systemInfo ?? SYSTEMINFO_10000_MB, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    },
+    memoryLevel: async () => {
+      kept.ran.push('sysctl')
+      return { exitCode: 0, stdout: `${options.memoryLevel ?? '63'}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
     },
     repoRoot: async () => live.repo,
     gitStatus: async () => {

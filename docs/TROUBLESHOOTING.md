@@ -200,9 +200,12 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 ## Machine load
 
 - **"Load unavailable" / "Readings unavailable"**: the sampler could not start or stopped. It restarts up to twice.
-  On Windows it uses `powershell.exe`. On macOS it uses `/bin/sh`, `top` and `sysctl`. On Linux
-  it reads `/proc`. Restricted shells or policies can block these, and the static policy still
-  applies.
+  On Windows it uses `typeperf` (and `systeminfo` once, for the total memory). On macOS it uses
+  `top` and `sysctl`. On Linux it reads `/proc`. Policies that block these programs stop the
+  readings, and the static policy still applies. On a Windows installed in a language other than
+  English, `typeperf` knows its counters by other names and finds none, so the readings stay
+  unavailable there; Guardrails → Machine load shows the reason (`the sampler exited: Error: No
+  valid counters.` or its translation).
 - **Readings look high:** they are machine-wide totals, including other programs. That is
   intended, because the goal is to keep the machine responsive. Project Sentinel never stops or
   changes other programs.

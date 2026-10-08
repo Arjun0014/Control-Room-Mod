@@ -54,11 +54,18 @@ until you delete it. It is not directed at children. Questions: open an issue on
 | Machine-wide CPU busy % and memory used % (while *Live CPU and memory* or a machine-load limit is on) | Pressure levels, meters, notices | Memory only (a short sliding window) |
 
 **How the machine metrics are read.** One long-lived sampler process runs only while the
-the status bar shows live CPU and memory (Setup → *Live CPU and memory*, on by default) or a machine-load limit is set. It stops when both are off or the session ends:
+status bar shows live CPU and memory (Setup → *Live CPU and memory*, on by default) or a
+machine-load limit is set. It stops when both are off or the session ends. Each program is started
+by name with fixed arguments, written out in `hooks/register.tsx`, never through a shell:
 
-- **Windows:** `powershell.exe -NoProfile -NonInteractive` running a fixed script that calls
-  `GetSystemTimes` and `GlobalMemoryStatusEx`, with a CIM fallback.
-- **macOS:** `/bin/sh -c` running `top -l 0` (CPU line) and `sysctl kern.memorystatus_level`.
+- **Windows:** `typeperf "\Processor(_Total)\% Processor Time" "\Memory\Available Bytes" -si 2`
+  (`$.process.spawn`), Windows' own performance-counter reader, and once `systeminfo /fo csv /nh`
+  (`$.process.run`, 30-second timeout) for the total memory. The counter names are those of an
+  English Windows; on a Windows installed in another language `typeperf` finds no counters and
+  the readings show as unavailable.
+- **macOS:** `top -l 0 -s 2 -n 0` (`$.process.spawn`; its CPU line, and its memory line when the
+  kernel's level cannot be read) and `sysctl -n kern.memorystatus_level` (`$.process.run`,
+  5-second timeout) at each reading.
 - **Linux:** no process. It reads `/proc/stat` and `/proc/meminfo`.
 
 It reads totals only: no per-process data, no process names, nothing about other users.

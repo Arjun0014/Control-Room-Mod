@@ -3,18 +3,56 @@ import { describe, expect, test } from 'claude-code/testing'
 import { heavyKinds, isHeavy } from '../hooks/features/resources/heavy'
 import { UNKNOWN, ceilingsOf, evaluate, gateHeavy } from '../hooks/features/resources/pressure'
 import type { Ceilings, Pressure } from '../hooks/features/resources/pressure'
-import { cpuBetween, parseMacLine, parseMeminfo, parsePhysMem, parseProcStat, parseWindowsLine, platformOf } from '../hooks/features/resources/sampler'
+import {
+  cpuBetween,
+  cpuOfTopLine,
+  memoryOfLevel,
+  parseMeminfo,
+  parsePhysMem,
+  parseProcStat,
+  parseSysteminfoTotal,
+  parseTypeperfLine,
+  platformOf,
+} from '../hooks/features/resources/sampler'
 
 describe('samplers', () => {
-  test('Windows lines: P/Invoke bytes and CIM kilobytes', () => {
-    expect(parseWindowsLine('P 7.9 3129274368 12207001600', 5)).toEqual({ at: 5, cpu: 7.9, ram: 74.4 })
-    expect(parseWindowsLine('C 9 3031636 11920900', 5)).toEqual({ at: 5, cpu: 9, ram: 74.6 })
-    expect(parseWindowsLine('garbage', 5)).toBeNull()
-    expect(parseWindowsLine('P 5 1 0', 5)).toBeNull()
+  // `systeminfo /fo csv /nh` as Windows 11 writes it (English); field 23 is Total Physical Memory.
+  const SYSTEMINFO =
+    '"AJ","Microsoft Windows 11 Home","10.0.26200 N/A Build 26200","Microsoft Corporation","Standalone Workstation","Multiprocessor Free",' +
+    '"aj@example.com","N/A","00000-00000-00000-AAAAA","9/1/2025, 10:00:00 AM","10/8/2026, 9:00:00 AM","Acme","Laptop 15","x64-based PC",' +
+    '"1 Processor(s) Installed.,[01]: Intel64 Family 6 Model 140 Stepping 1 GenuineIntel ~2419 Mhz","Acme 1.2, 1/1/2024","C:\\WINDOWS",' +
+    '"C:\\WINDOWS\\system32","\\Device\\HarddiskVolume1","en-us;English (United States)","00004009","(UTC+05:30) Chennai, Kolkata, Mumbai, New Delhi",' +
+    '"11,642 MB","1,476 MB","33,426 MB","4,552 MB","28,874 MB","C:\\pagefile.sys","WORKGROUP","\\\\AJ"\r\n'
+
+  test('Windows: typeperf lines against the total from systeminfo', () => {
+    const total = parseSysteminfoTotal(SYSTEMINFO)
+    expect(total).toBe(11_642 * 1024 * 1024)
+    // 3,119 MB of 11,642 MB available: 73.2% in use.
+    expect(parseTypeperfLine('"10/08/2026 20:14:26.719","34.008431","3270508544.000000"', 5, total)).toEqual({ at: 5, cpu: 34, ram: 73.2 })
+    // A locale that writes the fraction after a comma; the total not known yet gives the CPU alone.
+    expect(parseTypeperfLine('"08.10.2026 20:14:26.719","7,9","3270508544,000000"', 5, null)).toEqual({ at: 5, cpu: 7.9, ram: null })
+    // The header, a missed sample, typeperf's closing words and its error read as nothing.
+    expect(parseTypeperfLine('"(PDH-CSV 4.0)","\\\\AJ\\Processor(_Total)\\% Processor Time","\\\\AJ\\Memory\\Available Bytes"', 5, total)).toBeNull()
+    expect(parseTypeperfLine('"10/08/2026 20:14:28.724"," "," "', 5, total)).toBeNull()
+    expect(parseTypeperfLine('Exiting, please wait...', 5, total)).toBeNull()
+    expect(parseTypeperfLine('Error: No valid counters.', 5, total)).toBeNull()
   })
 
-  test('macOS: top CPU line with the kernel memory-free level', () => {
-    expect(parseMacLine('M CPU usage: 5.26% user, 10.52% sys, 84.21% idle ## 63', 1)).toEqual({ at: 1, cpu: 15.8, ram: 37 })
+  test('Windows: the total from systeminfo in other locales, and what is not one', () => {
+    const at = (memory: string) => SYSTEMINFO.replace('"11,642 MB"', `"${memory}"`)
+    expect(parseSysteminfoTotal(at('11.642 MB'))).toBe(11_642 * 1024 * 1024)
+    expect(parseSysteminfoTotal(at('11\u202f642 Mo'))).toBe(11_642 * 1024 * 1024)
+    expect(parseSysteminfoTotal(at('N/A'))).toBeNull()
+    expect(parseSysteminfoTotal('')).toBeNull()
+    expect(parseSysteminfoTotal('ERROR: Access denied.')).toBeNull()
+  })
+
+  test('macOS: the CPU from top, memory from the kernel level or PhysMem', () => {
+    expect(cpuOfTopLine('CPU usage: 5.26% user, 10.52% sys, 84.21% idle ')).toBe(15.8)
+    expect(cpuOfTopLine('Load Avg: 1.71, 1.80, 1.86')).toBeNull()
+    expect(memoryOfLevel('63\n')).toBe(37)
+    expect(memoryOfLevel('')).toBeNull()
+    expect(memoryOfLevel('sysctl: unknown oid')).toBeNull()
     expect(parsePhysMem('PhysMem: 15G used (2588M wired, 1092M compressor), 1G unused.')).toBe(93.8)
   })
 

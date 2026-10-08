@@ -25,7 +25,7 @@ import type {
 } from 'claude-code'
 
 import type { PermissionLogEntry, TabId } from '../../types'
-import { COMMAND, LIMITS, MIN_ENGINE, PANE_ID, PANE_TITLE, SHORT_COMMAND, STORE_KEYS } from '../constants'
+import { COMMAND, LIMITS, MIN_ENGINE, PANE_ID, PANE_TITLE, SHORT_COMMAND, STORE_ENTRIES } from '../constants'
 import { type Effective, POLICY_SECTION_ID, effective, policySections, policyText } from '../core/policy'
 import { applyProfile, findProfile, profileLabel } from '../core/profiles'
 import { PERMISSION_LABEL, type Settings, clone, defaultSettings, normalizeSettings } from '../core/settings'
@@ -53,7 +53,7 @@ import { activeAgents, decideSpawn, isOffered } from '../features/subagents'
 import type { Host } from '../host'
 import { ResourceMonitor } from './monitor'
 import { Debounced, findRunBySession, loadHistory, loadIndex, loadSettings, nextRunNumber, saveRun } from './persist'
-import { CARRIED_KEY, type CarriedMarker, carriedWrites, configDirFromEnv, configDirOf, isFormerHud, readFormerStore } from './formerStore'
+import { CARRIED_MARK, type CarriedMarker, carriedWrites, configDirFromEnv, configDirOf, isFormerHud, readFormerStore } from './formerStore'
 import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
 import { Publisher } from './publisher'
@@ -202,9 +202,9 @@ export class Runtime {
 
   constructor() {
     this.publisher = new Publisher(() => this.host, this)
-    this.saveSettings = new Debounced<Settings>(() => this.host, (host, value) => host.storeSet(STORE_KEYS.settings, value), LIMITS.persistDebounceMs)
+    this.saveSettings = new Debounced<Settings>(() => this.host, (host, value) => host.storeSet(STORE_ENTRIES.settings, value), LIMITS.persistDebounceMs)
     this.saveRunLater = new Debounced<Chain.Run>(() => this.host, (host, run) => saveRun(host, run), LIMITS.persistDebounceMs)
-    this.saveQuest = new Debounced<Quest.QuestState>(() => this.host, (host, value) => host.storeSet(STORE_KEYS.quest, value), LIMITS.persistDebounceMs)
+    this.saveQuest = new Debounced<Quest.QuestState>(() => this.host, (host, value) => host.storeSet(STORE_ENTRIES.quest, value), LIMITS.persistDebounceMs)
     this.monitor = new ResourceMonitor(
       (pressure, previous) => this.onPressure(pressure, previous),
       () => this.publisher.mark('resources', 'hud', 'pane'),
@@ -305,7 +305,7 @@ export class Runtime {
         await this.carryAtLoad()
         const loaded = await loadSettings(host)
         this.settings = loaded.settings
-        this.quest = Quest.questOf(await host.storeGet(STORE_KEYS.quest).catch(() => undefined))
+        this.quest = Quest.questOf(await host.storeGet(STORE_ENTRIES.quest).catch(() => undefined))
         if (loaded.wasRepaired) this.note('Some saved Control Room settings were invalid and were reset to safe defaults.')
         if (loaded.allowRemoved.length > 0) {
           const names = loaded.allowRemoved.join(', ')
@@ -702,27 +702,27 @@ export class Runtime {
     const host = this.host
     if (host === null || this.isCarryChecked || configDir === null) return []
     this.isCarryChecked = true
-    if ((await host.storeGet(CARRIED_KEY).catch(() => undefined)) !== undefined) return []
+    if ((await host.storeGet(CARRIED_MARK).catch(() => undefined)) !== undefined) return []
     const now = Date.now()
     const former = await readFormerStore(host, configDir)
     if (former === null) {
       const marker: CarriedMarker = { from: null, at: now, keys: 0 }
-      await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
+      await host.storeSet(CARRIED_MARK, marker).catch(() => undefined)
       return []
     }
     const has = async (key: string) => (await host.storeGet(key).catch(() => undefined)) !== undefined
-    const counter = await host.storeGet(STORE_KEYS.runCounter).catch(() => undefined)
+    const counter = await host.storeGet(STORE_ENTRIES.runCounter).catch(() => undefined)
     const writes = carriedWrites(former.store, {
-      settings: await has(STORE_KEYS.settings),
-      quest: await has(STORE_KEYS.quest),
-      cache: await has(STORE_KEYS.cache),
+      settings: await has(STORE_ENTRIES.settings),
+      quest: await has(STORE_ENTRIES.quest),
+      cache: await has(STORE_ENTRIES.cache),
       counter: typeof counter === 'number' && Number.isFinite(counter) ? Math.floor(counter) : 0,
       index: await loadIndex(host),
     })
     const keys = Object.keys(writes)
     for (const key of keys) await host.storeSet(key, writes[key]).catch(() => undefined)
     const marker: CarriedMarker = { from: former.file, at: now, keys: keys.length }
-    await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
+    await host.storeSet(CARRIED_MARK, marker).catch(() => undefined)
     this.trace(`carried ${keys.length} keys over from ${former.file}`)
     if (keys.length > 0) this.announce('Project Sentinel is Control Room renamed: your settings, runs, Quest log and cache memory came along.')
     return keys
@@ -753,7 +753,7 @@ export class Runtime {
     this.isLoaded = false
     await this.ensureLoaded()
     await this.cache.load()
-    if (this.run !== null && keys.includes(STORE_KEYS.runCounter) && this.run.sessions.length === 1 && (this.run.sessions[0]?.turns ?? 0) === 0) {
+    if (this.run !== null && keys.includes(STORE_ENTRIES.runCounter) && this.run.sessions.length === 1 && (this.run.sessions[0]?.turns ?? 0) === 0) {
       this.run = { ...this.run, number: await nextRunNumber(host) }
       this.persistRun(true)
     }

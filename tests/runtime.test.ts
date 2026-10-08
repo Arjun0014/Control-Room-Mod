@@ -7,7 +7,7 @@ import { Runtime } from '../hooks/app/runtime'
 import * as Views from '../hooks/app/views'
 import { defaultSettings, systemsOf } from '../hooks/core/settings'
 import type { Settings } from '../hooks/core/settings'
-import { fakeHost, flush } from './fixtures/fake-host'
+import { fakeHost, flush, typeperfLine } from './fixtures/fake-host'
 
 async function started(patch: (s: Settings) => void, options: Parameters<typeof fakeHost>[0] = {}) {
   const f = fakeHost(options)
@@ -78,7 +78,7 @@ describe('runtime', () => {
       s => {
         s.resources.level = 'medium'
       },
-      { cwd: 'C:\\work', samplerLines: ['P 96 1000000 10000000'] },
+      { cwd: 'C:\\work', samplerLines: [typeperfLine(96, 1000)] },
     )
     await advance(500)
     expect(kept.spawned[0]?.[0]).toBe('windows')
@@ -96,7 +96,7 @@ describe('runtime', () => {
         s.resources.level = 'off'
         s.ui.liveLoad = true
       },
-      { cwd: 'C:\\work', samplerLines: ['P 42 4000000000 10000000000'] },
+      { cwd: 'C:\\work', samplerLines: [typeperfLine(42, 4000)] },
     )
     await advance(500)
     // No ceilings, so no pressure is evaluated; the readings themselves still show.
@@ -118,11 +118,69 @@ describe('runtime', () => {
         s.resources.level = 'off'
         s.ui.liveLoad = true
       },
-      { cwd: 'C:\\work', samplerLines: ['P 42 800000000 10000000000'] },
+      { cwd: 'C:\\work', samplerLines: [typeperfLine(42, 800)] },
     )
     await advance(500)
     expect(Views.statusLineOf(Views.hudOf(rt))).toContain('RAM 92%')
     expect(Views.statusLineOf(Views.hudOf(rt))).not.toContain('CPU')
+  })
+
+  test('Windows reads the total memory once, from systeminfo; typeperf\'s header and closing words are no reading', async () => {
+    const { rt, kept, advance } = await started(
+      s => {
+        s.resources.level = 'off'
+        s.ui.liveLoad = true
+      },
+      { cwd: 'C:\\work', samplerLines: ['', '"(PDH-CSV 4.0)","\\\\PC\\Processor(_Total)\\% Processor Time","\\\\PC\\Memory\\Available Bytes"', typeperfLine(18, 2500)] },
+    )
+    await advance(500)
+    expect(kept.ran).toEqual(['systeminfo'])
+    const view = kept.published.resources as ResourcesView
+    expect([view.status, view.cpu, view.ram]).toEqual(['live', 18, 75])
+  })
+
+  test('Windows without a readable total: the CPU still shows, memory reads as unknown', async () => {
+    const { kept, advance } = await started(
+      s => {
+        s.resources.level = 'off'
+        s.ui.liveLoad = true
+      },
+      { cwd: 'C:\\work', systemInfo: 'ERROR: Access denied.\r\n', samplerLines: [typeperfLine(18, 2500)] },
+    )
+    await advance(500)
+    const view = kept.published.resources as ResourcesView
+    expect([view.status, view.cpu, view.ram]).toEqual(['live', 18, null])
+  })
+
+  const MAC = { cwd: '/Users/a/work', dirs: ['/System/Library/CoreServices/SystemVersion.plist'] }
+  const TOP = ['Processes: 512 total, 3 running, 509 sleeping, 2489 threads', 'PhysMem: 15G used (2588M wired, 1092M compressor), 1G unused.', 'CPU usage: 5.26% user, 10.52% sys, 84.21% idle ']
+
+  test('macOS: top gives the CPU, the kernel\'s memory level the memory', async () => {
+    const { kept, advance } = await started(
+      s => {
+        s.resources.level = 'off'
+        s.ui.liveLoad = true
+      },
+      { ...MAC, samplerLines: TOP },
+    )
+    await advance(500)
+    expect(kept.spawned[0]?.[0]).toBe('macos')
+    expect(kept.ran).toEqual(['sysctl'])
+    const view = kept.published.resources as ResourcesView
+    expect([view.status, view.cpu, view.ram]).toEqual(['live', 15.8, 37])
+  })
+
+  test('macOS without the kernel\'s memory level: top\'s PhysMem stands in', async () => {
+    const { kept, advance } = await started(
+      s => {
+        s.resources.level = 'off'
+        s.ui.liveLoad = true
+      },
+      { ...MAC, memoryLevel: 'sysctl: unknown oid', samplerLines: TOP },
+    )
+    await advance(500)
+    const view = kept.published.resources as ResourcesView
+    expect([view.status, view.cpu, view.ram]).toEqual(['live', 15.8, 93.8])
   })
 
   test('a person\'s /clear rolls the chain over and resets the turn state; ours carries the continuation context', async () => {

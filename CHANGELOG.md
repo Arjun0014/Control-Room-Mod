@@ -8,6 +8,43 @@ match. `claude plugin tag plugins/project-sentinel` checks this when tagging a r
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-10-08
+
+What Anthropic's plugin directory found in 1.4.0, answered: its one blocking finding is gone, and
+the plugin's README says, part by part, what each policy hold asks it to.
+
+### Changed
+
+- **The machine sampler runs no shell.** On Windows it was PowerShell running an inline script,
+  which the directory blocks: it cannot read which program such a script starts. It is now
+  Windows' own counter reader, `typeperf "\Processor(_Total)\% Processor Time" "\Memory\Available
+  Bytes" -si 2`, with `systeminfo /fo csv /nh` once for the total memory: lighter (about 0.3 s of
+  CPU every 30 s and 9 MB, where PowerShell took 0.5 s and 80 MB), and read live against Windows'
+  own figure. On macOS, `top` and `sysctl` run by name instead of through `/bin/sh`. Each program
+  is written out in full where it starts, with fixed arguments. On a Windows installed in a
+  language other than English the counters have other names, so the readings there show as
+  unavailable, with the reason in Guardrails.
+- **The listing says what the directory asks.** The plugin folder's README answers each policy
+  hold under its own heading: the prompts it submits and what is in them, the one command it runs
+  (`/clear`), the one tool it calls (`TaskStop`), what its tool-call hook does with the calls it
+  sees, the tool it answers itself (`milestones`), what its subagent hook changes (only the model,
+  with the router's subagent routing on), the programs it runs, what it reads and sends, that it
+  reads no credentials, and that the icon is only an image.
+- **The repository is `Arjun0014/project-sentinel`** (it was `Control-Room-Mod`; GitHub forwards
+  the old address, so an existing marketplace keeps updating). The marketplace keeps its name,
+  `control-room`, so installs keep their identity and settings, and `/cr` keeps opening the panel,
+  which is still Control Room.
+
+### Development
+
+- Names the directory's scanner read as something else: the store's entry names are
+  `STORE_ENTRIES` (was `STORE_KEYS`, read as a credential), the carry-over marker `CARRIED_MARK`,
+  Kit's curled-up body is `ball` (its old name beside a `|` read as a download piped into a shell),
+  and a comment no longer names the manifest's path. Nothing a person sees changes.
+- Tests for the new samplers: `typeperf` lines in two locales, `systeminfo`'s total in three,
+  `top` and `sysctl` on macOS with `PhysMem` standing in, and both samplers' commands through the
+  engine. 282 tests.
+
 ## [1.4.1] - 2026-10-08
 
 ### Fixed

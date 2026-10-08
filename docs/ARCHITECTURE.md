@@ -30,7 +30,7 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 | Ask before a call | In `tool.call`, before `next`: `$.tool.check({ tool, input })` reads Claude Code's own verdict (it runs nothing); where Claude Code would not ask (allow, no verdict, auto mode), `$.ui.ask(question, { options: ['Run it', "Don't run it"], header: 'Approve' })` asks in Claude Code's question dialog; a decline answers `{ deny }` | ✅ in the engine harness; the dialog is Claude Code's own. There is no `tool.check` hook: the directory refuses one that reads what `next` answered, and answering a permission check is what the removed *Allow* did. (Until 1.3.0: `tool.check` answering `{ decision: 'ask' }`, which held in `bypassPermissions` mode.) |
 | Per-request effort | `turn.step` → `next({ ...e, effort: 'max' })` | ✅ accepted (Sonnet 5.5 default `medium` → sent `max`); `e.effort` is absent for models without effort (Haiku) |
 | Live context / cost | `session.measure` (pushed after every main turn) + `$.session.usage()` | ✅ `context.tokens/window/percent`, `cost.usd`, `rateLimits` |
-| Host CPU/RAM | `$.process.spawn` of one long-lived sampler | ✅ Windows P/Invoke sampler: ~0.5 s CPU / 30 s incl. start-up, ~80 MB; one-shot probes cost ~2.4 s each (rejected). Verified live through the final plugin on 2.1.289 and 2.1.292. |
+| Host CPU/RAM | `$.process.spawn` of one long-lived sampler, by name with fixed arguments (no shell) | ✅ Windows `typeperf` (1.4.2): ~0.3 s CPU / 30 s, ~9 MB, plus `systeminfo` once (~2.6 s) for the total memory; read live on 2.1.293 against Windows' own figure (84% vs 85%). Until 1.4.1 a PowerShell P/Invoke script (~0.5 s / 30 s, ~80 MB), which the directory blocks: it reads a shell running an inline script as a program it cannot pin. One-shot probes cost ~2.4 s each (rejected). |
 | Model per request | `turn.step` → `next({ ...e, model })` | ⚠ **full ids only**: a bare alias (`haiku`) fails the turn on 2.1.292 (`unrecognized_model` → `model_fallback` → an error answer). Ids reported in `usage.model` (main and subagent steps) work. Subagent spawns *do* resolve aliases. |
 | Store scope | `$.store` | One store per plugin name and source (`~/.claude/plugins/store/<name>_<source>-<hash>.json`, the hash the first 12 hex digits of the SHA-256 of `<name>@<source>`; the source `inline` for a folder or a directory marketplace loaded in place); every `--plugin-dir` load of `project-sentinel` shares one. |
 | A renamed plugin and its store | the marketplace's `renames` (`{ "control-room": "project-sentinel" }`); `$.fs.read` of the former store's file once | ✅ in an isolated configuration (2.1.293): `claude plugin marketplace update` rewrote `enabledPlugins` to the new name, the next session installed and loaded it, and the carry-over (`app/formerStore.ts`: at the first load, before a setting is read, the configuration folder from `CLAUDE_CONFIG_DIR`, `USERPROFILE` or `HOME`, else the session's transcript path at its start; of the candidate files, the one written last) copied the settings, the cache memory, the Quest log and a run, renumbering the new one. The old file is only read. |
@@ -354,9 +354,10 @@ crossing the threshold again never starts a second handoff.
   diffs by default when on; reveal per Focus toggle, the Activity tab and
   Activity → Changes (per-file hunks from `structuredPatch`, `<Code format="diff">`).
   Spinner shows `Working · 27 tools · 6 files changed · tests running`.
-* **Resource Governor** — one sampler process per platform (Windows
-  P/Invoke→CIM fallback, macOS `top` + `kern.memorystatus_level`, Linux
-  `/proc` reads, no process). Pressure from a sliding window; policy section
+* **Resource Governor** — one sampler process per platform, each a program
+  by name with fixed arguments (Windows `typeperf` + `systeminfo` once for the
+  total memory, macOS `top` + `sysctl kern.memorystatus_level`, Linux `/proc`
+  reads, no process). Pressure from a sliding window; policy section
   per level; `$.session.append` notices on transitions and on level changes;
   heavy-command classifier on shell tools denies *additional* heavy jobs
   under pressure; lists only Claude-launched background tasks (stop on the

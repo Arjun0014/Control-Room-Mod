@@ -76,7 +76,7 @@ describe('register', () => {
     const input = { from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-5-5', requested_model: 'sonnet', source: 'command' as const, context_tokens: 412_000, prompt_cache_warm: true, cache_ttl: '1h' as const, estimated_cache_write_usd: 2.06, pricing: 'catalog' as const }
     const asked = await $.classic.PreModelSwitch(input)
     expect(asked.permissionDecision).toBe('ask')
-    expect(asked.permissionDecisionReason).toContain('412k tokens')
+    expect(asked.permissionDecisionReason).toContain('re-sends 412k cached tokens')
     expect(asked.permissionDecisionReason).toContain('about $2.06')
     const cold = await $.classic.PreModelSwitch({ ...input, prompt_cache_warm: false })
     expect(cold.permissionDecision).toBeUndefined()

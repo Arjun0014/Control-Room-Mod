@@ -66,6 +66,14 @@ pass the test suite (236 tests) unless marked otherwise.
   animated SVG was drawn in a sandboxed frame, which Desktop sized at the browser's default 300
   pixels (no width was given) and painted opaque. Every graphic is now a plain image with an
   explicit size (it still animates), and every SVG declares `color-scheme: light dark`.
+- **Keep warm's probe read as a mistake.** With the cache's lifetime unknown, Keep warm sends one
+  refresh at six idle minutes to learn it; on a five-minute cache that probe finds the cache gone
+  and rebuilds it. Cache health called that "preventable" with advice that did not apply; it is
+  now the expected, one-time price of learning the lifetime.
+- **The model-switch question was cut off.** Claude Code shows a hook's reason on one line, cut at
+  the terminal's width, which dropped the cost. The reason is now short, figure first: "this
+  re-sends 143k cached tokens uncached (about $0.72). A fresh context avoids it."
+- **A rebuild after a model switch names the effort change too**, as Claude Code does.
 - **The status bar named the wrong milestone** ("Milestone 8 of 10" while step 3 was under way):
   a milestone being verified outranked the one in progress. The one in progress is the work under
   way; one being verified counts only when nothing is in progress.

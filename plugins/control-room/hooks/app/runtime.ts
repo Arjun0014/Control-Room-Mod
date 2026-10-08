@@ -270,8 +270,9 @@ export class Runtime {
     const s = this.settings.cache
     if (!s.guardModelSwitch || !e.prompt_cache_warm || e.from_model === e.to_model || e.context_tokens < LIMITS.guardSwitchTokens) return null
     if (e.source !== 'command' && e.source !== 'picker') return null
-    const cost = Number.isFinite(e.estimated_cache_write_usd) && e.estimated_cache_write_usd > 0 ? ` (about ${fmt.cost(e.estimated_cache_write_usd)}, as Claude Code estimates it)` : ''
-    return `Control Room: the prompt cache holds ${fmt.tokens(e.context_tokens)} tokens of this conversation for ${CacheModel.shortModel(e.from_model)}. Switching to ${CacheModel.shortModel(e.to_model)} sends them again uncached${cost}. Switching at the start of a fresh context avoids that.`
+    // Claude Code shows the reason on one line, cut at the terminal's width: the figure first, the model in its own button.
+    const cost = Number.isFinite(e.estimated_cache_write_usd) && e.estimated_cache_write_usd > 0 ? ` (about ${fmt.cost(e.estimated_cache_write_usd)})` : ''
+    return `Control Room: this re-sends ${fmt.tokens(e.context_tokens)} cached tokens uncached${cost}. A fresh context avoids it.`
   }
 
   onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h'; source: string }): void {

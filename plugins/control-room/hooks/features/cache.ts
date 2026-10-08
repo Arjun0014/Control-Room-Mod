@@ -65,6 +65,8 @@ export type CacheMiss = {
   detail: string
   /** True when it was a Keep warm refresh that missed. */
   isRefresh: boolean
+  /** True when it was Keep warm's one probe, sent to learn the lifetime: its miss is the price of learning. */
+  isProbe?: boolean
   /** Who made the change behind it, when one was seen. */
   by?: ChangeBy
 }
@@ -197,7 +199,9 @@ function classify(state: CacheState, gapMs: number, recached: number, isRefresh:
   if (change !== undefined && (change.cause === 'compact' || !isSurelyExpired)) {
     const by = change.by === undefined ? {} : { by: change.by }
     if (change.cause === 'compact') return { cause: 'compact', kind: 'lifecycle', severity: 'info', detail: change.detail, ...by }
-    return { cause: change.cause, kind: 'preventable', severity: recached >= 20_000 ? 'warn' : 'info', detail: change.detail, ...by }
+    // A model switch usually changes the effort too (each model has its own default); Claude Code names both.
+    const isEffortToo = change.cause === 'model' && state.pending.some(p => p.cause === 'effort')
+    return { cause: change.cause, kind: 'preventable', severity: recached >= 20_000 ? 'warn' : 'info', detail: isEffortToo ? `${change.detail}, effort too` : change.detail, ...by }
   }
   const isExpired = ttl === null ? gapMs > TTL_MS['5m'] : gapMs > ttl
   if (isExpired) {
@@ -261,6 +265,8 @@ export function observeRequest(
   if (isComparable && !isMiss && gapMs > TTL_MS['5m'] + 15_000) next = withTtl(next, '1h', isProbe ? 'probe' : 'observed')
   const isTtlHint = next.ttl === null || next.ttl.source === 'stored'
   if (miss !== null && miss.cause === 'expired' && isTtlHint && gapMs < TTL_MS['1h']) next = withTtl(next, '5m', isProbe ? 'probe' : 'observed')
+  // The probe goes out past five minutes on purpose: finding the cache gone is how it learns the five-minute cache.
+  if (miss !== null && isProbe && miss.cause === 'expired') miss = { ...miss, kind: 'lifecycle', severity: 'info', isProbe: true, detail: `Keep warm's probe after ${durationWords(gapMs)}: the cache lasts 5 minutes here` }
   // A refresh timed by a remembered lifetime that turned out wrong did not fail: it was told the wrong expiry.
   const wasTtlWrong = state.ttl?.source === 'stored' && next.ttl !== null && next.ttl.value !== state.ttl.value
 
@@ -372,6 +378,7 @@ export function withVerdictReset(state: CacheState): CacheState {
 export function adviceFor(miss: CacheMiss, input: { keepWarm: boolean; stablePolicies: boolean }): string {
   switch (miss.cause) {
     case 'expired':
+      if (miss.isProbe === true) return 'Expected once: Keep warm learned the lifetime, and from now on refreshes before each expiry.'
       return input.keepWarm
         ? 'Keep warm was paused or idle past its limit; raise the limit if you return later than that.'
         : 'Turn on Keep warm to hold the cache while you are away.'

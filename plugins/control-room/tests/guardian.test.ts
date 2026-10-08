@@ -202,9 +202,9 @@ describe('Cache Guardian', () => {
     const { rt } = await started(() => undefined)
     const ask = { from_model: OPUS, to_model: 'claude-sonnet-5-5', source: 'command', context_tokens: 412_000, prompt_cache_warm: true, cache_ttl: '1h' as const, estimated_cache_write_usd: 2.06 }
     const reason = rt.onPreModelSwitch(ask) ?? ''
-    expect(reason).toContain('412k tokens')
-    expect(reason).toContain('sonnet-5-5')
-    expect(reason).toContain('about $2.06')
+    // Seen live: Claude Code draws the reason on one line and cuts it at the width, so the figure comes first and it stays short.
+    expect(reason).toBe('Control Room: this re-sends 412k cached tokens uncached (about $2.06). A fresh context avoids it.')
+    expect(reason.length).toBeLessThanOrEqual(100)
     expect(rt.cache.state.ttl).toEqual({ value: '1h', source: 'engine' })
     expect(rt.onPreModelSwitch({ ...ask, source: 'sdk' })).toBeNull()
     expect(rt.onPreModelSwitch({ ...ask, prompt_cache_warm: false })).toBeNull()

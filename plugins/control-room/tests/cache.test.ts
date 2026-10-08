@@ -75,6 +75,9 @@ describe('prompt cache', () => {
     expect(r.miss?.detail).toContain('opus-5-5 → sonnet-5-5')
     s = r.state
     expect(s.pending).toEqual([])
+    // Live: a switch that also changed the effort; Claude Code named both causes (model_changed, effort_changed).
+    const both = req(req(emptyCache(), T0, 143_000, 0, { model: 'claude-sonnet-5-5', effort: 'medium' }).state, T0 + MIN, 143_500, 0, { model: 'claude-opus-5-5', effort: 'high' })
+    expect(both.miss?.detail).toBe('Model changed: sonnet-5-5 → opus-5-5, effort too')
   })
 
   test('a change Control Room saw outranks the gap: its own policy section, then idling, then nothing seen', () => {
@@ -168,6 +171,19 @@ describe('prompt cache', () => {
     // The fork's own tail is not cached: the prompt to find stays the last real request's.
     expect(probe.state.lastPrefix).toBe(300_000)
     expect(probe.state.keepWarm.refreshes).toBe(1)
+  })
+
+  test("a probe that finds the cache gone teaches five minutes, and its rebuild is the expected price of learning", () => {
+    // Live (5-minute cache, 141k): the probe at six idle minutes read 0 and wrote 141k.
+    const s = req(emptyCache(), T0, 141_000, 0).state
+    const probe = req(s, T0 + 6 * MIN, 141_100, 0, { isProbe: true })
+    expect(probe.state.ttl).toEqual({ value: '5m', source: 'probe' })
+    expect(probe.miss).toMatchObject({ cause: 'expired', kind: 'lifecycle', severity: 'info', isProbe: true })
+    expect(probe.miss?.detail).toContain('the cache lasts 5 minutes here')
+    expect(adviceFor(probe.miss!, { keepWarm: true, stablePolicies: true })).toContain('Expected once')
+    // The rebuilt cache is warm again for five minutes from the probe, and the next refresh is a minute before that.
+    expect(expiresAt(probe.state)).toBe(T0 + 11 * MIN)
+    expect(nextRefresh(probe.state, { ...keep, now: T0 + 6 * MIN, idleSince: T0 })).toEqual({ at: T0 + 10 * MIN, isProbe: false })
   })
 
   test('Keep warm proves itself: a request after the expiry it replaced still reads the cache', () => {

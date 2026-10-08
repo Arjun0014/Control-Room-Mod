@@ -141,8 +141,11 @@ Unit tests don't paint. Before a release:
   font, the design tokens and the colors are close guesses. Then the app itself, which has the last
   word: install the build (bump the pre-release number, `claude plugin update`), start a fresh
   session so it loads it, and look: Kit walks, takes a click and never jumps; the status bar keeps
-  its five cells at a narrow and at a wide window. Never drive Claude's own window with simulated input; a
-  read-only capture of it is fine when the person agrees.
+  its five cells at a narrow and at a wide window. The Code tab hands a session its plugins when the
+  session's process starts and reloads open sessions when `installed_plugins.json` changes (a settings
+  edit alone reloads nothing), so check an update both ways: a session open during it, and a new one.
+  Never drive Claude's own window with simulated input; a read-only capture of it is fine when the
+  person agrees.
 - On macOS and Linux, turn machine load on and confirm `/cr status` shows live CPU and memory.
 
 ## Releases

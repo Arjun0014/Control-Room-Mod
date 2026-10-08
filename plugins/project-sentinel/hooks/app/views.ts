@@ -285,7 +285,9 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   const window = rt.usage.window ?? null
   const ref = threshold ?? (window === null ? null : window * 0.9)
   const load = liveLoadOf(rt)
-  const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'warn' || load.ramTone === 'bad')
+  // Busy for Kit: the processor near its ceiling, or memory at it. Memory merely high (common on a
+  // desktop) neither tires Kit nor costs anything to draw, so it changes nothing.
+  const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'bad')
   const cache = rt.cache.hud(rt.clock(), rt.turn.isRunning)
   const isGreen = (thisTurn.length > 0 && thisTurn.every(r => r.status === 'passed')) || (p.total > 0 && p.done === p.total && p.done > rt.turnStartDone)
   const mood = moodOf({
@@ -320,7 +322,8 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
     contextStartedAt: rt.contextStartedAt,
     done: p.done,
     // One-shot moments, as values Kit compares with what it last saw.
-    greenAt: !rt.turn.isRunning && isGreen ? turn.endedAt : null,
+    // A green finish is a moment only when nothing failed: never a dance beside a failing check.
+    greenAt: mood === 'celebrate' ? turn.endedAt : null,
     fails: rt.activity.validationRuns().filter(r => r.status === 'failed').length,
     refreshAt: rt.cache.state.keepWarm.lastAt,
   })

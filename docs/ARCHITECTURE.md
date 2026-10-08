@@ -418,7 +418,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (217 tests in 20 files, run on 2.1.292 and 2.1.289, and in CI on the latest
+* `claude plugin test` (238 tests in 21 files, run on 2.1.293, and in CI on the latest
   Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux):
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity,
@@ -430,8 +430,11 @@ only. Unknown future events/props → passed through untouched.
   `$.agent.spawn`, `$.classic.Stop`, `$.prompt.compose`, `$.turn.step`, the
   Autopilot `/clear` in both orderings, and `$.ui.mount` on `terminal`,
   `desktop` and `mobile`, including the rule that a row never repeats its
-  card's title) with the world answered beneath the mod.
-* `tsc` against the engine-written declarations of 2.1.292 and 2.1.289.
+  card's title) with the world answered beneath the mod. Engine-driven tests
+  start Control Room's own turns with the text framed as Claude Code frames a
+  plugin's prompt, since the test kit passes the bare text.
+* `tsc` against the engine-written declarations of 2.1.293 (and earlier of
+  2.1.292 and 2.1.289).
 * `claude plugin validate --strict` (plugin) and `claude plugin validate .`
   (marketplace).
 * Live headless stream-json runs (the Desktop host protocol) of the final
@@ -457,8 +460,22 @@ only. Unknown future events/props → passed through untouched.
   health, `/cr cache` and Activity, during the demo driver's turn with a
   scripted model switch (`/demo miss`); the Git line in a throwaway
   repository, before and after a turn.
-* Not yet done: visual review of 1.1.0 and 1.2.0 inside the Claude Desktop
-  app (1.0.1 and 1.0.2 were reviewed from the person's screenshots), Keep
-  warm against the live API, a live `/model` switch with a warm cache, the
-  `milestones` tool and the answer styles with a real model, and live
-  sampling on macOS and Linux.
+* 1.3.0 live on 2.1.293 with real models (Sonnet 5.5, Opus 5.5), in
+  consoles, each test session loading a renamed copy of the plugin
+  (`cr-test`) so its settings live in a store of its own: Autopilot end to
+  end in four runs, traced step by step with `--debug-file` (two bugs found
+  and fixed: the framed handoff prompt, and a fresh context handing off
+  after every step); Keep warm on the 1-hour cache (two refreshes moved the
+  engine's expiry; a prompt 66 minutes after the last one hit) and on the
+  5-minute cache (the probe learned it; refreshes every four minutes; a
+  prompt after a replaced expiry hit), each verified by its own self-check;
+  Control Room's derived figures against the status line's `prompt_cache`;
+  a model switch confirmed first and declined, then made; policy and effort
+  changes while warm. The 1.3.0 status bar and every panel section in a real
+  console at 80, 100 and 150 columns during the demo driver's turn.
+* The Desktop layout through `tools/desktop-preview`: the status bar's
+  `desktop` element trees rendered as HTML at 512 to 960 pixels.
+* Not yet done: visual review of 1.3.0 inside the Claude Desktop app (Claude
+  cannot capture its own window; 1.2.0's bar was seen in the person's
+  screenshot), the answer styles with a real model, and live sampling on
+  macOS and Linux.

@@ -32,13 +32,13 @@ One plugin gives you:
   **profiles** that set everything at once
 - **Kit**, if you like: a small Claude-orange creature on the status bar that shows what Claude is doing
 
-> **Status: 1.2.0.** Control Room is built on Claude Code's function-hooks plugin API ("mods"),
+> **Status: 1.3.0.** Control Room is built on Claude Code's function-hooks plugin API ("mods"),
 > which is still early access and may change between Claude Code releases. It is verified on
-> Claude Code **2.1.289** (the engine bundled with Claude Desktop) and **2.1.292** (CLI) on
-> Windows 11. See [Compatibility](#compatibility).
+> Claude Code **2.1.289**, **2.1.292** and **2.1.293** (the engine the CLI and Claude Desktop run
+> now) on Windows 11. See [Compatibility](#compatibility).
 
 <p align="center">
-  <img src="docs/images/cli-status-bar.png" alt="The two-line status bar in a 150-column terminal. On top: Documenting the helpers, Milestone 4 of 4, and on the right the run's cost and the Control Room button. Below: Context at 48% with the handoff tick, Work as a track of milestones with three done and the fourth under way, Cache rebuilt 446k in amber after a model switch, Checks with Tests passing and Lint failing in red, and RAM 84% in amber. Under it, Kit, a small orange pixel fox">
+  <img src="docs/images/cli-status-bar.png" alt="The status bar in a 150-column terminal, mid-turn. Kit, a small orange creature, works away on the bar's top edge. The headline reads Documenting the helpers, step 4 of 4, with a red Lint failing chip and the Control Room button on the right. Below: WORK, a track of four milestones with three done and the fourth under way, 3/4; CONTEXT, a green bar at 48% with an orange notch at the 80% handoff point; CACHE rebuilt 446k in amber after a model switch; RUN $0.00+ on the right">
 </p>
 
 ---
@@ -69,7 +69,7 @@ Further reading: [Configuration](docs/CONFIGURATION.md) ·
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/cli-overview.png" alt="Overview in the terminal: Run 18, Session 1 and the objective; a Work card with all four milestones done on a track; a Context card at 51% with the handoff tick and Autopilot on; a Cache card, warm with 506k tokens cached and 86% read from the cache, with Keep warm on; and Now, with the turn's summary, lint failing and the machine's readings"></td>
+    <td width="50%"><img src="docs/images/cli-overview.png" alt="Overview in the terminal: Run 29, Session 2 and the objective; a Work card with all four milestones done on a track; a Context card at 51% with the handoff tick at 800k and Autopilot on; a Cache card, warm with 506k tokens cached and 86% read from the cache, rebuilt 446k, with Keep warm on; and Now, with the turn's summary and lint failing"></td>
     <td width="50%"><img src="docs/images/cli-activity.png" alt="Activity: run progress with all four milestones done on a track, This turn as a strip colored by read, edit, check and failed calls with its legend, five counted lines, and Attention naming a lint script that is missing and a test failure that a later run fixed"></td>
   </tr>
   <tr>
@@ -95,16 +95,17 @@ Further reading: [Configuration](docs/CONFIGURATION.md) ·
 </table>
 
 <p align="center">
-  <img src="docs/images/cli-status-bar-done.png" alt="The status bar after the turn: on top, Changed 4 files, Ran tests 3 times, passing after a fix, lint once, failing, and 46s, with the run's cost and the Control Room button; below, Context 51%, Work four of four in green, Cache rebuilt 446k, Checks with Tests passing and Lint failing, and RAM 82%. Under it, Kit, worried about the failing check">
+  <img src="docs/images/cli-status-bar-done.png" alt="The status bar after the turn: All 4 milestones done, Changed 4 files, Ran tests 3 times, passing after a fix, lint once, failing; a red Lint failing chip and the Control Room button; below, WORK 4/4 in green, CONTEXT at 51% with the handoff notch, CACHE rebuilt 446k and RUN $0.00. Kit, startled by the failing check, with a bead of sweat">
 </p>
 
-<sub>Control Room 1.2.0 in a 150-column Windows console (Claude Code 2.1.292), with the panel
+<sub>Control Room 1.3.0 in a 150-column Windows console (Claude Code 2.1.293), with the panel
 docked beside the conversation (the Answer style and Quest cards are from 1.1.0; they did not
 change). The work is a scripted turn played by the development-only
 [demo driver](tools/demo/README.md): Claude Code ran every tool call in it for real (a test that
 fails and is fixed, new code with its test, a lint script that does not exist), but no model wrote
 the words, and the token counts are scripted, a model switch halfway through included. Claude
-Code reports no cost for them, so the cost reads $0.00.</sub>
+Code reports no cost for them, so the cost reads $0.00 (with a `+` after a cleared session whose
+cost was not reported).</sub>
 
 ### In Claude Desktop
 
@@ -383,12 +384,11 @@ What it observes, what it can change and what it never does is listed in [SECURI
 
 | | Status |
 | --- | --- |
-| Claude Code 2.1.292, terminal CLI (Windows 11) | Verified: unit and engine tests, live headless runs, real-terminal rendering at 100–150 columns, mouse and keyboard use, and the full Autopilot chain in the interactive terminal. The 1.2.0 status bar with Kit, Overview, Context's Cache card and Cache health, `/cr cache` and Activity were checked in a real console at 150 columns (docked and full width) during a scripted turn from the demo driver, a model switch included: real tool calls, no model. |
-| Claude Code 2.1.289 (bundled with Claude Desktop) | Verified: the test suite run on its engine, type-checked against its declarations, live headless runs in the Desktop host protocol |
+| Claude Code 2.1.293, terminal CLI (Windows 11) | Verified live with real models (Sonnet 5.5, Opus 5.5): Autopilot end to end (four runs: threshold crossed mid-turn, the handoff turn, notes verified, `/clear`, the fresh session, the continuation, milestones and objective carried, one handoff where a low threshold used to loop); Keep warm on the 1-hour and the 5-minute cache, its self-check verified, its figures identical to Claude Code's own `prompt_cache`; a model switch confirmed first and its rebuild named as Claude Code names it; policy and effort changes while warm. The 1.3.0 status bar with Kit and every panel section in a real console at 80, 100 and 150 columns during a scripted turn from the demo driver. |
+| Claude Code 2.1.289 and 2.1.292 | Verified: the test suite run on their engines, type-checked against their declarations, live headless runs in the Desktop host protocol (1.2.0 and earlier) |
 | Continuous integration | On every push and pull request: type-check, strict validation of the plugin and the marketplace, and the tests, on Linux, Windows and macOS with the latest Claude Code, and on Linux with 2.1.289 |
-| Claude Desktop Code tab, visual | 1.0.1 and 1.0.2 reviewed in the app (the screenshots above are 1.0.1). The status bar, charts, answer styles, Cache card and Kit of 1.1.0 and 1.2.0 are tested on the `desktop` surface in the harness (including that no text trips Desktop's monospace rule) but not yet seen in the app; screenshots are welcome. |
-| The `milestones` tool and answer styles with a real model | Tested through the engine only. Whether Claude keeps its milestones and writes in the chosen style as asked has not yet been watched in a live run. |
-| Keep warm with a real model | Tested through the engine (the refresh, its timing, the lifetime it learns and its check on itself), not yet against the live API. It checks itself in use: if refreshes do not hold the cache, it says so and stops. |
+| Claude Desktop Code tab, visual | 1.0.1 and 1.0.2 reviewed in the app (the screenshots above are 1.0.1); 1.2.0's status bar seen in the app (its white bar and overflow are what 1.3.0 fixes). The 1.3.0 status bar is checked on the `desktop` surface in the harness and with [tools/desktop-preview](tools/desktop-preview/README.md) at 512 to 960 pixels; Claude cannot capture the Desktop window itself, so screenshots are welcome. |
+| The `milestones` tool with a real model | Verified live: Sonnet 5.5 kept outcome-level milestones ("Temperature module", "Index re-exports and README") and carried them, with the objective, across handoffs. Answer styles are tested through the engine only. |
 | macOS and Linux machine-load sampling | Implemented and unit-tested against real `top`, `sysctl` and `/proc` output. Not yet run live. |
 | Mobile and VS Code surfaces | Draw (mobile opens choices in place, as in the terminal). Not reviewed visually. |
 | Older Claude Code | Loads with a notice below 2.1.289. Features may not work. |

@@ -108,8 +108,19 @@ Unit tests don't paint. Before a release:
   log have something to show (`/demo miss` adds a model switch that rebuilds the cache). Load it
   with `console.ps1 launch … -Also tools\demo`, so its hooks sit beneath Control Room's.
 - Run one Autopilot chain end to end, both in the interactive terminal and in the Desktop host
-  protocol (stream-json): they order the `/clear` differently. A low threshold with a cheap model
-  is enough: `/cr autopilot 45k`, then a small multi-step task.
+  protocol (stream-json): they order the `/clear` differently. With a cheap model, set the
+  threshold a little above the session's base context (`/cr autopilot 64k` against a 45k base),
+  then a small multi-step task, and start Claude Code with `--debug-file <path>`: every Autopilot
+  step and turn is traced there (`autopilot: … → …`, `turn … started (handoff)`).
+- Keep live tests away from your own settings. Every session that loads the plugin from a folder
+  shares one plugin store, your own working session included, so a threshold set in a test would
+  reach it. Load a copy renamed `cr-test` instead (its store is its own), and disable the
+  installed copy in the test project's `.claude/settings.local.json`
+  (`"enabledPlugins": { "control-room@control-room": false }`). Claude Code's `/effort` and
+  `/model` save your default for new sessions: put it back after a test.
+- Desktop cannot be captured from inside Claude. [`tools/desktop-preview`](tools/desktop-preview/README.md)
+  renders the status bar's `desktop` element trees as HTML, faithful in layout and graphics; the
+  app itself still has the last word.
 - On macOS and Linux, turn machine load on and confirm `/cr status` shows live CPU and memory.
 
 ## Releases

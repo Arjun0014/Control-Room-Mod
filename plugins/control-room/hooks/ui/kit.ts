@@ -41,6 +41,8 @@ export type Actions = {
   togglePicker: (key: string | null) => void
   setActivitySub: (sub: ActivitySub) => void
   toggleGenerated: () => void
+  /** Setup: every change from the profile, or the most telling few. */
+  toggleChanges: () => void
   /** Brings the section bar back into view. */
   scrollToTop: () => void
   update: (change: (draft: ControlRoomSettings) => void) => void

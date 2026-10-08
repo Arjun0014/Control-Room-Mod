@@ -56,9 +56,10 @@ import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
 import { Publisher } from './publisher'
 import * as CacheModel from '../features/cache'
+import { endsWithQuestion } from './headline'
 import * as fmt from '../core/format'
 
-type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'other'
+type TurnKind = Autopilot.TurnKind
 
 type TurnState = {
   id: string | null
@@ -128,6 +129,7 @@ export class Runtime {
     expanded: new Set<string>(),
     isPaneOpen: false,
     openPicker: null as string | null,
+    showAllChanges: false,
   }
   notes: string[] = []
   savedAt: number | null = null
@@ -156,6 +158,18 @@ export class Runtime {
   private gitCheckedAt = 0
   private isGitRefreshing = false
 
+  /**
+   * What the last main turn left behind as it stopped (its Stop event): background jobs still
+   * running, wake-ups scheduled, and whether its last words asked the person something. Between
+   * turns this tells "waiting for a result" from "waiting for you"; a new turn clears it.
+   */
+  lastStop: {
+    background: { id: string; description: string }[]
+    wakeups: { schedule: string; recurring: boolean }[]
+    isQuestion: boolean
+    at: number
+  } | null = null
+
   /** When this context began (system clock): the companion wakes up with it. */
   contextStartedAt: number | null = null
   /** Why the companion's surface module failed to draw, if it did: it is left out until the plugin reloads. */
@@ -165,8 +179,8 @@ export class Runtime {
   /** What the last settings change was, in words, for a policy-caused cache miss. */
   private policyReason: string | null = null
 
-  /** What the next plugin-submitted turn is, so turn.start can label it. */
-  private expecting: TurnKind | null = null
+  /** The clear a handoff owes, held back while a turn runs (a prompt the person queued): the turn's end carries it out. */
+  private isClearOwed = false
   private startSource: { source: string; sessionId: string } | null = null
   /** True from Control Room's own /clear until the fresh session it makes is seen (or the wait ends). */
   private isOwnClear = false
@@ -397,8 +411,8 @@ export class Runtime {
     const session = Chain.currentSession(this.run)?.index ?? 1
     // Claude's own statement of the objective, when it gives one, says it better than the request's first sentence.
     const objective = typeof input.objective === 'string' ? clean(input.objective, 140) : ''
-    if (objective.length >= 8 && objective !== this.run.objective) {
-      this.run = { ...this.run, objective }
+    if (objective.length >= 8 && (objective !== this.run.objective || this.run.objectiveBy !== 'claude')) {
+      this.run = { ...this.run, objective, objectiveBy: 'claude' }
       this.persistRun()
       this.publisher.mark('activity', 'hud')
     }
@@ -578,6 +592,7 @@ export class Runtime {
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
     const wasOurs = this.isOwnClear || this.autopilot.state === 'clearing'
+    this.trace(`fresh session ${input.sessionId} after /clear (${wasOurs ? "Control Room's handoff" : 'cleared by the person'})`)
     if (wasOurs) this.onOwnClearSeen?.()
     if (this.run !== null) {
       this.run = Chain.rollOver(this.run, {
@@ -698,12 +713,22 @@ export class Runtime {
 
   stepAutopilot(event: Autopilot.AutopilotEvent): void {
     const a = this.settings.autopilot
+    const before = this.autopilot.state
     const result = Autopilot.step(this.autopilot, event, {
       continuation: a.continuation,
       fallbackToCompact: a.fallbackToCompact,
       autoContinue: a.autoContinue,
     })
+    if (result.model.state !== before || result.effects.length > 0) {
+      const effects = result.effects.filter(e => e.kind !== 'notify').map(e => e.kind)
+      this.trace(`autopilot: ${event.kind} · ${before} → ${result.model.state}${effects.length === 0 ? '' : ` · ${effects.join(', ')}`}`)
+    }
     this.applyAutopilot(result)
+  }
+
+  /** One line in Claude Code's debug log (claude --debug), never on screen: how a handoff or a refresh went, step by step. */
+  trace(text: string): void {
+    this.host?.trace?.(text)
   }
 
   private applyAutopilot(result: Autopilot.Step): void {
@@ -772,7 +797,7 @@ export class Runtime {
                 sessionNumber: this.run === null ? 1 : (Chain.currentSession(this.run)?.index ?? 1),
                 planTool: this.planSource === 'milestones' ? this.milestonesTool : this.planSource === 'tasks' ? 'your task list (TodoWrite or the Task tools)' : null,
               })
-        this.expecting = effect.kind === 'submitRetry' ? 'retry' : 'handoff'
+        // Deferred only to leave the dispatch that decided it; the turn's start (recognised by its text) moves the handoff on.
         host.after(250, () => void this.submitOwn(text, effect.kind === 'submitRetry' ? 'retry' : 'handoff'))
         return
       }
@@ -800,22 +825,28 @@ export class Runtime {
     }
   }
 
+  /**
+   * Submits one of Control Room's own prompts, unless the step that asked
+   * for it was overtaken (the person cleared, compacted or took over). The
+   * turn it starts is recognised at turn.start by its text, which moves the
+   * handoff on; a refused prompt leaves the handoff waiting for the person.
+   */
   private async submitOwn(text: string, kind: TurnKind): Promise<void> {
     const host = this.host
     if (host === null) return
-    this.expecting = kind
+    const wanted: Record<string, Autopilot.AutopilotState> = { handoff: 'requested', retry: 'handoff', continuation: 'resuming' }
+    if (wanted[kind] !== undefined && this.autopilot.state !== wanted[kind]) {
+      this.trace(`autopilot: ${kind} prompt not sent, the handoff is ${this.autopilot.state} now`)
+      return
+    }
+    this.trace(`autopilot: submitting the ${kind} prompt`)
     try {
       const result = await host.submit(text)
       if (result.drop !== undefined) {
-        this.expecting = null
+        this.trace(`autopilot: the ${kind} prompt was dropped: ${result.drop}`)
         this.stepAutopilot({ kind: 'submitFailed', error: `prompt dropped: ${result.drop}` })
-        return
       }
-      const now = await host.now()
-      if (kind === 'handoff') this.stepAutopilot({ kind: 'handoffStarted', now })
-      if (kind === 'continuation') this.stepAutopilot({ kind: 'continuationStarted', now })
     } catch (error) {
-      this.expecting = null
       this.stepAutopilot({ kind: 'submitFailed', error: error instanceof Error ? error.message : String(error) })
     }
   }
@@ -844,7 +875,7 @@ export class Runtime {
         hasPlan: p.total > 0,
         isPlanUpdated: this.handoffTurn.isPlanUpdated,
         current: p.current === null ? null : { key: p.current.key, subject: p.current.subject },
-        isPlanSettled: p.total > 0 && this.plan.tasks.every(t => t.status === 'completed' || t.status === 'blocked'),
+        isPlanSettled: p.total > 0 && this.plan.tasks.every(t => t.status === 'completed' || Plan.isHeld(t.status)),
         isNotesWritten,
         handoffFile: this.settings.autopilot.handoffFile,
         docsEdited: changed.filter(f => groupOf(f.path, ctx) === 'docs' && !isClaudeMd(f.path)).map(f => f.path),
@@ -901,8 +932,11 @@ export class Runtime {
     const since = this.autopilot.handoffSince ?? 0
     try {
       const stat = await host.stat(this.handoffPath(), false)
-      return stat.kind === 'file' && stat.size > 0 && stat.mtimeMs >= since - 5000
+      const isOk = stat.kind === 'file' && stat.size > 0 && stat.mtimeMs >= since - 5000
+      this.trace(`autopilot: notes ${this.handoffPath()} ${isOk ? 'written' : 'not fresh'} (${stat.size} bytes, modified ${Math.round((stat.mtimeMs - since) / 1000)} s after the handoff began)`)
+      return isOk
     } catch {
+      this.trace(`autopilot: notes ${this.handoffPath()} not found`)
       return false
     }
   }
@@ -916,7 +950,14 @@ export class Runtime {
    */
   private async runClear(): Promise<void> {
     const host = this.host
-    if (host === null) return
+    if (host === null || this.autopilot.state !== 'clearing') return
+    // Never in the middle of a turn: a prompt the person queued may have started as the handoff turn ended.
+    if (this.turn.isRunning) {
+      this.isClearOwed = true
+      this.trace('autopilot: a turn is running, the clear waits for it to end')
+      return
+    }
+    this.trace('autopilot: running /clear')
     const before = await host.sessionId().catch(() => null)
     let isSeen = false
     const seen = new Promise<void>(resolve => {
@@ -1006,7 +1047,7 @@ export class Runtime {
     if (objective === null) return
     const isSubstantial = text.trim().length >= 40 || this.run.objective === undefined || this.run.objective === null
     if (!isSubstantial || this.run.objective === objective) return
-    this.run = { ...this.run, objective }
+    this.run = { ...this.run, objective, objectiveBy: 'person' }
     this.persistRun()
     this.publisher.mark('activity', 'hud')
   }
@@ -1042,9 +1083,10 @@ export class Runtime {
     this.publisher.mark('pane', 'hud')
   }
 
-  onTurnStart(input: { turnId: string; text: string }): void {
-    const kind: TurnKind = this.expecting ?? (input.text === '' ? 'other' : 'person')
-    this.expecting = null
+  async onTurnStart(input: { turnId: string; text: string }): Promise<void> {
+    // Whose turn this is, from the prompt it began with: Control Room's own prompts are recognised by their text.
+    const kind: TurnKind = prompts.ownPromptKind(input.text) ?? (input.text === '' ? 'other' : 'person')
+    this.lastStop = null
     this.turn = {
       id: input.turnId,
       isRunning: true,
@@ -1065,6 +1107,12 @@ export class Runtime {
     if (kind === 'handoff') this.handoffTurn = { fromTurn: this.activity.turn.index, isPlanUpdated: false }
     this.questGreen.clear()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner')
+    this.trace(`turn ${input.turnId} started (${kind})`)
+    // The handoff and the continuation move on when their own turns begin, not when their prompts were sent.
+    if (kind === 'handoff' || kind === 'continuation' || (kind === 'person' && this.autopilot.state === 'resuming')) {
+      const now = host === null ? Date.now() : await host.now()
+      this.stepAutopilot(kind === 'handoff' ? { kind: 'handoffStarted', now } : kind === 'continuation' ? { kind: 'continuationStarted', now } : { kind: 'personTookOver', now })
+    }
   }
 
   /** turn.step, before the request: the model and effort to send. */
@@ -1147,7 +1195,15 @@ export class Runtime {
     await this.refreshUsage()
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
-    this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, now })
+    // A turn whose start this runtime never saw began before a reload of the plugin.
+    const turnKind: TurnKind = this.turn.id === null ? 'unknown' : this.turn.kind
+    this.trace(`turn ${this.turn.id ?? '?'} completed (${turnKind}, ${input.reason})`)
+    this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, turn: turnKind, now })
+    // A clear held back while this turn ran (one the person queued behind the handoff) is carried out now.
+    if (this.isClearOwed && this.autopilot.state === 'clearing') {
+      this.isClearOwed = false
+      host?.after(LIMITS.clearDelayMs, () => void this.runClear())
+    }
     if (this.autopilot.state === 'armed' && input.reason !== 'aborted' && this.usage.tokens !== undefined) {
       this.stepAutopilot({ kind: 'context', tokens: this.usage.tokens, window: this.usage.window, isInTurn: false, now })
     }
@@ -1198,8 +1254,21 @@ export class Runtime {
   // -------------------------------------------------------------------------
   // No-Lazy-Exit Guard
 
-  async onStop(input: { stopHookActive: boolean; lastMessage: string; backgroundCount: number; permissionMode: string | undefined }): Promise<string | null> {
+  async onStop(input: {
+    stopHookActive: boolean
+    lastMessage: string
+    background: readonly { id: string; type: string; description: string; command?: string }[]
+    wakeups: readonly { schedule: string; recurring: boolean }[]
+    permissionMode: string | undefined
+  }): Promise<string | null> {
     if (input.permissionMode !== undefined) this.permissionMode = input.permissionMode
+    this.lastStop = {
+      background: input.background.map(b => ({ id: b.id, description: clean(b.description || b.command || `a ${b.type} task`, 80) })).slice(0, 8),
+      wakeups: input.wakeups.map(w => ({ schedule: w.schedule, recurring: w.recurring })).slice(0, 8),
+      isQuestion: endsWithQuestion(input.lastMessage),
+      at: Date.now(),
+    }
+    this.publisher.mark('hud', 'activity')
     const eff = this.effective
     if (!eff.guard.isActive) return null
     if (this.turn.kind !== 'person' && this.turn.kind !== 'continuation') return null
@@ -1216,7 +1285,7 @@ export class Runtime {
       toolCount: this.activity.turn.tools,
       editCount: this.activity.turn.files.size,
       strictness: g.strictness,
-      hasBackgroundWork: input.backgroundCount > 0,
+      hasBackgroundWork: input.background.length > 0,
       permissionMode: this.permissionMode,
     })
     if (assessment.verdict === 'uncertain' && g.modelCheck) assessment = await this.classifyExit(assessment, input.lastMessage)

@@ -44,7 +44,7 @@ import {
   timelineStrip,
   workTrack,
 } from '../primitives'
-import { ACCENT, G, TIMELINE, toneProps } from '../theme'
+import { ACCENT, G, STATE_MARK, TIMELINE, toneProps } from '../theme'
 
 const CALL_STATUS: Record<string, { glyph: string; tone: Tone }> = {
   running: { glyph: G.run, tone: 'info' },
@@ -61,6 +61,7 @@ const TASK_LOOK: Record<string, { glyph: string; tone: Tone; word?: string }> = 
   completed: { glyph: G.ok, tone: 'good' },
   in_progress: { glyph: G.arrow, tone: 'info' },
   verifying: { glyph: G.verify, tone: 'info', word: 'verifying' },
+  waiting: { glyph: G.wait, tone: 'info', word: 'waiting' },
   blocked: { glyph: G.stop, tone: 'warn', word: 'blocked' },
   pending: { glyph: G.ring, tone: 'muted' },
 }
@@ -114,9 +115,9 @@ function runCard(kit: Kit, view: ActivityView, isAnimated: boolean): RenderEleme
                   tone: t.isCurrent && t.status === 'in_progress' ? 'info' : look.tone,
                   text: t.subject,
                   right: look.word,
-                  rightTone: t.status === 'blocked' ? 'warn' : 'muted',
-                  // What blocks it, or how it is being verified.
-                  detail: t.status === 'blocked' || t.status === 'verifying' ? t.detail : null,
+                  rightTone: t.status === 'blocked' ? 'warn' : t.status === 'waiting' ? 'info' : 'muted',
+                  // What it waits for, or how it is being verified.
+                  detail: t.status === 'blocked' || t.status === 'waiting' || t.status === 'verifying' ? t.detail : null,
                   isDim: t.status === 'completed' || (!t.isCurrent && t.status === 'pending'),
                   isBold: t.isCurrent,
                 })
@@ -129,15 +130,12 @@ function runCard(kit: Kit, view: ActivityView, isAnimated: boolean): RenderEleme
           {field(k, {
             key: 'run-now',
             label: 'Now',
-            content:
-              m.now === null ? (
-                <Text dimColor>{m.isWorking ? 'Working' : 'Waiting for the next prompt'}</Text>
-              ) : (
-                <Text wrap="truncate-end">
-                  <Text color="suggestion">{`${G.arrow} `}</Text>
-                  <Text>{m.now}</Text>
-                </Text>
-              ),
+            content: (
+              <Text wrap="truncate-end">
+                <Text {...toneProps(STATE_MARK[m.nowState].tone)}>{`${STATE_MARK[m.nowState].glyph} `}</Text>
+                <Text dimColor={m.nowState === 'idle' || m.nowState === 'ready' || m.nowState === 'thinking' ? true : undefined}>{m.now ?? 'Working'}</Text>
+              </Text>
+            ),
           })}
           {m.next === null ? null : field(k, { key: 'run-next', label: 'Next', content: <Text wrap="truncate-end">{m.next}</Text> })}
           {field(k, {

@@ -61,6 +61,8 @@ export type Run = {
    * person's latest substantial request, in their words.
    */
   objective?: string | null
+  /** Who stated the objective: Claude with its milestones, or the person's request. Absent before 1.3.0 (the person's). */
+  objectiveBy?: 'claude' | 'person'
   /** Quest log: the run's XP and the milestones already paid for. Absent until it earns any. */
   quest?: RunQuest
   /** The latest handoff: its health when the notes were checked, and the fresh context's continuity. Absent before 1.2.0. */

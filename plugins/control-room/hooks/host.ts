@@ -123,4 +123,7 @@ export type Host = {
 
   /** Re-runs agent listings (Subagent Control changed what is offered). */
   invalidateDescribes(): void
+
+  /** One line in Claude Code's debug log only (`claude --debug`), never on screen. Absent in tests. */
+  trace?(text: string): void
 }

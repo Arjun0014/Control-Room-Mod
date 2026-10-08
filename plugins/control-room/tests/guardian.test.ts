@@ -131,8 +131,12 @@ describe('Cache Guardian', () => {
     const { rt, kept, live, advance } = f
     live.forkRead = 0
     await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    // The lifetime as Claude Code reports it in this context (a model switch's hook), not one remembered from before.
+    rt.cache.noteTtl('1h')
+    rt.cache.schedule()
     await advance(101 * MIN)
     expect(kept.forks.length).toBe(2)
+    expect(rt.cache.state.ttl).toEqual({ value: '1h', source: 'engine' })
     expect(rt.cache.state.keepWarm.verified).toBe('no')
     expect(rt.cache.plan).toEqual({ at: null, reason: 'It did not keep the cache warm here, so it stopped' })
     expect(rt.notes.join(' ')).toContain('Keep warm did not keep the prompt cache warm')
@@ -142,6 +146,18 @@ describe('Cache Guardian', () => {
     rt.update(s => void (s.cache.keepWarm = true))
     expect(rt.cache.state.keepWarm.verified).toBe('unknown')
     expect((kept.store['cache.v1'] as { verified: string }).verified).toBe('unknown')
+  })
+
+  test('a remembered hour that proves wrong is corrected: Keep warm does not blame itself, and pauses at the five-minute idle limit', async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), ONE_HOUR)
+    const { rt, kept, live, advance } = f
+    live.forkRead = 0
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    await advance(101 * MIN)
+    expect(kept.forks.length).toBe(1)
+    expect(rt.cache.state.ttl).toEqual({ value: '5m', source: 'observed' })
+    expect(rt.cache.state.keepWarm.verified).toBe('unknown')
+    expect(rt.cache.plan.at).toBeNull()
   })
 
   test('stable policies: while the cache is warm a settings change reaches Claude as a note, and the system prompt keeps its section', async () => {

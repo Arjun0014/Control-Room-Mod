@@ -11,8 +11,23 @@ import { VERSION } from '../../constants'
 import { diffSystems, listProfiles } from '../../core/profiles'
 import { systemsOf } from '../../core/settings'
 import type { Kit } from '../kit'
-import { buttons, card, isNative, note, picker, row, switchControl } from '../primitives'
+import * as fmt from '../../core/format'
+import { buttons, card, isNative, link, note, picker, row, switchControl } from '../primitives'
 import { ACCENT, G } from '../theme'
+
+/**
+ * How telling a change from the profile is, by the system it touches: what
+ * changes how Claude works or what it may do comes before presentation.
+ */
+const WEIGHT: readonly string[] = ['autopilot', 'frontier', 'permissions', 'guard', 'qa', 'resources', 'subagents', 'router', 'cache', 'answers', 'progress', 'focus']
+
+const weightOf = (path: string): number => {
+  const i = WEIGHT.indexOf(path.split('.')[0] ?? '')
+  return i < 0 ? WEIGHT.length : i
+}
+
+/** Setup lists this many changes before "View all". */
+const CHANGES_SHOWN = 4
 
 export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
   const { Box, Button, Input } = kit.ui
@@ -21,7 +36,8 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
   const accent = ACCENT.setup
   const profiles = listProfiles(s)
   const active = profiles.find(p => p.id === s.profile)
-  const changes = active === undefined ? [] : diffSystems(active.systems, systemsOf(s))
+  const changes = (active === undefined ? [] : diffSystems(active.systems, systemsOf(s))).map((c, i) => ({ c, i })).sort((a, b) => weightOf(a.c.path) - weightOf(b.c.path) || a.i - b.i).map(x => x.c)
+  const shown = pane.showAllChanges || changes.length <= CHANGES_SHOWN + 1 ? changes : changes.slice(0, CHANGES_SHOWN)
 
   return (
     <Box flexDirection="column">
@@ -58,10 +74,17 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
             key: 'changes',
             title: `Changed from ${active.name}`,
             accent,
-            aside: changes.length > 8 ? `${changes.length} changes` : undefined,
+            aside: fmt.plural(changes.length, 'change'),
             rows: k => [
-              ...changes.slice(0, 8).map(c => row(k, { key: `change-${c.path}`, label: c.label, value: `${c.from} ${G.chevron} ${c.to}` })),
-              changes.length > 8 ? note(k, `and ${changes.length - 8} more`, 'changes-more') : null,
+              ...shown.map(c => row(k, { key: `change-${c.path}`, label: c.label, value: `${c.from} ${G.chevron} ${c.to}` })),
+              shown.length < changes.length || pane.showAllChanges
+                ? row(k, {
+                    key: 'changes-all',
+                    label: pane.showAllChanges ? 'Every change is listed' : `${changes.length - shown.length} more`,
+                    isDim: true,
+                    control: link(k, { key: 'changes-all', label: pane.showAllChanges ? 'Show fewer' : `View all ${changes.length}`, onPress: kit.actions.toggleChanges }),
+                  })
+                : null,
               Input === undefined
                 ? null
                 : row(k, {
@@ -110,7 +133,7 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
           row(k, {
             key: 'ui-companion',
             label: 'Companion',
-            subtitle: s.ui.companion ? 'Kit, a small fox, shows what Claude is doing; click it to open Control Room' : 'A small pixel fox on the status bar that shows what Claude is doing',
+            subtitle: s.ui.companion ? 'Kit shows what Claude is doing; click it to open Control Room' : 'A small pixel creature on the status bar that shows what Claude is doing',
             control: switchControl(k, { key: 'ui-companion', isOn: s.ui.companion, onPress: () => u(d => void (d.ui.companion = !d.ui.companion)) }),
           }),
           row(k, {

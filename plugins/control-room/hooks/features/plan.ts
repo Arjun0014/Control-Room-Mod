@@ -14,11 +14,12 @@ import { clean } from '../core/text'
 
 /**
  * TodoWrite and the Task tools know pending, in progress and completed.
- * Control Room's milestones tool adds two more a run needs to be honest:
- * verifying (done, being checked) and blocked (cannot go on without
- * something only the person or the world can give).
+ * Control Room's milestones tool adds three more a run needs to be honest:
+ * verifying (done, being checked), waiting (for a result that will come by
+ * itself: a job, a run, a review) and blocked (cannot go on without
+ * something only the person can give).
  */
-export type PlanStatus = 'pending' | 'in_progress' | 'verifying' | 'blocked' | 'completed'
+export type PlanStatus = 'pending' | 'in_progress' | 'verifying' | 'waiting' | 'blocked' | 'completed'
 
 export type PlanTask = {
   /** Normalised subject: how a rewritten list is matched to what came before. */
@@ -49,10 +50,13 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 const statusOf = (v: unknown): PlanStatus | null =>
-  v === 'pending' || v === 'in_progress' || v === 'verifying' || v === 'blocked' || v === 'completed' ? v : null
+  v === 'pending' || v === 'in_progress' || v === 'verifying' || v === 'waiting' || v === 'blocked' || v === 'completed' ? v : null
 
 /** Work under way: a milestone in progress, or one being verified. */
 export const isActive = (status: PlanStatus): boolean => status === 'in_progress' || status === 'verifying'
+
+/** Work that cannot go on by Claude's own hand for now: waiting for a result, or blocked on the person. */
+export const isHeld = (status: PlanStatus): boolean => status === 'waiting' || status === 'blocked'
 
 /** Earlier sessions' open work is dropped once a new session plans for itself. */
 function forSession(plan: Plan, session: number): PlanTask[] {
@@ -201,8 +205,8 @@ export function fromMilestones(plan: Plan, input: Record<string, unknown>, sessi
     content: str(m.title),
     status: m.status,
     activeForm: str(m.doing),
-    // Evidence for a milestone verified or being verified; the blocker for one that is blocked.
-    detail: m.status === 'blocked' ? str(m.blocker) : str(m.evidence),
+    // Evidence for a milestone verified or being verified; what a waiting or blocked one waits for.
+    detail: m.status === 'blocked' || m.status === 'waiting' ? str(m.blocker) || str(m.waiting_for) : str(m.evidence),
   }))
   return fromTodoWrite(plan, todos, session, now)
 }
@@ -216,13 +220,15 @@ export type Progress = {
   next: PlanTask | null
   /** Milestones that cannot go on, with what blocks them. */
   blocked: PlanTask[]
+  /** Milestones waiting for a result that will come by itself, with what they wait for. */
+  waiting: PlanTask[]
 }
 
 export function progressOf(plan: Plan): Progress {
   const done = plan.tasks.filter(t => t.status === 'completed').length
   const current = [...plan.tasks].reverse().find(t => isActive(t.status)) ?? null
   const next = plan.tasks.find(t => t.status === 'pending') ?? null
-  return { done, total: plan.tasks.length, current, next, blocked: plan.tasks.filter(t => t.status === 'blocked') }
+  return { done, total: plan.tasks.length, current, next, blocked: plan.tasks.filter(t => t.status === 'blocked'), waiting: plan.tasks.filter(t => t.status === 'waiting') }
 }
 
 /**

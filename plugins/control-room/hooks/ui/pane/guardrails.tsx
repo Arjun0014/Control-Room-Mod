@@ -6,13 +6,13 @@
 
 import type { RenderElement } from 'claude-code'
 
-import type { PaneModel, PermissionState, PermissionsView, ResourcesView } from '../../../types'
+import type { PaneModel, PermissionCategory, PermissionState, PermissionsView, ResourcesView } from '../../../types'
 import * as fmt from '../../core/format'
 import { DEFAULT_PERMISSIONS, PERMISSION_CATEGORIES, PERMISSION_LABEL } from '../../core/settings'
 import { CATEGORY_INFO } from '../../features/permissions/categories'
 import { statesFor } from '../../features/permissions/decide'
 import type { Kit } from '../kit'
-import { buttons, card, gauge, listItem, note, picker, row, stepper, switchControl } from '../primitives'
+import { buttons, card, gauge, listItem, note, picker, row, stepper, subhead, switchControl } from '../primitives'
 import { ACCENT, G, readingTone, toneOfLevel } from '../theme'
 
 const STATE: Record<PermissionState, { label: string; hint: string }> = {
@@ -28,6 +28,19 @@ const LEVELS = [
   { value: 'medium', label: 'Medium', hint: 'CPU 70% · RAM 85%' },
   { value: 'high', label: 'High', hint: 'CPU 90% · RAM 92%' },
   { value: 'custom', label: 'Custom', hint: 'your own ceilings' },
+]
+
+/**
+ * The permission categories in the groups a person thinks in: what happens
+ * to the project's files, what reaches the network, what Git records and
+ * sends, what leaves for other systems, and the commands that are never safe.
+ */
+const GROUPS: readonly { id: string; title: string; categories: readonly PermissionCategory[] }[] = [
+  { id: 'project', title: 'Project', categories: ['edit', 'editOutside', 'delete'] },
+  { id: 'network', title: 'Network', categories: ['network', 'download', 'install'] },
+  { id: 'git', title: 'Git', categories: ['commit', 'push', 'gitDestructive'] },
+  { id: 'external', title: 'External', categories: ['deploy'] },
+  { id: 'safety', title: 'Safety', categories: ['dangerous'] },
 ]
 
 const AGENT_HINT: Record<string, string> = {
@@ -59,19 +72,22 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
         aside: activity,
         footer: 'Deny stops an action before any prompt, in every mode. Your organisation’s rules always win. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
         rows: k => [
-          ...PERMISSION_CATEGORIES.map(c =>
-            row(k, {
-              key: `perm-${c}`,
-              label: PERMISSION_LABEL[c],
-              subtitle: kit.openPicker === `perm-${c}` ? `e.g. ${CATEGORY_INFO[c].examples}` : undefined,
-              control: picker(k, {
+          ...GROUPS.flatMap((g, gi) => [
+            subhead(k, `perm-group-${g.id}`, g.title, gi > 0),
+            ...g.categories.map(c =>
+              row(k, {
                 key: `perm-${c}`,
-                value: p[c],
-                options: statesFor(c).map(state => ({ value: state, label: STATE[state].label, hint: STATE[state].hint })),
-                onSelect: v => u(d => void (d.permissions[c] = (statesFor(c).includes(v as PermissionState) ? v : 'ask') as PermissionState)),
+                label: PERMISSION_LABEL[c],
+                subtitle: kit.openPicker === `perm-${c}` ? `e.g. ${CATEGORY_INFO[c].examples}` : undefined,
+                control: picker(k, {
+                  key: `perm-${c}`,
+                  value: p[c],
+                  options: statesFor(c).map(state => ({ value: state, label: STATE[state].label, hint: STATE[state].hint })),
+                  onSelect: v => u(d => void (d.permissions[c] = (statesFor(c).includes(v as PermissionState) ? v : 'ask') as PermissionState)),
+                }),
               }),
-            }),
-          ),
+            ),
+          ]),
           isDefault ? null : buttons(k, [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }], 'perm-actions'),
         ],
       })}

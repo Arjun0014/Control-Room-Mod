@@ -96,20 +96,20 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
       key: 'cache',
       title: 'Cache',
       accent,
-      aside: cache.warmth === 'none' ? undefined : lifetime,
-      footer: 'The expiry, the hit ratio and the causes are derived from the tokens Claude Code reports.',
+      aside: cache.warmth === 'none' ? 'Nothing cached yet' : lifetime,
+      footer: cache.warmth === 'none' ? undefined : 'The expiry, the hit ratio and the causes are derived from the tokens Claude Code reports.',
       rows: k => [
-        textRuns(k, 'cache-state', [
-          { text: `${state.glyph} `, tone: state.tone === 'normal' ? 'info' : state.tone },
-          { text: state.text, isBold: cache.warmth === 'warm', tone: cache.warmth === 'warm' ? 'normal' : 'muted' },
-        ]),
+        cache.warmth === 'none'
+          ? null
+          : textRuns(k, 'cache-state', [
+              { text: `${state.glyph} `, tone: state.tone === 'normal' ? 'info' : state.tone },
+              { text: state.text, isBold: cache.warmth === 'warm', tone: cache.warmth === 'warm' ? 'normal' : 'muted' },
+            ]),
         cache.warmth === 'none'
           ? null
           : meterBar(k, { key: 'cache-left', fraction: state.fraction ?? 0, tone: cache.warmth === 'warm' ? 'info' : 'muted', width: k.columns, alt: state.text }),
-        cache.warmth === 'none'
-          ? pair(k, { key: 'cache-under', left: 'The cache starts with Claude’s first response in this context.' })
-          : pair(k, { key: 'cache-under', left: `${fmt.tokens(cache.cachedTokens)} tokens cached · ${fmt.plural(cache.requests, 'request')}`, right: hit ?? undefined }),
-        apart(
+        cache.warmth === 'none' ? null : pair(k, { key: 'cache-under', left: `${fmt.tokens(cache.cachedTokens)} tokens cached · ${fmt.plural(cache.requests, 'request')}`, right: hit ?? undefined }),
+        (cache.warmth === 'none' ? (_k: Kit, _key: string, el: RenderElement) => el : apart)(
           k,
           'cache-keep',
           row(k, {

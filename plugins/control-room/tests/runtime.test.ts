@@ -187,8 +187,8 @@ describe('runtime', () => {
     rt.onPromptSubmit('Implement the parser and tests', { kind: 'composer' })
     rt.onTurnStart({ turnId: 't1', text: 'Implement the parser and tests' })
     const lazy = "You'll need to implement the rest yourself. TODO: errors."
-    expect(await rt.onStop({ stopHookActive: false, lastMessage: lazy, backgroundCount: 0, permissionMode: 'default' })).toContain('No-Lazy-Exit Guard')
-    expect(await rt.onStop({ stopHookActive: true, lastMessage: `${lazy} Also docs.`, backgroundCount: 0, permissionMode: 'default' })).toBeNull()
+    expect(await rt.onStop({ stopHookActive: false, lastMessage: lazy, background: [], wakeups: [], permissionMode: 'default' })).toContain('No-Lazy-Exit Guard')
+    expect(await rt.onStop({ stopHookActive: true, lastMessage: `${lazy} Also docs.`, background: [], wakeups: [], permissionMode: 'default' })).toBeNull()
   })
 
   test('the guard stands down while a handoff is pending', async () => {
@@ -202,7 +202,7 @@ describe('runtime', () => {
     rt.onTurnStart({ turnId: 't1', text: 'Implement the parser and tests' })
     rt.stepResponse({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 3 }, {}, step(60_000, 'tool_use'))
     expect(rt.autopilot.state).toBe('pending')
-    expect(await rt.onStop({ stopHookActive: false, lastMessage: "You'll need to finish it yourself. TODO.", backgroundCount: 0, permissionMode: 'default' })).toBeNull()
+    expect(await rt.onStop({ stopHookActive: false, lastMessage: "You'll need to finish it yourself. TODO.", background: [], wakeups: [], permissionMode: 'default' })).toBeNull()
   })
 
   test('settings survive a new Runtime (persistence) and invalid stored values are repaired', async () => {
@@ -242,6 +242,9 @@ describe('runtime', () => {
     live.usage = { ...live.usage, context: { tokens: 120_000, window: 1_000_000, percent: 12 } }
     await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
     await advance(300)
+    expect(rt.autopilot.state).toBe('requested')
+    // The handoff moves on when its own turn begins, recognised by its prompt, not when the prompt was sent.
+    await rt.onTurnStart({ turnId: 't2', text: kept.submitted.at(-1)! })
     expect(rt.autopilot.state).toBe('handoff')
     expect(kept.submitted.filter(t => t.includes('final handoff')).length).toBe(1)
     expect(kept.autopilotRecord?.state).toBe('handoff')
@@ -285,8 +288,10 @@ describe('runtime', () => {
     ]
     await rt.beforeTool('TodoWrite', { todos }, 'u1', undefined)
     rt.afterTool('TodoWrite', { todos }, 'u1', { result: { oldTodos: [], newTodos: todos } } as unknown as ToolCallResult)
-    expect(Views.hudOf(rt).work).toEqual({ done: 1, total: 3, current: 'Rewriting the hot loop' })
+    expect(Views.hudOf(rt).work).toEqual({ done: 1, total: 3, current: 'Rewriting the hot loop', track: ['done', 'now', 'open'] })
     expect(Views.hudOf(rt).now?.text).toBe('Rewriting the hot loop')
+    // The headline says it in Claude's words, with where it sits in the plan.
+    expect(Views.hudOf(rt).headline).toEqual({ state: 'working', text: 'Rewriting the hot loop', detail: 'step 2 of 3', tone: 'info' })
     await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
     await advance(2000)
     const runKey = Object.keys(kept.store).find(k => k.startsWith('run.v1.'))!
@@ -295,7 +300,7 @@ describe('runtime', () => {
     await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S2' })
     expect(rt.usage.tokens).toBeUndefined()
     const hud = Views.hudOf(rt)
-    expect(hud.work).toEqual({ done: 1, total: 3, current: 'Rewriting the hot loop' })
+    expect(hud.work).toEqual({ done: 1, total: 3, current: 'Rewriting the hot loop', track: ['done', 'now', 'open'] })
     // The first session's $0.50 stays in the run's cost while the fresh session starts at nothing.
     expect(hud.cost.runUsd).toBe(0.5)
     expect(Views.missionOf(rt).objective).toBe('Rebuild the renderer and keep the tests green.')
@@ -309,7 +314,7 @@ describe('runtime', () => {
     expect(rt.policies().map(s => s.name)).toContain('Run progress')
     const answer = rt.recordMilestones({ milestones: [{ title: 'Fix the parser', status: 'completed' }, { title: 'Add tests', status: 'in_progress', doing: 'Adding tests' }] }, undefined)
     expect(answer).toContain('1 of 2 milestones done')
-    expect(Views.hudOf(rt).work).toEqual({ done: 1, total: 2, current: 'Adding tests' })
+    expect(Views.hudOf(rt).work).toEqual({ done: 1, total: 2, current: 'Adding tests', track: ['done', 'now'] })
     // A subagent's list is its own.
     rt.recordMilestones({ milestones: [{ title: 'Other', status: 'pending' }] }, 'agent-1')
     expect(Views.hudOf(rt).work?.total).toBe(2)

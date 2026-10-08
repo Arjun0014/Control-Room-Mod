@@ -31,7 +31,7 @@ const HELP = [
   '  /cr cache                 the prompt cache: lifetime, Keep warm, recent rebuilds',
   '  /cr cache keep on|off · idle 2h · stable on|off · guard on|off',
   '  /cr hud band|status|both|off',
-  '  /cr companion on|off      Kit, a small fox on the status bar · /cr motion on|off',
+  '  /cr companion on|off      Kit, a small companion on the status bar · /cr motion on|off',
   '  /cr reset confirm         back to Normal (custom profiles are kept)',
 ].join('\n')
 
@@ -89,9 +89,23 @@ export function cacheText(rt: Runtime): string {
   ]
   const kind = (m: (typeof cache.misses)[number]) => (m.kind === 'lifecycle' ? 'expected' : m.kind === 'unavoidable' ? 'unexplained' : 'preventable')
   const misses = cache.misses.slice(0, 5).flatMap(m => [`  ${fmt.clock(m.at)}  ${m.detail} · ${fmt.tokens(m.recached)} re-cached (${kind(m)})`, `         ${m.advice}`])
+  // The timeline behind the state, to the second: what a check of Keep warm reads.
+  const k = cache.keepWarm
+  const timeline: [string, string][] =
+    cache.warmth === 'none'
+      ? []
+      : [
+          ['Last request', `${fmt.clockSeconds(cache.lastRequestAt)}${cache.expiresAt === null ? '' : ` · expires ${fmt.clockSeconds(cache.expiresAt)} (derived)`}`],
+          ...(k.lastAt === null
+            ? []
+            : [['Last refresh', `${fmt.clockSeconds(k.lastAt)} · ${k.lastHit === true ? 'hit' : 'missed'}, ${fmt.tokens(k.lastRead)} read from the cache · ${fmt.plural(k.refreshes, 'refresh', 'refreshes')}`] as [string, string]]),
+          ...(k.isOn && k.nextAt !== null ? [['Next refresh', `${fmt.clockSeconds(k.nextAt)}${k.isProbe ? ' (learns the lifetime)' : ''}`] as [string, string]] : []),
+          ...(k.verified === 'unknown' ? [] : [['Self-check', k.verified === 'yes' ? 'Verified: a request after a replaced expiry still read the cache' : 'Failed: refreshes did not hold the cache'] as [string, string]]),
+        ]
   return [
     '◆ Prompt cache',
     ...lines.map(([label, value]) => `${label.padEnd(14)}${value}`),
+    ...timeline.map(([label, value]) => `${label.padEnd(14)}${value}`),
     ...(misses.length === 0 ? [] : ['Recent rebuilds', ...misses]),
     'Expiry, hit ratio and causes are derived from the tokens Claude Code reports.',
   ].join('\n')
@@ -267,7 +281,7 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
         else s.ui.companion = toggle
       })
       if (verb === 'motion') return { text: toggle ? 'Animation on.' : 'Reduced motion: still drawings instead of animation.' }
-      return { text: toggle ? 'Companion on: Kit, a small fox, walks the status bar and shows what Claude is doing. Click it to open Control Room.' : 'Companion off.' }
+      return { text: toggle ? 'Companion on: Kit lives on the status bar and shows what Claude is doing. Click it to open Control Room.' : 'Companion off.' }
     }
     case 'hud': {
       const valid = ['band', 'status', 'both', 'off']

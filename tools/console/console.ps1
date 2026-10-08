@@ -3,7 +3,7 @@
   terminal UI can be read back and used without looking at the window. See README.md.
 
     console.ps1 launch -Dir C:\some\trusted\folder [-Cols 150] [-Lines 48] [-Font 'Cascadia Mono' [-FontSize 16]]
-                       [-Claude '<command>'] [-Also <plugin folder>, ...]
+                       [-Claude '<command>'] [-Also <plugin folder>, ...] [-Plugin <plugin folder>]
     console.ps1 read [-Attrs]
     console.ps1 send -Spec 'text:/cr|enter'
     console.ps1 capture -Out shot.png [-Cells 'col,row,width,height']
@@ -22,6 +22,7 @@ param(
   [int]$TargetPid = 0,
   [string]$Claude = 'claude',
   [string[]]$Also = @(),
+  [string]$Plugin = '',
   [string]$Font = '',
   [int]$FontSize = 16
 )
@@ -35,7 +36,8 @@ Add-Type -Path (Join-Path $here 'ConDrive.cs') -ReferencedAssemblies System.Draw
 
 if ($Action -eq 'launch') {
   if ($Dir -eq '' -or -not (Test-Path $Dir)) { throw 'launch needs -Dir: an existing folder Claude Code already trusts (a trust dialog would wait for you).' }
-  $plugin = (Resolve-Path (Join-Path $here '..\..\plugins\control-room')).Path
+  # -Plugin loads another copy (a frozen snapshot, so saves to the working copy do not reload a long test).
+  $pluginDir = if ($Plugin -ne '') { (Resolve-Path $Plugin).Path } else { (Resolve-Path (Join-Path $here '..\..\plugins\control-room')).Path }
   # Started from inside a Claude Code session, the child would inherit that session's wiring (its
   # API proxy, so it reads "Not logged in") and NO_COLOR (so it draws in monochrome). Start clean.
   foreach ($n in @(Get-ChildItem env: | Where-Object { $_.Name -match '^(CLAUDE|ANTHROPIC)|^NO_COLOR$' } | ForEach-Object { $_.Name })) {
@@ -49,7 +51,7 @@ if ($Action -eq 'launch') {
   if ($Font -ne '') { [ConDrive]::Font([uint32]$cmd.ProcessId, $Font, [int16]$FontSize) }
   # Control Room loads first; -Also folders (the demo driver) load after it, so their hooks sit beneath its own.
   $extra = ($Also | ForEach-Object { " --plugin-dir `"$((Resolve-Path $_).Path)`"" }) -join ''
-  [ConDrive]::Send([uint32]$cmd.ProcessId, "text:$Claude --plugin-dir `"$plugin`"$extra|enter")
+  [ConDrive]::Send([uint32]$cmd.ProcessId, "text:$Claude --plugin-dir `"$pluginDir`"$extra|enter")
   Set-Content -Path $pidFile -Value $cmd.ProcessId -Encoding ascii
   "console $($cmd.ProcessId): $Cols x $Lines in $Dir"
   exit 0

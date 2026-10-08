@@ -188,7 +188,10 @@ export function durationWords(ms: number): string {
 /** Why a miss happened, in kind and severity, from the change seen before it or the gap. */
 function classify(state: CacheState, gapMs: number, recached: number, isRefresh: boolean, at: number): Omit<CacheMiss, 'at' | 'recached' | 'prefix' | 'read' | 'gapMs' | 'isRefresh'> {
   const change = ORDER.map(c => state.pending.find(p => p.cause === c)).find(p => p !== undefined)
-  const ttl = ttlMs(state)
+  // A lifetime remembered from an earlier session is a hint, not a fact: the account or the plan may
+  // give another one now (an API key, usage over the plan's limit), so only five minutes are sure.
+  const isHint = state.ttl?.source === 'stored'
+  const ttl = isHint ? null : ttlMs(state)
   // A cache known to have lapsed already was not lost to a change made after it.
   const isSurelyExpired = ttl !== null && gapMs > ttl
   if (change !== undefined && (change.cause === 'compact' || !isSurelyExpired)) {
@@ -253,9 +256,13 @@ export function observeRequest(
     miss = { at: req.at, recached, prefix: expected, read: req.read, gapMs, isRefresh, ...classify(next, gapMs, recached, isRefresh, req.at) }
   }
   // What the TTL must be: a hit after more than five idle minutes proves the hour;
-  // a lapse between five minutes and the hour, with nothing else to blame, points to five.
+  // a lapse between five minutes and the hour, with nothing else to blame, points to five
+  // (also against an hour remembered from an earlier session, which this context may not have).
   if (isComparable && !isMiss && gapMs > TTL_MS['5m'] + 15_000) next = withTtl(next, '1h', isProbe ? 'probe' : 'observed')
-  if (miss !== null && miss.cause === 'expired' && next.ttl === null && gapMs < TTL_MS['1h']) next = withTtl(next, '5m', isProbe ? 'probe' : 'observed')
+  const isTtlHint = next.ttl === null || next.ttl.source === 'stored'
+  if (miss !== null && miss.cause === 'expired' && isTtlHint && gapMs < TTL_MS['1h']) next = withTtl(next, '5m', isProbe ? 'probe' : 'observed')
+  // A refresh timed by a remembered lifetime that turned out wrong did not fail: it was told the wrong expiry.
+  const wasTtlWrong = state.ttl?.source === 'stored' && next.ttl !== null && next.ttl.value !== state.ttl.value
 
   // Keep warm proves itself on the first request after the expiry a refresh replaced.
   let verdict: Observed['verdict'] = null
@@ -275,8 +282,11 @@ export function observeRequest(
     kw.lastHit = !isMiss
     // A refresh that read the cache before it lapsed is what the next request will test.
     if (!isMiss && isInTime && kw.verified !== 'yes') kw.provingAfter = oldExpiry
+    // A refresh timed by a remembered lifetime that proved wrong: the lifetime is corrected, and the
+    // refresh it rebuilt is the test, so one more miss in time is conclusive.
+    if (isMiss && wasTtlWrong) kw.failures = Math.max(kw.failures, 1)
     // One sent in time that found the cache gone: once may be the server, twice is the method.
-    if (isMiss && isInTime && !isProbe) {
+    else if (isMiss && isInTime && !isProbe) {
       kw.failures += 1
       if (kw.failures >= 2 && kw.verified !== 'yes') {
         kw.verified = 'no'

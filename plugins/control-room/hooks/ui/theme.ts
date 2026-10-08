@@ -8,7 +8,7 @@
  * reserved for state that needs a look.
  */
 
-import type { TabId, TimelineKind, Tone } from '../../types'
+import type { HudState, TabId, TimelineKind, Tone, TrackStop } from '../../types'
 
 export type ColorProps = { color?: string; dimColor?: boolean; bold?: boolean }
 
@@ -69,6 +69,16 @@ export const G = {
   lineFull: '━',
   lineEmpty: '─',
   marker: '┃',
+  /**
+   * The status bar's context meter: a solid bar, filled in its tone over a dim track of the same
+   * block, with the handoff point as a notch. A bar, never a line of stops, so it reads apart from
+   * the work track.
+   */
+  segFull: '▇',
+  segEmpty: '▇',
+  notch: '▌',
+  /** The status bar's top edge under Kit: a line at the top of its row, right under Kit's feet. */
+  edge: '▔',
   /** Work: one square per milestone, filled when done. Never a line, so it reads apart from context. */
   square: '■',
   squareOpen: '□',
@@ -80,6 +90,8 @@ export const G = {
   run: '▸',
   /** A milestone done and being verified. */
   verify: '◎',
+  /** Waiting for a result that will come by itself (a job, a scheduled run). */
+  wait: '◷',
   warn: '▲',
   minus: '−',
   plus: '+',
@@ -141,7 +153,7 @@ export function svgBar(input: { fraction: number; marker?: number | null; tone: 
       ? ''
       : `<rect x="${Math.max(0, Math.min(w - 2, Math.round(input.marker * w) - 1))}" y="0" width="2" height="${h}" rx="1" fill="${SVG_COLOR.accent}"/>`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${SVG_ROOT_STYLE}` +
     `<rect x="0" y="${y}" width="${w}" height="${track}" rx="${track / 2}" fill="#8E8E93" fill-opacity="0.25"/>` +
     (fill > 0 ? `<rect x="0" y="${y}" width="${fill}" height="${track}" rx="${track / 2}" fill="${SVG_COLOR[input.tone]}"/>` : '') +
     tick +
@@ -176,7 +188,7 @@ export function svgSegments(input: { done: number; total: number; hasCurrent: bo
     const fill = i < c.done ? `fill="${SVG_COLOR.info}"` : i === c.current ? `fill="${SVG_COLOR.info}" fill-opacity="0.45"` : `fill="#8E8E93" fill-opacity="0.3"`
     return `<rect x="${x}" y="${y}" width="${seg.toFixed(1)}" height="6" rx="2" ${fill}/>`
   }).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${rects}</svg>`
+  return svgDoc(w, h, rects)
 }
 
 /** A stop on the milestone track. */
@@ -216,7 +228,166 @@ export function svgTrack(input: { stops: readonly Stop[]; width: number; height?
       return `<circle cx="${x(i)}" cy="${cy}" r="${(r - 0.5).toFixed(1)}" fill="${SVG_COLOR.info}" fill-opacity="0.45" stroke="${SVG_COLOR.info}" stroke-width="1.2">${pulse}</circle>`
     })
     .join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${line}${filled}${stops}</svg>`
+  return svgDoc(w, h, `${line}${filled}${stops}`)
+}
+
+// ---------------------------------------------------------------------------
+// The status bar's instruments: the work track, the context meter and the
+// state marks, as glyphs in the terminal and as SVG on the remote surfaces.
+
+/**
+ * The root style every SVG carries. Desktop draws an interactive SVG in a
+ * sandboxed frame, and a frame whose document has another color scheme than
+ * the page is painted with an opaque canvas (white on a dark page); declaring
+ * both schemes lets the frame follow the page, so it stays transparent.
+ */
+export const SVG_ROOT_STYLE = '<style>:root{color-scheme:light dark}</style>'
+
+/** An SVG document of `w` × `h` CSS pixels, transparent on every theme. */
+export const svgDoc = (w: number, h: number, body: string): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${SVG_ROOT_STYLE}${body}</svg>`
+
+/**
+ * The work track at most `max` stops wide: one stop per milestone while they
+ * fit, else each stop stands for a stretch of them, showing the most telling
+ * state in it (under way, then being verified, then held, then done only when
+ * all of it is done). The count beside the track stays exact.
+ */
+export function scaleTrack(track: readonly TrackStop[], max: number): TrackStop[] {
+  const n = track.length
+  const m = Math.max(1, Math.floor(max))
+  if (n <= m) return [...track]
+  const rank: TrackStop[] = ['now', 'verify', 'held']
+  return Array.from({ length: m }, (_, i) => {
+    const part = track.slice(Math.floor((i * n) / m), Math.floor(((i + 1) * n) / m))
+    return rank.find(r => part.includes(r)) ?? (part.every(s => s === 'done') ? 'done' : 'open')
+  })
+}
+
+/** A stop's glyph and look in the terminal. */
+export const STOP_LOOK: Record<TrackStop, { glyph: string; tone?: Tone; isBold?: boolean; isDim?: boolean }> = {
+  done: { glyph: '●', tone: 'info' },
+  now: { glyph: '◉', tone: 'info', isBold: true },
+  verify: { glyph: '◎', tone: 'info' },
+  held: { glyph: '◌', tone: 'warn' },
+  open: { glyph: '○', isDim: true },
+}
+
+/**
+ * The work track as SVG: stops joined by a line, the stretch done drawn in
+ * the work color, the one under way ringed, one being verified half filled,
+ * one held in amber, the rest hollow.
+ */
+export function svgWorkTrack(input: { stops: readonly TrackStop[]; height?: number; pitch?: number }): string {
+  const h = input.height ?? 14
+  const pitch = input.pitch ?? 16
+  const n = Math.max(1, input.stops.length)
+  const r = Math.max(3, h / 2 - 2)
+  const w = Math.round(2 * (r + 1.5) + (n - 1) * pitch)
+  const cx = (i: number) => (r + 1.5 + i * pitch).toFixed(1)
+  const cy = (h / 2).toFixed(1)
+  const blue = SVG_COLOR.info
+  const lastDone = input.stops.lastIndexOf('done')
+  const line = n > 1 ? `<line x1="${cx(0)}" x2="${cx(n - 1)}" y1="${cy}" y2="${cy}" stroke="#8E8E93" stroke-opacity="0.45" stroke-width="2"/>` : ''
+  const filled = lastDone > 0 ? `<line x1="${cx(0)}" x2="${cx(lastDone)}" y1="${cy}" y2="${cy}" stroke="${blue}" stroke-width="2"/>` : ''
+  const stops = input.stops
+    .map((s, i) => {
+      switch (s) {
+        case 'done':
+          return `<circle cx="${cx(i)}" cy="${cy}" r="${r.toFixed(1)}" fill="${blue}"/>`
+        case 'now':
+          return `<circle cx="${cx(i)}" cy="${cy}" r="${r.toFixed(1)}" fill="${blue}" fill-opacity="0.22" stroke="${blue}" stroke-width="2"/><circle cx="${cx(i)}" cy="${cy}" r="${(r / 2.4).toFixed(1)}" fill="${blue}"/>`
+        case 'verify':
+          return `<circle cx="${cx(i)}" cy="${cy}" r="${r.toFixed(1)}" fill="none" stroke="${blue}" stroke-width="2"/><path d="M${cx(i)} ${(h / 2 - r).toFixed(1)} A${r.toFixed(1)} ${r.toFixed(1)} 0 0 1 ${cx(i)} ${(h / 2 + r).toFixed(1)} Z" fill="${blue}"/>`
+        case 'held':
+          return `<circle cx="${cx(i)}" cy="${cy}" r="${(r - 0.5).toFixed(1)}" fill="none" stroke="${SVG_COLOR.warn}" stroke-width="2" stroke-dasharray="2.2 1.6"/>`
+        case 'open':
+          return `<circle cx="${cx(i)}" cy="${cy}" r="${(r - 0.5).toFixed(1)}" fill="none" stroke="#8E8E93" stroke-opacity="0.75" stroke-width="1.5"/>`
+      }
+    })
+    .join('')
+  return svgDoc(w, h, `${line}${filled}${stops}`)
+}
+
+/**
+ * The context meter as SVG: a rounded bar, filled in its tone, with the
+ * handoff point as an orange notch that stands proud of the bar above and
+ * below, so it reads as a line the fill must not cross.
+ */
+export function svgContextMeter(input: { fraction: number; marker: number | null; tone: Tone; width: number; height?: number }): string {
+  const w = Math.max(48, Math.round(input.width))
+  const h = input.height ?? 14
+  const bar = Math.max(6, h - 6)
+  const y = (h - bar) / 2
+  const f = Number.isFinite(input.fraction) ? Math.min(1, Math.max(0, input.fraction)) : 0
+  const fill = f > 0 ? Math.max(bar, Math.round(f * w)) : 0
+  const mx = input.marker === null || !Number.isFinite(input.marker) ? null : Math.max(1.5, Math.min(w - 1.5, input.marker * w))
+  return svgDoc(
+    w,
+    h,
+    `<rect x="0" y="${y}" width="${w}" height="${bar}" rx="${bar / 2}" fill="#8E8E93" fill-opacity="0.22"/>` +
+      (fill > 0 ? `<rect x="0" y="${y}" width="${fill}" height="${bar}" rx="${bar / 2}" fill="${SVG_COLOR[input.tone]}"/>` : '') +
+      (mx === null ? '' : `<rect x="${(mx - 1.5).toFixed(1)}" y="0" width="3" height="${h}" rx="1.5" fill="${SVG_COLOR.accent}"/>`),
+  )
+}
+
+/** The headline's state marks: a glyph and tone in the terminal, a small drawn icon on the remote surfaces. */
+export const STATE_MARK: Record<HudState, { glyph: string; tone: Tone }> = {
+  ready: { glyph: '○', tone: 'muted' },
+  idle: { glyph: '○', tone: 'muted' },
+  thinking: { glyph: '◌', tone: 'muted' },
+  working: { glyph: '▸', tone: 'info' },
+  validating: { glyph: '◎', tone: 'info' },
+  waitingUser: { glyph: '◆', tone: 'accent' },
+  waitingExternal: { glyph: '◷', tone: 'info' },
+  blocked: { glyph: '⊘', tone: 'warn' },
+  handoff: { glyph: '↻', tone: 'accent' },
+  done: { glyph: '✓', tone: 'good' },
+  complete: { glyph: '✓', tone: 'good' },
+  failing: { glyph: '✗', tone: 'warn' },
+}
+
+/** The same marks drawn as 16-pixel icons. */
+export function svgStateIcon(state: HudState): string {
+  const s = 16
+  const c = SVG_COLOR[STATE_MARK[state].tone]
+  const ring = (fill: string, extra = '') => `<circle cx="8" cy="8" r="6.2" fill="${fill}" stroke="${c}" stroke-width="1.6"${extra}/>`
+  let body: string
+  switch (state) {
+    case 'working':
+      body = `${ring(c, ' fill-opacity="0.16"')}<path d="M6.4 5.2 L11 8 L6.4 10.8 Z" fill="${c}"/>`
+      break
+    case 'thinking':
+      body = `<circle cx="4" cy="8" r="1.5" fill="${c}"/><circle cx="8" cy="8" r="1.5" fill="${c}"/><circle cx="12" cy="8" r="1.5" fill="${c}"/>`
+      break
+    case 'validating':
+      body = `${ring('none')}<circle cx="8" cy="8" r="2.6" fill="${c}"/>`
+      break
+    case 'waitingUser':
+      body = `<path d="M8 1.8 L14.2 8 L8 14.2 L1.8 8 Z" fill="${c}" fill-opacity="0.2" stroke="${c}" stroke-width="1.6" stroke-linejoin="round"/>`
+      break
+    case 'waitingExternal':
+      body = `${ring('none')}<path d="M8 4.6 V8 L10.6 9.6" fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round"/>`
+      break
+    case 'blocked':
+      body = `${ring('none')}<path d="M4.2 11.8 L11.8 4.2" stroke="${c}" stroke-width="1.6" stroke-linecap="round"/>`
+      break
+    case 'handoff':
+      body = `<path d="M12.6 6.4 A5 5 0 1 0 13 9.4" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round"/><path d="M13.6 2.8 L13 6.6 L9.4 5.8" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
+      break
+    case 'done':
+    case 'complete':
+      body = `${ring(c, ' fill-opacity="0.16"')}<path d="M5 8.2 L7.2 10.4 L11.2 6" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
+      break
+    case 'failing':
+      body = `${ring(c, ' fill-opacity="0.16"')}<path d="M5.6 5.6 L10.4 10.4 M10.4 5.6 L5.6 10.4" stroke="${c}" stroke-width="1.8" stroke-linecap="round"/>`
+      break
+    case 'ready':
+    case 'idle':
+      body = ring('none')
+      break
+  }
+  return svgDoc(s, s, body)
 }
 
 /** The cache's time left as a clock-face glyph: ● full, ◕ ◑ ◔ emptying, ○ none. */
@@ -242,7 +413,7 @@ export function svgClock(input: { fraction: number | null; tone: Tone; size?: nu
     const ey = (c - inner * Math.cos(a)).toFixed(2)
     wedge = `<path d="M${c} ${c} L${c} ${(c - inner).toFixed(2)} A${inner.toFixed(2)} ${inner.toFixed(2)} 0 ${f > 0.5 ? 1 : 0} 1 ${ex} ${ey} Z" fill="${color}"/>`
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">${ring}${wedge}</svg>`
+  return svgDoc(s, s, `${ring}${wedge}`)
 }
 
 /** A filled sparkline as SVG (Desktop, mobile): 0–100 values. */
@@ -256,7 +427,7 @@ export function svgSpark(values: readonly number[], input: { tone: Tone; width: 
   const color = SVG_COLOR[input.tone]
   const ceiling = input.ceiling === undefined || input.ceiling === null ? '' : `<line x1="0" x2="${w}" y1="${yOf(input.ceiling)}" y2="${yOf(input.ceiling)}" stroke="${SVG_COLOR.accent}" stroke-width="1" stroke-dasharray="3 3"/>`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${SVG_ROOT_STYLE}` +
     `<polygon points="0,${h} ${points} ${w},${h}" fill="${color}" fill-opacity="0.18"/>` +
     `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>` +
     ceiling +
@@ -325,7 +496,7 @@ export function svgTimeline(input: { spans: readonly TimelineSpan[]; from: numbe
     })
     .join('')
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${SVG_ROOT_STYLE}` +
     `<rect x="0" y="${Math.round(h / 2) - 1}" width="${w}" height="2" rx="1" fill="#8E8E93" fill-opacity="0.3"/>` +
     bars +
     `</svg>`
@@ -355,7 +526,7 @@ export function svgColumns(input: { values: readonly number[]; marker?: number |
     input.marker === undefined || input.marker === null
       ? ''
       : `<line x1="0" x2="${used.toFixed(1)}" y1="${yOf(input.marker)}" y2="${yOf(input.marker)}" stroke="${SVG_COLOR.accent}" stroke-width="1" stroke-dasharray="3 3"/>`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${cols}${line}</svg>`
+  return svgDoc(w, h, `${cols}${line}`)
 }
 
 /**
@@ -383,7 +554,7 @@ export function svgDiff(input: { added: number; removed: number; cells?: number;
     const fill = i < c.added ? `fill="${SVG_COLOR.good}"` : i < c.added + c.removed ? `fill="${SVG_COLOR.bad}"` : `fill="#8E8E93" fill-opacity="0.3"`
     return `<rect x="${i * (size + gap)}" y="0" width="${size}" height="${size}" rx="2" ${fill}/>`
   }).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${size}" viewBox="0 0 ${w} ${size}">${rects}</svg>`
+  return svgDoc(w, size, rects)
 }
 
 /** A progress ring (the Quest log's level), as SVG. */
@@ -394,7 +565,7 @@ export function svgRing(input: { fraction: number; size?: number; tone?: Tone })
   const f = Number.isFinite(input.fraction) ? Math.min(1, Math.max(0, input.fraction)) : 0
   const color = SVG_COLOR[input.tone ?? 'accent']
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">${SVG_ROOT_STYLE}` +
     `<circle cx="${s / 2}" cy="${s / 2}" r="${r.toFixed(1)}" fill="none" stroke="#8E8E93" stroke-opacity="0.3" stroke-width="4"/>` +
     `<circle cx="${s / 2}" cy="${s / 2}" r="${r.toFixed(1)}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${s / 2} ${s / 2})"/>` +
     `</svg>`

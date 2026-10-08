@@ -7,6 +7,12 @@
  *   off → armed → pending → requested → handoff → verifying → clearing → resuming → armed
  *                                                    ↘ compacting ↗
  *   any failure that cannot be recovered automatically → awaiting (START FRESH CONTEXT)
+ *
+ * Every step is moved on by an event, never by a timer: the turn that crossed
+ * the threshold ending, the handoff turn starting (recognised by its prompt)
+ * and ending, the notes checked on disk, the fresh session reported, the
+ * continuation turn starting. A turn that is not Control Room's own (a prompt
+ * the person queued) never moves a handoff step on.
  */
 
 import type { ContinuationMethod } from '../core/settings'
@@ -43,6 +49,16 @@ export type Autopilot = {
   lastError: string | null
 }
 
+/**
+ * Whose turn it is: the person's, Control Room's own handoff, retry or
+ * continuation, another (no typed prompt), or unknown (it began before a
+ * reload of the plugin, so its start was never seen).
+ */
+export type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'other' | 'unknown'
+
+/** A turn that may be the handoff's: its own, or one whose start a reload hid (the handoff carried on across it). */
+const isHandoffTurn = (turn: TurnKind): boolean => turn === 'handoff' || turn === 'retry' || turn === 'unknown'
+
 export type AutopilotConfig = {
   continuation: ContinuationMethod
   fallbackToCompact: boolean
@@ -52,8 +68,11 @@ export type AutopilotConfig = {
 export type AutopilotEvent =
   | { kind: 'configure'; enabled: boolean; threshold: number | null; isClamped: boolean }
   | { kind: 'context'; tokens: number; window: number | undefined; isInTurn: boolean; now: number }
-  | { kind: 'turnComplete'; reason: 'answer' | 'aborted' | 'refusal' | 'error'; now: number }
+  | { kind: 'turnComplete'; reason: 'answer' | 'aborted' | 'refusal' | 'error'; turn: TurnKind; now: number }
+  /** The handoff prompt's turn began (recognised by its text at turn.start). */
   | { kind: 'handoffStarted'; now: number }
+  /** The person started a turn of their own while the fresh context waited for the continuation. */
+  | { kind: 'personTookOver'; now: number }
   | { kind: 'handoffVerified'; isOk: boolean; now: number }
   | { kind: 'clearDone'; now: number }
   | { kind: 'clearFailed'; error: string }
@@ -290,7 +309,8 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         }
         return { model: set(model, { state: 'requested', note: 'Step finished. Starting the handoff' }), effects: [{ kind: 'submitHandoff' }] }
       }
-      if (model.state === 'handoff') {
+      // Only the handoff turn's own end moves the handoff on; a turn the person queued before it does not.
+      if (model.state === 'handoff' && isHandoffTurn(event.turn)) {
         if (event.reason === 'aborted') {
           return {
             model: set(model, { state: 'awaiting', note: 'Handoff interrupted. Resume it when you’re ready' }),
@@ -303,8 +323,16 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
     }
 
     case 'handoffStarted':
-      if (model.state !== 'requested') return { model, effects: none }
-      return { model: set(model, { state: 'handoff', handoffSince: event.now, note: 'Claude is writing the handoff' }), effects: none }
+      // From awaiting too: a reload left the handoff waiting, then its prompt's turn began after all.
+      if (model.state !== 'requested' && model.state !== 'awaiting') return { model, effects: none }
+      return { model: set(model, { state: 'handoff', handoffSince: event.now, lastError: null, note: 'Claude is writing the handoff' }), effects: none }
+
+    case 'personTookOver':
+      if (model.state !== 'resuming') return { model, effects: none }
+      return {
+        model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, note: 'Watching the context' }),
+        effects: none,
+      }
 
     case 'handoffVerified': {
       if (model.state !== 'verifying') return { model, effects: none }

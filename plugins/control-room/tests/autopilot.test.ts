@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { type Autopilot, type AutopilotConfig, type AutopilotEvent, initialAutopilot, isHandoffActive, recordOf, recover, resolveThreshold, step } from '../hooks/features/autopilot'
+import { type Autopilot, type AutopilotConfig, type AutopilotEvent, type TurnKind, initialAutopilot, isHandoffActive, recordOf, recover, resolveThreshold, step } from '../hooks/features/autopilot'
 
 const CFG: AutopilotConfig = { continuation: 'clear', fallbackToCompact: true, autoContinue: true }
 
@@ -16,6 +16,9 @@ function run(events: AutopilotEvent[], cfg: AutopilotConfig = CFG, start: Autopi
 }
 
 const ARM: AutopilotEvent = { kind: 'configure', enabled: true, threshold: 700_000, isClamped: false }
+
+/** A turn ending: by default the person's own, answered. */
+const ended = (now: number, turn: TurnKind = 'person', reason: 'answer' | 'aborted' = 'answer'): AutopilotEvent => ({ kind: 'turnComplete', reason, turn, now })
 
 describe('threshold', () => {
   test('tokens and percentages resolve against the live window', () => {
@@ -42,9 +45,8 @@ describe('state machine', () => {
       ARM,
       { kind: 'context', tokens: 650_000, window: 1_000_000, isInTurn: true, now: 1 },
       { kind: 'context', tokens: 702_000, window: 1_000_000, isInTurn: true, now: 2 },
-      { kind: 'turnComplete', reason: 'answer', now: 3 },
-      { kind: 'handoffStarted', now: 4 },
-      { kind: 'turnComplete', reason: 'answer', now: 5 },
+      ended(3),
+      { kind: 'handoffStarted', now: 4 }, ended(5, 'handoff'),
       { kind: 'handoffVerified', isOk: true, now: 6 },
       { kind: 'clearDone', now: 7 },
       { kind: 'continuationStarted', now: 8 },
@@ -55,7 +57,7 @@ describe('state machine', () => {
   })
 
   test('below the threshold nothing happens', () => {
-    const r = run([ARM, { kind: 'context', tokens: 699_999, window: 1_000_000, isInTurn: true, now: 1 }, { kind: 'turnComplete', reason: 'answer', now: 2 }])
+    const r = run([ARM, { kind: 'context', tokens: 699_999, window: 1_000_000, isInTurn: true, now: 1 }, ended(2)])
     expect(r.model.state).toBe('armed')
     expect(r.effects).toEqual([])
   })
@@ -67,7 +69,7 @@ describe('state machine', () => {
   })
 
   test('an interrupted turn does not start the handoff', () => {
-    const r = run([ARM, { kind: 'context', tokens: 710_000, window: 1_000_000, isInTurn: true, now: 1 }, { kind: 'turnComplete', reason: 'aborted', now: 2 }])
+    const r = run([ARM, { kind: 'context', tokens: 710_000, window: 1_000_000, isInTurn: true, now: 1 }, ended(2, 'person', 'aborted')])
     expect(r.model.state).toBe('pending')
     expect(r.effects).toEqual(['appendPending'])
   })
@@ -76,10 +78,9 @@ describe('state machine', () => {
     const r = run([
       ARM,
       { kind: 'manualHandoff', now: 1 },
-      { kind: 'handoffStarted', now: 2 },
-      { kind: 'turnComplete', reason: 'answer', now: 3 },
+      { kind: 'handoffStarted', now: 2 }, ended(3, 'handoff'),
       { kind: 'handoffVerified', isOk: false, now: 4 },
-      { kind: 'turnComplete', reason: 'answer', now: 5 },
+      ended(5, 'retry'),
       { kind: 'handoffVerified', isOk: false, now: 6 },
     ])
     expect(r.effects).toEqual(['submitHandoff', 'verifyHandoff', 'submitRetry', 'verifyHandoff'])
@@ -88,7 +89,7 @@ describe('state machine', () => {
   })
 
   test('a refused /clear falls back to compaction only when allowed', () => {
-    const toClearing: AutopilotEvent[] = [ARM, { kind: 'manualHandoff', now: 1 }, { kind: 'handoffStarted', now: 2 }, { kind: 'turnComplete', reason: 'answer', now: 3 }, { kind: 'handoffVerified', isOk: true, now: 4 }]
+    const toClearing: AutopilotEvent[] = [ARM, { kind: 'manualHandoff', now: 1 }, { kind: 'handoffStarted', now: 2 }, ended(3, 'handoff'), { kind: 'handoffVerified', isOk: true, now: 4 }]
     const withFallback = run([...toClearing, { kind: 'clearFailed', error: 'refused' }, { kind: 'compactDone', now: 5 }, { kind: 'continuationStarted', now: 6 }])
     expect(withFallback.effects).toEqual(['submitHandoff', 'verifyHandoff', 'clear', 'compact', 'submitContinuation'])
     expect(withFallback.model.state).toBe('armed')
@@ -99,7 +100,7 @@ describe('state machine', () => {
   })
 
   test('compaction is used directly when chosen, and manual mode waits for the person', () => {
-    const path: AutopilotEvent[] = [ARM, { kind: 'manualHandoff', now: 1 }, { kind: 'handoffStarted', now: 2 }, { kind: 'turnComplete', reason: 'answer', now: 3 }, { kind: 'handoffVerified', isOk: true, now: 4 }]
+    const path: AutopilotEvent[] = [ARM, { kind: 'manualHandoff', now: 1 }, { kind: 'handoffStarted', now: 2 }, ended(3, 'handoff'), { kind: 'handoffVerified', isOk: true, now: 4 }]
     expect(run(path, { ...CFG, continuation: 'compact' }).effects.at(-1)).toBe('compact')
     expect(run(path, { ...CFG, continuation: 'manual' }).model.state).toBe('awaiting')
   })
@@ -121,6 +122,41 @@ describe('state machine', () => {
     const pending = run([ARM, { kind: 'context', tokens: 710_000, window: 1_000_000, isInTurn: true, now: 1 }]).model
     expect(step(pending, { kind: 'externalClear' }, CFG).model.state).toBe('armed')
     expect(step(pending, { kind: 'configure', enabled: false, threshold: null, isClamped: false }, CFG).model.state).toBe('off')
+  })
+
+  test('only the handoff turn moves the handoff on: a prompt the person queued in between does not', () => {
+    // The person's queued prompt runs first and ends while the handoff prompt waits behind it.
+    const requested = run([ARM, { kind: 'manualHandoff', now: 1 }, ended(2, 'person')])
+    expect(requested.model.state).toBe('requested')
+    expect(requested.effects).toEqual(['submitHandoff'])
+    // The handoff turn starts (recognised by its prompt); a person's turn ending meanwhile is not its end.
+    const handing = run([{ kind: 'handoffStarted', now: 3 }, ended(4, 'person')], CFG, requested.model)
+    expect(handing.model.state).toBe('handoff')
+    expect(handing.effects).toEqual([])
+    const done = step(handing.model, ended(5, 'handoff'), CFG)
+    expect(done.model.state).toBe('verifying')
+    expect(done.model.handoffSince).toBe(3)
+    // Neither a continuation nor an unrelated turn ends a handoff.
+    expect(step(handing.model, ended(6, 'continuation'), CFG).model.state).toBe('handoff')
+  })
+
+  test('the handoff starts when its own turn begins, also after a reload left it waiting', () => {
+    const awaiting = recover(run([ARM]).model, recordOf(run([ARM, { kind: 'manualHandoff', now: 1 }]).model, 'S1', 2)!, { sessionId: 'S1' }).model
+    expect(awaiting.state).toBe('awaiting')
+    const started = step(awaiting, { kind: 'handoffStarted', now: 3 }, CFG)
+    expect(started.model.state).toBe('handoff')
+    expect(started.model.lastError).toBeNull()
+    // A handoff turn beginning while nothing was asked for changes nothing.
+    expect(step(run([ARM]).model, { kind: 'handoffStarted', now: 4 }, CFG).model.state).toBe('armed')
+  })
+
+  test('the person typing in the fresh context first takes over: no continuation is waited for', () => {
+    const resuming = run([ARM, { kind: 'manualHandoff', now: 1 }, { kind: 'handoffStarted', now: 2 }, ended(3, 'handoff'), { kind: 'handoffVerified', isOk: true, now: 4 }, { kind: 'clearDone', now: 5 }])
+    expect(resuming.model.state).toBe('resuming')
+    const taken = step(resuming.model, { kind: 'personTookOver', now: 6 }, CFG)
+    expect(taken.model.state).toBe('armed')
+    expect(taken.model.completed).toBe(1)
+    expect(step(run([ARM]).model, { kind: 'personTookOver', now: 7 }, CFG).model.completed).toBe(0)
   })
 
   test('handoff states are the ones that suspend the guard', () => {
@@ -145,22 +181,22 @@ describe('a reload mid-handoff', () => {
   })
 
   test('steps that cannot be half-done resume as they were, and the turn under way moves them on', () => {
-    for (const events of [[crossing], [crossing, { kind: 'turnComplete', reason: 'answer', now: 2 }, { kind: 'handoffStarted', now: 3 }]] as AutopilotEvent[][]) {
+    for (const events of [[crossing], [crossing, ended(2), { kind: 'handoffStarted', now: 3 }]] as AutopilotEvent[][]) {
       const before = at(events)
       const back = recover(armed(), recordOf(before, 'S1', 9)!, { sessionId: 'S1' })
       expect(back.model.state).toBe(before.state)
       expect(back.effects).toEqual([])
       expect(back.model.handoffSince).toBe(before.handoffSince)
     }
-    // The handoff turn ends after the reload: the notes are checked, not asked for again.
-    const handoff = recover(armed(), recordOf(at([crossing, { kind: 'turnComplete', reason: 'answer', now: 2 }, { kind: 'handoffStarted', now: 3 }]), 'S1', 9)!, { sessionId: 'S1' }).model
-    expect(step(handoff, { kind: 'turnComplete', reason: 'answer', now: 4 }, CFG).effects.map(e => e.kind)).toEqual(['verifyHandoff'])
+    // The handoff turn ends after the reload (its start was never seen): the notes are checked, not asked for again.
+    const handoff = recover(armed(), recordOf(at([crossing, ended(2), { kind: 'handoffStarted', now: 3 }]), 'S1', 9)!, { sessionId: 'S1' }).model
+    expect(step(handoff, ended(4, 'unknown'), CFG).effects.map(e => e.kind)).toEqual(['verifyHandoff'])
     // Context still above the threshold after the reload never starts a second handoff.
     expect(step(handoff, { kind: 'context', tokens: 800_000, window: 1_000_000, isInTurn: true, now: 5 }, CFG).effects).toEqual([])
   })
 
   test('a check or a clear that was owed is carried out; an unsure step waits for the person', () => {
-    const verifying = at([crossing, { kind: 'turnComplete', reason: 'answer', now: 2 }, { kind: 'handoffStarted', now: 3 }, { kind: 'turnComplete', reason: 'answer', now: 4 }])
+    const verifying = at([crossing, ended(2), { kind: 'handoffStarted', now: 3 }, ended(4, 'handoff')])
     expect(recover(armed(), recordOf(verifying, 'S1', 9)!, { sessionId: 'S1' }).effects.map(e => e.kind)).toEqual(['verifyHandoff'])
     const clearing = step(verifying, { kind: 'handoffVerified', isOk: true, now: 5 }, CFG).model
     expect(recover(armed(), recordOf(clearing, 'S1', 9)!, { sessionId: 'S1' }).effects.map(e => e.kind)).toEqual(['clear'])

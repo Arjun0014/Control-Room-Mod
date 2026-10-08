@@ -59,6 +59,11 @@ This page lists them and how to check your work.
   runs on Claude Code's drawing thread: it never touches `$`, imports nothing from the plugin, takes
   everything it draws from its props, and posts only plain data. `register.tsx` names it with a
   string literal (`module="./ui/companion.client.tsx"`), as the validator requires.
+- **Never name a local `h` in a `.tsx` module.** JSX compiles to `h(...)`, the environment's
+  factory; a local of that name shadows it and the render hook fails ("h is not a function").
+- **Every SVG goes through `svgDoc` (`ui/theme.ts`)** or carries its root style: Desktop draws an
+  interactive SVG in a sandboxed frame, and without `color-scheme: light dark` the frame is
+  painted with an opaque (white) canvas on a dark page.
 - **One clock per subsystem.** Cache figures are timed by `Runtime.clock()` (the fake host's clock
   in tests), Activity by `Date.now()`, Autopilot by `host.now()`. Mixing them makes tests disagree
   with the views.

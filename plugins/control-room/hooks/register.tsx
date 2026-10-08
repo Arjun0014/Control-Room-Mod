@@ -118,6 +118,7 @@ function hostOf($: EngineInterface): Host {
     loadAutopilotRecord: () => $.state.get(AUTOPILOT).then(read => read.value?.record ?? null),
 
     invalidateDescribes: () => $.ui.invalidate('tool.describe'),
+    trace: text => $.ui.log(text, { to: 'debug' }),
   }
 }
 
@@ -203,8 +204,8 @@ export const register: Register = on => {
   // -------------------------------------------------------------------------
   // Turns
 
-  on('turn.start', ($, e, next) => {
-    rt.onTurnStart({ turnId: e.turnId, text: e.text })
+  on('turn.start', async ($, e, next) => {
+    await rt.onTurnStart({ turnId: e.turnId, text: e.text })
     return next(e)
   })
 
@@ -242,7 +243,8 @@ export const register: Register = on => {
     const block = await rt.onStop({
       stopHookActive: e.stop_hook_active,
       lastMessage: e.last_assistant_message ?? '',
-      backgroundCount: (e.background_tasks ?? []).length,
+      background: e.background_tasks ?? [],
+      wakeups: e.session_crons ?? [],
       permissionMode: e.permission_mode,
     })
     return block === null ? answer : { ...answer, block }
@@ -355,7 +357,7 @@ export const register: Register = on => {
     let stage: RenderElement | null = null
     if (hud.companion !== null && e.surface === 'terminal') {
       const { Client } = $.ui.resolve(e)
-      stage = <Client key="companion" module="./ui/companion.client.tsx" props={hud.companion} height={2} flexGrow={1} />
+      stage = <Client key="companion" module="./ui/companion.client.tsx" props={hud.companion} height={5} flexGrow={1} />
     }
     const own = hudView(kitOf($.ui.resolve(e), e.props.bodyColumns, e.surface), hud, stage)
     if (below.type === 'engine') return own

@@ -126,10 +126,10 @@ describe('ui', () => {
         expect(await ui.find({ text: /68%/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ text: /\$1\.25/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open' }), `${surface} ${columns}`).toBeDefined()
-        // Labels only where there is room for them, the run's cost among them.
-        const isLabelled = columns >= (surface === 'terminal' ? 100 : 70)
-        expect((await ui.find({ text: /Context/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
-        expect((await ui.find({ text: /Run/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
+        // Names only where there is room for them, the run's cost among them.
+        const isLabelled = columns >= (surface === 'terminal' ? 72 : 64)
+        expect((await ui.find({ text: /CONTEXT/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
+        expect((await ui.find({ text: /RUN/ })) !== undefined, `${surface} ${columns}`).toBe(isLabelled)
         await ui.unmount()
       }
     }
@@ -146,7 +146,7 @@ describe('ui', () => {
     await $.command.run({ command: 'cr', args: 'profile frontier', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
     const busy = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
-    expect(await busy.find({ text: /Context/ })).toBeDefined()
+    expect(await busy.find({ text: /CONTEXT/ })).toBeDefined()
     expect(await busy.find({ text: /Frontier Max/ })).toBeUndefined()
     expect(await busy.find({ text: /Hands off/ })).toBeUndefined()
   })
@@ -156,12 +156,12 @@ describe('ui', () => {
     on('ui.render', { component: 'AbovePrompt' }, () => ENGINE_ROW)
     await boot($, w)
     const survey = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: { ...bandProps(100), hasSurvey: true } })
-    expect(await survey.find({ text: /Context/ })).toBeUndefined()
+    expect(await survey.find({ text: /CONTEXT/ })).toBeUndefined()
     await survey.unmount()
     await $.command.run({ command: 'cr', args: 'hud status', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } })
     await w.clock.advance(300)
     const hidden = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(100) })
-    expect(await hidden.find({ text: /Context/ })).toBeUndefined()
+    expect(await hidden.find({ text: /CONTEXT/ })).toBeUndefined()
     expect(w.kept.statuses.some(s => s !== undefined && s.startsWith('◆ Context'))).toBe(true)
   })
 
@@ -509,27 +509,27 @@ describe('ui', () => {
     await w.clock.advance(300)
     const wide = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const line = textOf(await wide.drawn())
-    // Two layers: what Claude is doing on top, with the milestone it serves; the readings below.
-    expect(line).toContain('Running regression tests')
-    // The line names the milestone in its own words, so the right says only where it sits.
-    expect(line).toContain('Milestone 3 of 4')
+    // The headline: what Claude is doing in its own words, then where the milestone sits; the instruments below.
+    expect(line).toContain('Running regression tests · step 3 of 4')
     expect(line).not.toContain('C · 3 of 4')
-    expect(line.indexOf('Running regression tests')).toBeLessThan(line.indexOf('Context'))
-    expect(line).toContain('Context ━')
-    expect(line).toContain('Work ●─●─◉─○ 2/4')
-    expect(line).toContain('Run $1.25')
+    expect(line.indexOf('Running regression tests')).toBeLessThan(line.indexOf('CONTEXT'))
+    // Work is a track of stops, Context a meter of segments: two shapes that cannot be confused.
+    expect(line).toContain('WORK ●━●━◉─○ 2/4')
+    expect(line).toContain('CONTEXT ▇')
+    expect(line).toContain('RUN $1.25')
     await wide.unmount()
-    // Narrow: no labels, the meters stay apart by shape.
+    // Narrow: no names, the instruments stay apart by shape.
     const narrow = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(48) })
     const small = textOf(await narrow.drawn())
-    expect(small).not.toContain('Context')
-    expect(small).toContain('2/4')
+    expect(small).not.toContain('CONTEXT')
+    expect(small).toContain('◉─○ 2/4')
+    expect(small).toContain('▇')
     expect(small).toContain('30%')
     await narrow.unmount()
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     expect(await desktop.find({ type: 'Svg' })).toBeDefined()
     expect(textOf(await desktop.drawn())).toContain('2/4')
-    expect(textOf(await desktop.drawn())).toContain('Context')
+    expect(textOf(await desktop.drawn())).toContain('CONTEXT')
     await desktop.unmount()
   })
 
@@ -554,18 +554,14 @@ describe('ui', () => {
     const after = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const text = textOf(await after.drawn())
     expect(text).toContain('Ran tests once, passing · lint once, failing')
-    expect(text).toContain('Checks')
-    expect(text).toContain('✓ Tests')
-    expect(text).toContain('✗ Lint')
-    // The failing lint is shown once, as a check, not again as an issue.
+    // What needs a look is a chip on the right: the failing check by name, shown once, not again as an issue.
+    expect(text).toContain('✗ Lint failing')
     expect(text).not.toContain('issue')
+    expect(text).not.toContain('Tests failing')
     await after.unmount()
-    // Docked beside the panel: no labels, but the checks keep their names while they fit.
+    // Docked beside the panel: the chip still fits.
     const docked = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(79) })
-    const narrow = textOf(await docked.drawn())
-    expect(narrow).not.toContain('Checks')
-    expect(narrow).toContain('✓ Tests')
-    expect(narrow).toContain('✗ Lint')
+    expect(textOf(await docked.drawn())).toContain('Lint failing')
   })
 
   test('the spinner carries the activity summary while a turn runs', async ($, on) => {
@@ -630,7 +626,7 @@ describe('ui', () => {
       await ui.unmount()
     }
     const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
-    expect(textOf(await band.drawn())).toContain('★ Lv 1 50 XP')
+    expect(textOf(await band.drawn())).toContain('★ Lv 1')
   })
 
   test('Context draws the run as columns, one per session, against the handoff line', async ($, on) => {
@@ -711,7 +707,7 @@ describe('ui', () => {
     await ui.unmount()
     // The status bar names the costly rebuild for a few minutes, in place of the time left.
     const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
-    expect(textOf(await band.drawn())).toContain('Cache ● rebuilt 300k')
+    expect(textOf(await band.drawn())).toContain('CACHE ● rebuilt 300k')
     await band.unmount()
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     expect((await desktop.find({ type: 'Svg' }))?.props.alt).toBeDefined()
@@ -722,6 +718,7 @@ describe('ui', () => {
     const w = world(on, { tokens: 300_000 })
     w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }
     on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     on('turn.step', async function* ($, e) {
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000, model: e.model } }
@@ -732,7 +729,7 @@ describe('ui', () => {
     const idle = textOf(await before.drawn())
     expect(idle).toContain('Ready')
     expect((await before.find({ type: 'Button', key: 'open' }))?.props.label).toBe('◆ Control Room')
-    expect(idle).not.toContain('Cache')
+    expect(idle).not.toContain('CACHE')
     await before.unmount()
     await $.turn.start({ text: 'go', turnId: 't1' })
     await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
@@ -740,28 +737,35 @@ describe('ui', () => {
     await w.clock.advance(300)
     const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const text = textOf(await band.drawn())
-    expect(text).toContain('Building the parser · Milestone 2 of 3')
-    expect(text).toContain('Run $1.25')
-    expect(text).toContain('Work ●─◉─○ 1/3')
-    expect(text).toMatch(/Cache ● (1h|59m)/)
-    // Line one, then line two: what is happening sits above the lifecycles.
-    expect(text.indexOf('Building the parser')).toBeLessThan(text.indexOf('Context'))
-    expect(text.indexOf('Control Room')).toBeLessThan(text.indexOf('Context'))
-    // The button is bright while the panel is open.
-    expect((await band.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('secondary')
+    expect(text).toContain('Building the parser · step 2 of 3')
+    expect(text).toContain('RUN $1.25')
+    expect(text).toContain('WORK ●━◉─○ 1/3')
+    // While Claude works its requests keep the cache warm: the reading would only be noise.
+    expect(text).not.toContain('CACHE')
+    // The headline, then the instruments: what is happening sits above them.
+    expect(text.indexOf('Building the parser')).toBeLessThan(text.indexOf('CONTEXT'))
+    expect(text.indexOf('Control Room')).toBeLessThan(text.indexOf('CONTEXT'))
+    // The button is a filled control, in the brand color while the panel is open.
+    expect((await band.find({ type: 'Box', key: 'open-chip' }))?.props.backgroundColor).toBe('subtle')
     await $.command.run({ command: 'cr', args: 'open', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
     await band.redraw()
-    expect((await band.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('primary')
+    expect((await band.find({ type: 'Box', key: 'open-chip' }))?.props.backgroundColor).toBe('claude')
     await band.unmount()
-    // Desktop: the three graphics as SVG; the current milestone may pulse.
+    // Desktop: the state's mark, the track and the meter as SVG, each transparent on the app's theme.
     const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const svgs: Node[] = []
     each(await desktop.drawn(), n => void (n.type === 'Svg' ? svgs.push(n) : undefined))
-    expect(svgs.map(s => String(s.props?.alt))).toEqual(['Context 30% used', 'Work: 1 of 3 milestones done', expect.stringContaining('Prompt cache warm')])
-    expect(svgs[1]?.props?.isInteractive).toBe(true)
-    expect(String(svgs[1]?.props?.source)).toContain('<animate')
+    expect(svgs.map(s => String(s.props?.alt))).toEqual(['working', 'Work: 1 of 3 milestones done', 'Context 30% used'])
+    for (const svg of svgs) expect(String(svg.props?.source)).toContain('color-scheme:light dark')
+    expect((await desktop.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('primary')
     await desktop.unmount()
+    // Once the turn ends and the person is away, the cache shows how long it has left.
+    await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+    await w.clock.advance(300)
+    const away = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    expect(textOf(await away.drawn())).toMatch(/CACHE ● (1h|59m) left/)
+    await away.unmount()
   })
 
   test('Overview leads with the run, then Work, Context and Cache, each with how it starts over', async ($, on) => {
@@ -811,15 +815,19 @@ describe('ui', () => {
       })
       return left
     }
-    // Claude starts work on a milestone: Kit trots along its row.
+    // Claude starts a turn and thinks: Kit paces its lane.
     await $.turn.start({ text: 'Build the parser.', turnId: 't1' })
+    await w.clock.advance(300)
+    await band.redraw()
+    expect(((await band.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('think')
+    const before = await where()
+    await band.advance(12_000)
+    expect(await where()).not.toBe(before)
+    // It works on a milestone: busy in one place.
     await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
     await w.clock.advance(300)
     await band.redraw()
     expect(((await band.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('work')
-    const before = await where()
-    await band.advance(8000)
-    expect(await where()).not.toBe(before)
     // A click on Kit opens Control Room.
     await band.pointer({ type: 'down', x: 1, y: 0, button: 'left' })
     await w.clock.advance(300)
@@ -851,6 +859,56 @@ describe('ui', () => {
     await pane.press({ key: 'ui-companion' })
     await w.clock.advance(2000)
     expect(saved(w).ui).toMatchObject({ companion: false, reducedMotion: true })
+  })
+
+  test('panel hierarchy: Setup lists the most telling changes first, Guardrails groups permissions, Now is what Claude is doing', async ($, on) => {
+    const w = world(on, {
+      tokens: 300_000,
+      settings: {
+        autopilot: { enabled: true, thresholdPercent: 60 },
+        frontier: { enabled: true },
+        guard: { enabled: true },
+        qa: { enabled: true },
+        resources: { level: 'medium' },
+        subagents: { mode: 'block' },
+        focus: { enabled: false },
+        answers: { style: 'brief' },
+      },
+    })
+    await boot($, w)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      await ui.press({ key: 'tab-setup' })
+      await w.clock.advance(300)
+      let text = textOf(await ui.drawn())
+      expect(text, surface).toContain('CHANGED FROM NORMAL')
+      // Autopilot and Frontier Max before presentation; four shown, then a way to all of them.
+      expect(text, surface).toContain('Hand off at')
+      expect(text, surface).not.toContain('Focus')
+      expect(String((await ui.find({ type: 'Button', key: 'changes-all' }))?.props.label), surface).toMatch(/^View all \d+/)
+      expect(text, surface).not.toMatch(/and \d+ more/)
+      await ui.press({ key: 'changes-all' })
+      await w.clock.advance(300)
+      text = textOf(await ui.drawn())
+      expect(String((await ui.find({ type: 'Button', key: 'changes-all' }))?.props.label), surface).toMatch(/^Show fewer/)
+      expect(text.indexOf('Hand off at'), surface).toBeLessThan(text.indexOf('Focus'))
+      await ui.press({ key: 'changes-all' })
+      await w.clock.advance(300)
+      // Guardrails: the permissions in groups a person thinks in.
+      await ui.press({ key: 'tab-guardrails' })
+      await w.clock.advance(300)
+      text = textOf(await ui.drawn())
+      const order = ['PROJECT', 'Project edits', 'NETWORK', 'Network access', 'GIT', 'Git push', 'EXTERNAL', 'Deploy', 'SAFETY', 'Dangerous commands']
+      for (let i = 1; i < order.length; i++) expect(text.indexOf(order[i - 1]!), `${surface}: ${order[i]}`).toBeLessThan(text.indexOf(order[i]!))
+      // Overview: Now is what Claude is doing; the machine's readings sit with Guardrails.
+      await ui.press({ key: 'tab-overview' })
+      await w.clock.advance(300)
+      text = textOf(await ui.drawn())
+      const now = text.slice(text.indexOf('NOW'), text.indexOf('BEHAVIOR'))
+      expect(now, surface).toContain('Ready')
+      expect(now, surface).not.toContain('Memory')
+      await ui.unmount()
+    }
   })
 
   test('on Desktop no text of the panel or the status bar trips the app’s monospace rule', async ($, on) => {

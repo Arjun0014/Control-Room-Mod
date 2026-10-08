@@ -42,6 +42,7 @@ import { gitLine } from '../features/git'
 import { ACHIEVEMENTS, levelOf, runQuestOf } from '../features/quest'
 import { type ValidationSummary, summarize } from '../features/validation'
 import { answerStyleLabel } from '../core/answers'
+import { LONG_CALL_MS, chipsOf, headlineOf, runNowOf, trackOf } from './headline'
 import type { Runtime } from './runtime'
 
 function contextTone(rt: Runtime): Tone {
@@ -235,27 +236,37 @@ export function hudOf(rt: Runtime): HudModel {
   else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Finishing this step, then handing off', tone: 'warn' }
   const now = Date.now()
   const validation = validationNow(rt, now)
+  const activity = hudActivityOf(rt, now)
+  const failing = validation.filter(v => v.isFailing).map(v => v.label)
+  const attention = barAttentionOf(rt, now)
+  const load = liveLoadOf(rt)
+  const agents = { running: rt.runningSubagents, limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode }
+  const guard = { isOn: s.guard.enabled, continued: rt.guard.turnBlocks }
+  const quest = questHudOf(rt)
+  const summary = activity === null || activity.state !== 'done' ? null : { text: activity.text, durationMs: activity.durationMs, isFailing: failing.length > 0 || attention > 0 }
   return {
     isVisible: s.ui.hud === 'band' || s.ui.hud === 'both',
+    headline: headlineOf(rt, now, summary),
+    chips: chipsOf({ failing, attention, guard, load, agents, quest }),
     isPaneOpen: rt.ui.isPaneOpen,
     ctx: { tokens, window, pct, threshold: s.autopilot.enabled ? rt.autopilot.threshold : null, tone: contextTone(rt) },
     cost: { usd: rt.usage.costUsd ?? null, runUsd: totals?.costUsd ?? null, isRunPartial: totals?.isCostPartial ?? false },
     profile: profileOf(rt),
     frontier: { isOn: s.frontier.enabled, effort: s.frontier.enabled ? (EFFORT_NAME[s.frontier.effort] ?? null) : null },
     autopilot: { isOn: s.autopilot.enabled, state: rt.autopilot.state, text: ap.text, tone: ap.tone },
-    load: liveLoadOf(rt),
-    agents: { running: rt.runningSubagents, limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode },
-    guard: { isOn: s.guard.enabled, continued: rt.guard.turnBlocks },
+    load,
+    agents,
+    guard,
     session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1), handoffs: totals?.handoffs ?? 0 },
     alert,
     work: workOf(rt),
     now: nowLine(rt),
-    failing: validation.filter(v => v.isFailing).map(v => v.label),
-    attention: barAttentionOf(rt, now),
-    activity: hudActivityOf(rt, now),
+    failing,
+    attention,
+    activity,
     checks: validation.map(v => ({ label: v.label, status: v.status })),
-    quest: questHudOf(rt),
-    cache: rt.cache.hud(rt.clock()),
+    quest,
+    cache: rt.cache.hud(rt.clock(), rt.turn.isRunning),
     objective: rt.run?.objective ?? null,
     isAnimated: !s.ui.reducedMotion,
     companion: companionOf(rt, now, validation),
@@ -274,6 +285,8 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   const window = rt.usage.window ?? null
   const ref = threshold ?? (window === null ? null : window * 0.9)
   const load = liveLoadOf(rt)
+  const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'warn' || load.ramTone === 'bad')
+  const cache = rt.cache.hud(rt.clock(), rt.turn.isRunning)
   const mood = moodOf({
     now,
     isWorking: rt.turn.isRunning,
@@ -288,9 +301,14 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
     contextStartedAt: rt.contextStartedAt,
     contextShare: ref === null || rt.usage.tokens === undefined ? null : rt.usage.tokens / ref,
     isKeepingWarm: s.cache.keepWarm && rt.cache.plan.at !== null,
+    isWaiting: rt.lastStop !== null && (rt.lastStop.background.length > 0 || rt.lastStop.wakeups.length > 0 || rt.lastStop.isQuestion) || p.blocked.length > 0 || p.waiting.length > 0,
+    isBusy,
+    isCacheNear: cache !== null && cache.tone === 'warn' && cache.recentMiss === null,
+    isRefreshing: rt.cache.state.keepWarm.lastAt !== null && now - rt.cache.state.keepWarm.lastAt < 60_000,
   })
-  const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'warn' || load.ramTone === 'bad')
-  return animationOf(mood, { isReduced: s.ui.reducedMotion, isBusy })
+  // A machine at its limit holds Kit still: the companion never adds to the load.
+  const isStrained = rt.monitor.pressure.level === 'high' || rt.monitor.pressure.level === 'critical'
+  return animationOf(mood, { isReduced: s.ui.reducedMotion, isBusy, isStrained })
 }
 
 /**
@@ -302,9 +320,6 @@ function barAttentionOf(rt: Runtime, now: number): number {
   const checks = new Set(items.filter(i => i.validation !== null).map(i => i.id))
   return attentionOf(items, now).filter(a => isOpen(a) && !(a.kind === 'failed' && checks.has(a.id))).length
 }
-
-/** A running call is worth timing in the status bar after this long. */
-const LONG_CALL_MS = 20_000
 
 /**
  * The status bar's top line. While a turn runs: what Claude is doing, the
@@ -357,7 +372,7 @@ function questHudOf(rt: Runtime): HudModel['quest'] {
 function workOf(rt: Runtime): HudModel['work'] {
   const p = rt.progress
   if (p.total === 0) return null
-  return { done: p.done, total: p.total, current: p.current === null ? null : (p.current.activeForm ?? p.current.subject) }
+  return { done: p.done, total: p.total, current: p.current === null ? null : (p.current.activeForm ?? p.current.subject), track: trackOf(rt.plan.tasks) }
 }
 
 /** The live status bar for Claude Code's own status line (`/cr hud status`): the run in one line. */
@@ -384,6 +399,7 @@ export function paneOf(rt: Runtime): PaneModel {
   const isBusy = isHandoffActive(a.state) && a.state !== 'pending'
   return {
     tab: rt.ui.tab,
+    showAllChanges: rt.ui.showAllChanges,
     openPicker: rt.ui.openPicker,
     status: statusOf(rt),
     activitySub: rt.ui.activitySub,
@@ -539,10 +555,12 @@ export function missionOf(rt: Runtime): MissionView {
     }
   }
   const totals = rt.run === null ? null : Chain.totals(rt.run, Date.now())
+  const current = runNowOf(rt, Date.now())
   return {
     objective: rt.run?.objective ?? null,
     plan,
-    now: nowLine(rt)?.text ?? null,
+    now: current.text,
+    nowState: current.state,
     next: p.next === null ? null : p.next.subject,
     isWorking: rt.turn.isRunning,
     session: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1),

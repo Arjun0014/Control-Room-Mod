@@ -72,6 +72,12 @@ export function clock(ts: number | undefined | null): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
+/** Local wall-clock time to the second, "09:12:05": for diagnostics, where minutes are too coarse. */
+export function clockSeconds(ts: number | undefined | null): string {
+  if (ts === undefined || ts === null || !Number.isFinite(ts)) return '—'
+  return `${clock(ts)}:${pad2(new Date(ts).getSeconds())}`
+}
+
 /** "Oct 7 09:12" for older timestamps, the clock alone for today. */
 export function when(ts: number | undefined | null, now: number): string {
   if (ts === undefined || ts === null || !Number.isFinite(ts)) return '—'

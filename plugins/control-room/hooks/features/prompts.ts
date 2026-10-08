@@ -71,10 +71,11 @@ export function resourcePolicy(input: {
 export const MILESTONES_TOOL = {
   name: 'milestones',
   description: [
-    'Record the milestones of the work in progress, so the person sees how far the run is (Control Room shows done of total).',
-    'Send the whole list each time: when multi-step work starts, and whenever a milestone starts, is being verified, is blocked or finishes. Keep it to the real steps of the objective, usually 3 to 10; a quick one-step request needs none.',
-    'Mark exactly one milestone in_progress while you work on it, with `doing` in the present tense ("Running regression tests").',
-    'Use verifying for work that is done but still being checked, completed only once it is verified (give `evidence`: what showed it works), and blocked for a milestone that cannot go on without something you cannot do yourself (give `blocker`).',
+    'Record the milestones of the work in progress, so the person sees how far the run is (Control Room shows done of total, and the milestones carry across context handoffs).',
+    'A milestone is an outcome worth reporting, not an action: "Analyse the E-008 results", "Fix the cache scheduler", "Validate the release build", "Document the findings". Never a single read, fetch, search or command ("Read config.ts", "Run npm test", "Fetch the logs"); those are steps inside a milestone.',
+    'Keep 3 to 10 milestones for the whole objective, and send the whole list each time: when multi-step work starts, and whenever a milestone starts, moves to verifying, waits, is blocked or finishes. A quick one-step request needs none.',
+    'Mark exactly one milestone in_progress while you work on it, with `doing`: what you are doing now, in a few present-tense words ("Rewriting the scheduler").',
+    'Use verifying for work that is done but still being checked; completed only once it is verified, with `evidence` (what showed it works). Use waiting for a result that will come by itself (a running job, a scheduled run, a review) and blocked for something only the person can give; for both, say what it waits for in `blocker`.',
   ].join(' '),
   inputSchema: {
     type: 'object',
@@ -89,11 +90,11 @@ export const MILESTONES_TOOL = {
         items: {
           type: 'object',
           properties: {
-            title: { type: 'string', description: 'The milestone, in a few words ("Fix the renderer").' },
-            status: { type: 'string', enum: ['pending', 'in_progress', 'verifying', 'blocked', 'completed'] },
-            doing: { type: 'string', description: 'While in progress or verifying, what you are doing, in the present tense.' },
+            title: { type: 'string', description: 'The outcome, in a few words ("Fix the renderer"), never a single command or file read.' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'verifying', 'waiting', 'blocked', 'completed'] },
+            doing: { type: 'string', description: 'While in progress or verifying: what you are doing now, a few present-tense words ("Rewriting the scheduler").' },
             evidence: { type: 'string', description: 'For verifying or completed: what showed it works, in a few words ("42 of 42 tests pass").' },
-            blocker: { type: 'string', description: 'For blocked: what it is waiting for, in a few words ("needs the API key").' },
+            blocker: { type: 'string', description: 'For waiting or blocked: what it waits for, in a few words ("the S-002 run to finish", "needs the API key").' },
           },
           required: ['title', 'status'],
         },
@@ -106,7 +107,7 @@ export const MILESTONES_TOOL = {
 export function milestonesPolicy(tool: string): string {
   return [
     '## Run progress',
-    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin (the whole list, 3 to 10 real steps, and the objective in a few words), and send the list again each time a milestone starts, moves to verifying, is blocked or finishes. Give the one in progress a short present-tense \`doing\` line. Mark a milestone completed only once it is verified, with its \`evidence\`; mark one blocked, with its \`blocker\`, when it needs something you cannot do yourself. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
+    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin: the objective in a few words and 3 to 10 milestones, each an outcome worth reporting ("Analyse the E-008 results", "Validate the fix"), never a single read, fetch, search or command. Send the whole list again each time a milestone starts, moves to verifying, waits or is blocked, or finishes. Give the one in progress a short present-tense \`doing\` line. Mark a milestone completed only once it is verified, with its \`evidence\`; while it is being checked it is verifying. Mark it waiting when it waits for a result that will come by itself (a running job, a scheduled run) and blocked when it needs something only the person can give, each with its \`blocker\`. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
   ].join('\n')
 }
 
@@ -214,6 +215,24 @@ export function policiesRestoredNotice(changes: readonly string[]): string {
 // ---------------------------------------------------------------------------
 // Context Autopilot: mid-turn notice, handoff, continuation.
 
+/** How each of Control Room's own prompts begins: a turn is recognised as one of them by its text alone. */
+const OWN_PROMPT = {
+  handoff: 'Context Autopilot — final handoff for this context window',
+  retry: 'Control Room could not find an updated',
+  continuation: 'Context Autopilot continuation (session ',
+} as const
+
+/**
+ * Which of Control Room's own prompts a turn began with, if any. Read from
+ * the text alone, so it holds across a reload of the plugin and is never
+ * fooled by a prompt the person queued in between.
+ */
+export function ownPromptKind(text: string): keyof typeof OWN_PROMPT | null {
+  const t = text.trimStart()
+  for (const kind of ['handoff', 'retry', 'continuation'] as const) if (t.startsWith(OWN_PROMPT[kind])) return kind
+  return null
+}
+
 export function pendingNotice(input: { tokens: number; threshold: number; window: number | undefined }): string {
   const of = input.window ? ` of ${fmt.tokens(input.window)}` : ''
   return [
@@ -253,7 +272,7 @@ export function handoffPrompt(input: {
           `   - The run's milestones, first: the canonical record of progress, which Control Room hands to the fresh context. Send the whole list with ${tool.startsWith('mcp__') ? `\`${tool}\`` : tool}: each milestone verified as completed, the one under way in_progress${tool.startsWith('mcp__') ? ' (or verifying, with its evidence), anything blocked with its blocker' : ''}, the rest pending.`,
         ]
   return [
-    `Context Autopilot — final handoff for this context window${used}${where}.`,
+    `${OWN_PROMPT.handoff}${used}${where}.`,
     '',
     'This context will be cleared after this turn and a fresh session will continue the work, with no memory of this conversation beyond what you leave behind. Before that:',
     '',
@@ -269,7 +288,7 @@ export function handoffPrompt(input: {
 }
 
 export function handoffRetryPrompt(handoffFile: string): string {
-  return `Control Room could not find an updated \`${handoffFile}\` at the project root. The context will be cleared next, so this file is the fresh session's only link to this work: create or update it now (at the project root), then end your turn.`
+  return `${OWN_PROMPT.retry} \`${handoffFile}\` at the project root. The context will be cleared next, so this file is the fresh session's only link to this work: create or update it now (at the project root), then end your turn.`
 }
 
 export function continuationContext(input: {
@@ -291,7 +310,13 @@ export function continuationContext(input: {
   if (open.length > 0) {
     const done = milestones.length - open.length
     const tag = (m: { status: string; detail?: string | null }) =>
-      m.status === 'in_progress' ? '[in progress] ' : m.status === 'verifying' ? '[verifying] ' : m.status === 'blocked' ? `[blocked${m.detail ? `: ${m.detail}` : ''}] ` : ''
+      m.status === 'in_progress'
+        ? '[in progress] '
+        : m.status === 'verifying'
+          ? '[verifying] '
+          : m.status === 'blocked' || m.status === 'waiting'
+            ? `[${m.status}${m.detail ? `: ${m.detail}` : ''}] `
+            : ''
     const list = open.map(m => `${tag(m)}${m.subject}`).join('; ')
     lines.push(
       `The run's task list (${done} of ${milestones.length} milestones done) left these open: ${list}. Recreate your task list (or your milestones) from them, checked against the handoff notes, so the run's progress carries on.`,
@@ -302,7 +327,7 @@ export function continuationContext(input: {
 
 export function continuationPrompt(input: { handoffPath: string; sessionNumber: number }): string {
   return [
-    `Context Autopilot continuation (session ${input.sessionNumber}). Start by reading \`${input.handoffPath}\` and the project documentation it refers to, then verify the current state of the work.`,
+    `${OWN_PROMPT.continuation}${input.sessionNumber}). Start by reading \`${input.handoffPath}\` and the project documentation it refers to, then verify the current state of the work.`,
     'Then continue the work autonomously from where the previous session left off.',
     'If the handoff records a decision that genuinely needs the user, ask for it instead of guessing; otherwise keep going.',
   ].join(' ')

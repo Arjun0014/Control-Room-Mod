@@ -20,6 +20,10 @@ export function actionsOf(rt: Runtime): Actions {
       rt.ui.activitySub = sub
       rt.publisher.mark('pane')
     },
+    toggleChanges: () => {
+      rt.ui.showAllChanges = !rt.ui.showAllChanges
+      rt.publisher.mark('pane')
+    },
     toggleGenerated: () => {
       rt.ui.showGenerated = !rt.ui.showGenerated
       rt.publisher.mark('activity')

@@ -292,6 +292,7 @@ export class CacheGuardian {
     this.plan = this.refreshPlan(this.ctx.now())
     this.ctx.changed()
     const plan = this.plan
+    host.trace?.(plan.at === null ? `keep warm: no refresh planned (${plan.reason})` : `keep warm: next refresh at ${new Date(plan.at).toISOString()}${plan.isProbe ? ' (probe)' : ''}`)
     if (plan.at === null) return
     this.timer = host.after(Math.max(1000, plan.at - this.ctx.now()), () => {
       this.timer = null
@@ -324,12 +325,15 @@ export class CacheGuardian {
       if (answered) {
         this.lastError = null
         this.observe({ at, input: u.input_tokens, read: u.cache_read_input_tokens, written: u.cache_creation_input_tokens, model: null, effort: null, isRefresh: true, isProbe: plan.isProbe || isProbe })
+        const k = this.state.keepWarm
+        host.trace?.(`keep warm: refresh ${k.lastHit === true ? 'hit' : 'missed'} · read ${u.cache_read_input_tokens}, wrote ${u.cache_creation_input_tokens}, uncached ${u.input_tokens} · expires ${new Date(Cache.expiresAt(this.state) ?? 0).toISOString()}`)
       } else if (!result.isAnswered) {
         this.lastError = result.reason === 'api-error' ? `The API refused the refresh (${result.error})` : `No reply (${result.reason})`
       }
     }
     // A failed attempt tries again in two minutes while the cache can still be saved.
     if (this.lastError !== null && host !== null) {
+      host.trace?.(`keep warm: refresh failed (${this.lastError}); trying again in 2 min`)
       this.cancel()
       this.timer = host.after(120_000, () => {
         this.timer = null
@@ -380,7 +384,12 @@ export class CacheGuardian {
     }
   }
 
-  hud(now: number): HudModel['cache'] {
+  /**
+   * The cache for the status bar. It shows while it can matter: when the person is away and the
+   * cache is worth keeping (its time left, or that it lapsed), or just after a costly rebuild;
+   * while Claude works, its requests keep the cache warm and the reading would only be noise.
+   */
+  hud(now: number, isTurnRunning = false): HudModel['cache'] {
     const s = this.state
     const warmth = Cache.warmthOf(s, now)
     if (warmth === 'none') return null
@@ -407,6 +416,7 @@ export class CacheGuardian {
       keepWarm: this.ctx.settings().cache.keepWarm && s.keepWarm.verified !== 'no',
       nextRefreshAt: this.plan.at,
       recentMiss: recent === null ? null : { label: Cache.CAUSE_LABEL[recent.cause], recached: recent.recached, severity: recent.severity, at: recent.at },
+      isShown: recent !== null || (!isTurnRunning && s.lastPrefix >= this.ctx.settings().cache.minTokens),
     }
   }
 

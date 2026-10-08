@@ -23,7 +23,7 @@ import { listProfiles } from '../../core/profiles'
 import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
 import { apart, cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, switchControl, textRuns, workTrack } from '../primitives'
-import { ACCENT, G } from '../theme'
+import { ACCENT, G, STATE_MARK } from '../theme'
 import { cacheState, cacheSummary } from './cache'
 import type { PaneData } from './frame'
 
@@ -119,7 +119,7 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
   const cache = pane.cache
   const cacheNow = cacheState(cache, kit.now)
   const lapses = cache.ttl === '5m' ? 'lapses after five idle minutes' : cache.ttl === '1h' ? 'lapses after an idle hour' : 'lapses when left idle'
-  const a = hud.activity
+  const line = hud.headline
   const isLoadHigh = load !== null && (readingTone(load.cpuTone) !== 'normal' || readingTone(load.ramTone) !== 'normal')
   const needsLook = hud.attention + hud.failing.length
 
@@ -177,57 +177,57 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
         accent: ACCENT.context,
         aside: hud.cache === null ? undefined : `${hud.cache.text}`,
         link: go('context'),
-        footer: `Starts over with each fresh context, and ${lapses}.${s.cache.keepWarm ? ' Keep warm holds it while you are away.' : ''}`,
-        rows: k => [
-          cacheClock(k, { key: 'cache-clock', fraction: cacheNow.fraction, tone: cacheNow.tone, text: cacheNow.text, isBold: cache.warmth === 'warm' }),
-          cache.warmth === 'none' ? null : pair(k, { key: 'cache-under', left: cacheSummary(cache, kit.now) }),
-          apart(
-            k,
-            'sys-keepwarm',
-            row(k, {
-              key: 'sys-keepwarm',
-              label: 'Keep warm',
-              control: switchControl(k, { key: 'sys-keepwarm', isOn: s.cache.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
-            }),
-          ),
-        ],
+        footer: cache.warmth === 'none' ? undefined : `Starts over with each fresh context, and ${lapses}.${s.cache.keepWarm ? ' Keep warm holds it while you are away.' : ''}`,
+        rows: k =>
+          cache.warmth === 'none'
+            ? [
+                // Nothing cached yet: one row, the switch beside what the cache will be.
+                row(k, {
+                  key: 'sys-keepwarm',
+                  label: 'Keep warm',
+                  subtitle: 'Nothing cached yet',
+                  control: switchControl(k, { key: 'sys-keepwarm', isOn: s.cache.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
+                }),
+              ]
+            : [
+                cacheClock(k, { key: 'cache-clock', fraction: cacheNow.fraction, tone: cacheNow.tone, text: cacheNow.text, isBold: cache.warmth === 'warm' }),
+                pair(k, { key: 'cache-under', left: cacheSummary(cache, kit.now) }),
+                apart(
+                  k,
+                  'sys-keepwarm',
+                  row(k, {
+                    key: 'sys-keepwarm',
+                    label: 'Keep warm',
+                    control: switchControl(k, { key: 'sys-keepwarm', isOn: s.cache.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
+                  }),
+                ),
+              ],
       })}
 
-      {a === null && needsLook === 0 && load === null
-        ? null
-        : card(kit, {
-            key: 'now',
-            title: 'Now',
-            accent: ACCENT.overview,
-            rows: k => [
-              a === null
-                ? null
-                : listItem(k, {
-                    key: 'now-line',
-                    glyph: a.state === 'working' ? G.run : G.ok,
-                    tone: a.state === 'working' ? 'info' : 'good',
-                    text: a.text,
-                    right: a.state === 'working' ? (a.runningMs === null ? undefined : fmt.duration(a.runningMs)) : a.durationMs === null ? undefined : fmt.duration(a.durationMs),
-                    isDim: a.state === 'working' && a.source === 'thinking',
-                  }),
-              needsLook === 0
-                ? null
-                : row(k, {
-                    key: 'now-attention',
-                    label: hud.failing.length > 0 ? `${hud.failing.join(', ')} failing` : `${fmt.plural(hud.attention, 'call')} need${hud.attention === 1 ? 's' : ''} a look`,
-                    control: link(k, { key: 'now-attention', label: 'Activity', onPress: () => kit.actions.setTab('activity') }),
-                  }),
-              load === null
-                ? null
-                : textRuns(k, 'machine-value', [
-                    { text: k.surface === 'terminal' ? 'Machine   CPU ' : 'Machine · CPU ', tone: 'muted' },
-                    { text: pct(load.cpu), tone: readingTone(load.cpuTone), isBold: load.cpuTone === 'bad' },
-                    { text: k.surface === 'terminal' ? '   Memory ' : ' · Memory ', tone: 'muted' },
-                    { text: pct(load.ram), tone: readingTone(load.ramTone), isBold: load.ramTone === 'bad' },
-                    ...(isLoadHigh ? [{ text: kit.surface === 'terminal' ? '   busy' : ' · busy', tone: 'warn' as const }] : []),
-                  ]),
-            ],
-          })}
+      {card(kit, {
+        key: 'now',
+        title: 'Now',
+        accent: ACCENT.overview,
+        rows: k => [
+          // What Claude is doing, or what the run waits for: the status bar's headline, in full.
+          listItem(k, {
+            key: 'now-line',
+            glyph: STATE_MARK[line.state].glyph,
+            tone: STATE_MARK[line.state].tone,
+            text: line.text,
+            detail: line.detail,
+            isBold: line.state === 'working' || line.state === 'validating' || line.state === 'handoff' || line.state === 'blocked' || line.state === 'waitingUser' || line.state === 'waitingExternal',
+            isDim: line.state === 'ready' || line.state === 'thinking',
+          }),
+          needsLook === 0
+            ? null
+            : row(k, {
+                key: 'now-attention',
+                label: hud.failing.length > 0 ? `${hud.failing.join(', ')} failing` : `${fmt.plural(hud.attention, 'call')} need${hud.attention === 1 ? 's' : ''} a look`,
+                control: link(k, { key: 'now-attention', label: 'Activity', onPress: () => kit.actions.setTab('activity') }),
+              }),
+        ],
+      })}
 
       {card(kit, {
         key: 'profile',
@@ -266,6 +266,15 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
         rows: k => [
           row(k, { key: 'sys-perms', label: 'Permissions', control: link(k, { key: 'sys-perms', label: permissionSummary(s.permissions), onPress: () => kit.actions.setTab('guardrails') }) }),
           row(k, { key: 'sys-agents', label: 'Subagents', control: link(k, { key: 'sys-agents', label: st.subagents.text, onPress: () => kit.actions.setTab('guardrails') }) }),
+          load === null
+            ? null
+            : textRuns(k, 'machine-value', [
+                { text: k.surface === 'terminal' ? 'Machine   CPU ' : 'Machine · CPU ', tone: 'muted' },
+                { text: pct(load.cpu), tone: readingTone(load.cpuTone), isBold: load.cpuTone === 'bad' },
+                { text: k.surface === 'terminal' ? '   Memory ' : ' · Memory ', tone: 'muted' },
+                { text: pct(load.ram), tone: readingTone(load.ramTone), isBold: load.ramTone === 'bad' },
+                ...(isLoadHigh ? [{ text: kit.surface === 'terminal' ? '   busy' : ' · busy', tone: 'warn' as const }] : []),
+              ]),
           row(k, {
             key: 'sys-load',
             label: 'Machine load limit',

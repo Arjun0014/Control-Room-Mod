@@ -101,6 +101,26 @@ describe('prompt cache', () => {
     expect(withTtl(withTtl(s, '5m', 'engine'), '1h', 'observed').ttl?.source).toBe('engine')
   })
 
+  test('a lifetime remembered from an earlier session is a hint the context can correct', () => {
+    // An hour remembered, but this context has the five-minute cache (an API key, usage over the plan).
+    const stored = emptyCache({ ttl: { value: '1h', source: 'stored' } })
+    const s = req(stored, T0, 200_000, 0).state
+    const lapse = req(s, T0 + 20 * MIN, 201_000, 0)
+    expect(lapse.miss?.cause).toBe('expired')
+    expect(lapse.miss?.detail).toBe('Idle 20 min')
+    expect(lapse.state.ttl).toEqual({ value: '5m', source: 'observed' })
+    // A refresh timed by the wrong hour finds the cache gone: the lifetime is corrected, Keep warm is not blamed.
+    const refresh = req(s, T0 + 50 * MIN, 200_000, 0, { isRefresh: true })
+    expect(refresh.state.ttl?.value).toBe('5m')
+    expect(refresh.verdict).toBeNull()
+    // The refresh rebuilt the cache: if the next one, in time on the corrected lifetime, misses too, Keep warm does not work here.
+    const next = req(refresh.state, T0 + 54 * MIN, 200_000, 0, { isRefresh: true })
+    expect(next.verdict).toBe('no')
+    expect(req(refresh.state, T0 + 54 * MIN, 200_200, 199_000, { isRefresh: true }).verdict).toBeNull()
+    // An hour the context proves (a hit after more than five idle minutes) replaces the hint too.
+    expect(req(s, T0 + 9 * MIN, 201_000, 199_000).state.ttl).toEqual({ value: '1h', source: 'observed' })
+  })
+
   test('the refresh lead is a sixth of the TTL, between one and ten minutes', () => {
     expect(leadMs(60 * MIN)).toBe(10 * MIN)
     expect(leadMs(5 * MIN)).toBe(MIN)

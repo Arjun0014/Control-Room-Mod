@@ -8,8 +8,52 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
+Work in progress toward the next release (likely 1.3.0): a verification pass against the live API
+and a redesign of the status bar and Kit. Not yet released; the items below are implemented and
+pass the test suite (232 tests) unless marked otherwise.
+
+### Changed
+
+- **The status bar is a mission HUD.** A headline says what is happening in words, with a mark
+  for its state: working, thinking, running a check, waiting for you, waiting for a result that
+  comes by itself (a background job, a scheduled wake-up, a milestone marked waiting), blocked,
+  handing off, done, all milestones done. On its right, only what needs a look (chips: a failing
+  check, issues, a busy machine, agents), then the Control Room button, drawn as a filled control
+  in the terminal (brand-colored while the panel is open). Under it the instruments: WORK (a track
+  of milestones, each its state), CONTEXT (a solid bar with the handoff point as a notch), CACHE
+  (only while it matters: when you are away, or after a costly rebuild) and the run's cost on the
+  right. A rule marks the HUD's top edge in the terminal.
+- **Kit is redrawn**: larger (18×10 pixels, five terminal rows), a small Claude-orange creature
+  with ears and expressive eyes, fifteen moods (idle glances, pacing while Claude thinks, busy
+  while it works, a magnifier while it reads, watching a check, hopping at a green finish,
+  startled by a failure, a question mark when waiting, sweating on a busy machine, tending a fire
+  while Keep warm holds the cache, fading as the cache nears its expiry, carrying the notes off at
+  a handoff and walking back in with the fresh context). It stands on the HUD's top edge with no
+  box around it; a machine at its limit holds it still.
+- **Panel**: Overview's Now is what Claude is doing (machine readings moved to Guardrails' card);
+  the empty Cache cards are one compact row; Guardrails groups permissions (Project, Network,
+  Git, External, Safety); Setup lists the four most telling changes from the profile, then
+  *View all*; Activity's Now tells idle, waiting for you, waiting for a result, blocked and
+  complete apart.
+- **Milestones** are asked to be outcomes, never single reads or commands, and may be *waiting*
+  (for a result that will come by itself) as well as *blocked* (on the person).
+- `/cr cache` shows the timeline to the second: the last request, the derived expiry, the last
+  refresh (hit or miss, tokens read) and the next one.
+
 ### Fixed
 
+- **Desktop drew a white box behind animated graphics** (Kit's lane, the pulsing milestone): an
+  interactive SVG runs in a sandboxed frame, and a frame whose color scheme differs from the
+  page's is painted opaque. Every SVG now declares `color-scheme: light dark` (checked in
+  Chromium on dark and light pages). Not yet seen in the Desktop app itself.
+- **Autopilot races.** The handoff turn is recognised by the prompt it begins with, so a prompt
+  you queued is never taken for it; the handoff moves on when its own turn starts and ends, not
+  when its prompt was sent; the `/clear` waits for a running turn (one you queued behind the
+  handoff) to end. Every step is traced to Claude Code's debug log (`claude --debug`), never on
+  screen.
+- **Cache Guardian trusted a remembered lifetime.** A lifetime learned in an earlier session is
+  now a hint the current context corrects (an hour remembered, five minutes now), and Keep warm
+  no longer blames itself for a refresh timed by the wrong one.
 - **Tests on Claude Code 2.1.293.** Its test kit stores a `session.append` row itself, and a hook
   must relay what `next(e)` stored; the test world answered the row on its own, so eight
   engine-driven tests failed there. The world now relays it (and still answers on older engines).

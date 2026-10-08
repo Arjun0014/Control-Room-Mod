@@ -105,8 +105,35 @@ export type ControlRoomCustomProfile = { id: string; name: string; createdAt: nu
 
 export type Tone = 'normal' | 'muted' | 'good' | 'warn' | 'bad' | 'accent' | 'info'
 
+/**
+ * What the run is doing now, as the status bar's headline says it: working on a milestone,
+ * thinking, running a check, waiting for the person or for a result that will come by itself (a
+ * background job, a scheduled wake-up), blocked, handing off, the last turn's outcome, or the
+ * whole plan done.
+ */
+export type HudState = 'ready' | 'idle' | 'thinking' | 'working' | 'validating' | 'waitingUser' | 'waitingExternal' | 'blocked' | 'handoff' | 'done' | 'complete' | 'failing'
+
+export type HudHeadline = {
+  state: HudState
+  /** The words: what Claude is doing, or what the run waits for ("Rewriting the cache scheduler"). */
+  text: string
+  /** Quiet context after them: where in the plan, how long ("step 3 of 8 · 2m 14s"). */
+  detail: string | null
+  tone: Tone
+}
+
+/** One stop on the work track: done, the one under way, being verified, waiting or blocked, to come. */
+export type TrackStop = 'done' | 'now' | 'verify' | 'held' | 'open'
+
+/** Something that needs a look, as a chip at the status bar's right ("Tests failing", "RAM 92%"). */
+export type HudChip = { key: string; text: string; tone: Tone }
+
 export type HudModel = {
   isVisible: boolean
+  /** The status bar's first line: what is happening, in words. */
+  headline: HudHeadline
+  /** What needs a look, most pressing first; empty when all is calm. */
+  chips: HudChip[]
   isPaneOpen: boolean
   ctx: { tokens: number | null; window: number | null; pct: number | null; threshold: number | null; tone: Tone }
   cost: { usd: number | null; runUsd: number | null; isRunPartial: boolean }
@@ -121,8 +148,8 @@ export type HudModel = {
   guard: { isOn: boolean; continued: number }
   session: { run: number | null; index: number; handoffs: number }
   alert: { kind: 'pending' | 'awaiting' | 'load'; text: string; tone: Tone } | null
-  /** Run progress from Claude's own task list (milestones done of total); null until it keeps one. */
-  work: { done: number; total: number; current: string | null } | null
+  /** Run progress from Claude's own task list (milestones done of total), one stop per milestone; null until it keeps one. */
+  work: { done: number; total: number; current: string | null; track: TrackStop[] } | null
   /** What Claude is doing right now, while a turn runs. */
   now: { text: string; source: 'plan' | 'tool' | 'thinking' } | null
   /** Checks whose latest run failed ("Tests"). */
@@ -151,16 +178,16 @@ export type HudModel = {
 }
 
 /**
- * Kit, the optional pixel fox: one mood's frames (4 rows of palette letters,
- * '.' see-through, facing right), its palette, its pace, the glyphs beside
- * its head, and what it is doing in words.
+ * Kit, the optional companion: one mood's frames (10 rows of palette letters,
+ * '.' see-through, facing right), its palette, its pace, how it walks, the
+ * glyphs beside its head, and what it is doing in words.
  */
 export type CompanionView = {
   mood: string
   frames: string[][]
   palette: Record<string, string>
   fps: number
-  walk: 'none' | 'slow' | 'normal' | 'fast'
+  walk: 'none' | 'slow' | 'normal' | 'patrol' | 'enter' | 'exit'
   bubbles: { text: string; color: string }[]
   caption: string
 }
@@ -184,6 +211,11 @@ export type HudCache = {
   nextRefreshAt: number | null
   /** A costly miss in the last few minutes that was not an expected rebuild. */
   recentMiss: { label: string; recached: number; severity: 'info' | 'warn'; at: number } | null
+  /**
+   * Whether the status bar shows it: while the person is away and the cache is worth keeping (its
+   * time left, or that it lapsed), or just after a costly rebuild; never while Claude works.
+   */
+  isShown: boolean
 }
 
 export type CacheMissView = {
@@ -276,6 +308,8 @@ export type AgentView = { id: string; type: string; description: string; status:
 
 export type PaneModel = {
   tab: TabId
+  /** Setup lists every change from the profile, not only the most telling few. */
+  showAllChanges: boolean
   /** The expandable picker that is open, by key (terminal and mobile draw choices in place). */
   openPicker: string | null
   /** Each system in plain words, as the HUD, the status line and /cr status say it. */
@@ -404,6 +438,8 @@ export type MissionView = {
     later: number
   } | null
   now: string | null
+  /** What the run is doing or waiting for, as the status bar's headline tells it apart. */
+  nowState: HudState
   next: string | null
   isWorking: boolean
   session: number

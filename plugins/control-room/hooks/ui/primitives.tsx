@@ -200,6 +200,22 @@ export function row(
 }
 
 /**
+ * A group's name inside a card: small, dim and in capitals, so it orders the
+ * rows under it without competing with them. `isSpaced` sets it apart from
+ * the group above.
+ */
+export function subhead(kit: Kit, key: string, title: string, isSpaced = false): RenderElement {
+  const { Box, Text } = kit.ui
+  return (
+    <Box key={`subhead-${key}`} marginTop={isSpaced && kit.surface === 'terminal' ? 1 : 0}>
+      <Text dimColor bold>
+        {title.toUpperCase()}
+      </Text>
+    </Box>
+  )
+}
+
+/**
  * A row set apart from the readings above it: a blank line before it in the
  * terminal (native surfaces space rows themselves), so a switch never sits
  * flush under a meter's figures.

@@ -76,8 +76,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
       kept.submitted.push(text)
       return { text }
     },
-    runCommand: async command => {
-      kept.commands.push(command)
+    clearContext: async () => {
+      kept.commands.push('clear')
       return { text: '' }
     },
     registerCommand: async () => undefined,
@@ -101,6 +101,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     panes: async () => [],
     scrollPaneToTop: async () => void (kept.scrolledToTop += 1),
     ask: async () => 'Deny',
+    checkTool: async () => ({ decision: 'allow' as const }),
     copy: async () => true,
     readText: async () => '',
     stat: async path => {
@@ -116,8 +117,8 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     storeSet: async (key, value) => void (kept.store[key] = JSON.parse(JSON.stringify(value))),
     storeDelete: async key => void delete kept.store[key],
     settings: async () => ({}),
-    spawn: argv => {
-      kept.spawned.push([...argv])
+    spawnSampler: platform => {
+      kept.spawned.push([platform])
       const lines = options.samplerLines ?? []
       async function* gen(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
         for (const line of lines) yield { stream: 'stdout', text: `${line}\n` }
@@ -144,6 +145,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     saveAutopilotRecord: async record => void (kept.autopilotRecord = record === null ? null : JSON.parse(JSON.stringify(record))),
     loadAutopilotRecord: async () => kept.autopilotRecord,
     invalidateDescribes: () => undefined,
+    invalidatePromptContext: () => undefined,
   }
 
   /** Moves the clock, firing due timers in order and letting their work settle. */

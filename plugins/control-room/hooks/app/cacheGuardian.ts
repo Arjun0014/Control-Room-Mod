@@ -403,7 +403,7 @@ export class CacheGuardian {
     // Near the expiry with no refresh coming before it: amber, worth a look.
     const isRefreshing = this.plan.at !== null && expiresAt !== null && this.plan.at < expiresAt
     const isNear = leftMs !== null && ttl !== null && leftMs <= Cache.leadMs(ttl) && !isRefreshing
-    const text = recent !== null ? `rebuilt ${tokensWord(recent.recached)}` : warmth === 'warm' ? (leftMs === null ? 'warm' : leftWords(leftMs)) : warmth === 'cold' ? 'cold' : 'lapsed?'
+    const text = recent !== null ? `rebuilt ${shortCount(recent.recached)}` : warmth === 'warm' ? (leftMs === null ? 'warm' : leftWords(leftMs)) : warmth === 'cold' ? 'cold' : 'lapsed?'
     return {
       warmth,
       ttl: s.ttl?.value ?? null,
@@ -445,7 +445,8 @@ export class CacheGuardian {
   }
 }
 
-const tokensWord = (n: number): string => (n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+/** A count in a few characters: 446k, 1.2M. */
+const shortCount = (n: number): string => (n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 
 /** "52m", "1h", "<1m": the time a warm cache has left, as the status bar says it. */
 export function leftWords(ms: number): string {

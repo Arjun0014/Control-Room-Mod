@@ -12,17 +12,19 @@ import type { PaneModel, PermissionCategory, PermissionState, PermissionsView, R
 import * as fmt from '../../core/format'
 import { DEFAULT_PERMISSIONS, PERMISSION_CATEGORIES, PERMISSION_LABEL } from '../../core/settings'
 import { CATEGORY_INFO } from '../../features/permissions/categories'
-import { statesFor } from '../../features/permissions/decide'
+import { clampState, statesFor } from '../../features/permissions/decide'
 import type { Kit } from '../kit'
-import { buttons, card, footnote, gauge, listItem, note, picker, row, stepper, switchControl } from '../primitives'
+import { buttons, card, footnote, gauge, listItem, note, picker, row, spaced, stepper, switchControl } from '../primitives'
 import { ACCENT, G, readingTone, toneOfLevel } from '../theme'
 
 const STATE: Record<PermissionState, { label: string; hint: string }> = {
   default: { label: 'Default', hint: 'Claude Code decides' },
-  allow: { label: 'Allow', hint: 'answers prompts for you' },
   ask: { label: 'Ask', hint: 'always asks you first' },
   deny: { label: 'Deny', hint: 'never runs' },
 }
+
+/** What became of a call, as the log says it. */
+const OUTCOME_WORD: Record<string, string> = { denied: 'denied', approved: 'you approved', declined: 'you declined', 'refused-heavy': 'held back' }
 
 const LEVELS = [
   { value: 'off', label: 'Off', hint: 'readings only' },
@@ -84,7 +86,7 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
                   key: `perm-${c}`,
                   value: p[c],
                   options: statesFor(c).map(state => ({ value: state, label: STATE[state].label, hint: STATE[state].hint })),
-                  onSelect: v => u(d => void (d.permissions[c] = (statesFor(c).includes(v as PermissionState) ? v : 'ask') as PermissionState)),
+                  onSelect: v => u(d => void (d.permissions[c] = clampState(c, v))),
                 }),
               }),
             ),
@@ -93,7 +95,7 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
       {footnote(kit, {
         key: 'permissions',
         actions: isDefault ? undefined : [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }],
-        text: 'Deny stops an action before any prompt, in every mode. Your organisation’s rules always win. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
+        text: 'Ask always asks you first and Deny always stops an action, in every mode; Claude Code’s own rules still apply after a yes. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
       })}
 
       {recent.length === 0
@@ -106,9 +108,9 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
               recent.slice(0, 6).map((e, i) =>
                 listItem(k, {
                   key: `perm-log-${i}`,
-                  glyph: e.outcome === 'denied' || e.outcome === 'refused-heavy' ? G.fail : e.outcome === 'asked' ? '?' : G.ok,
-                  tone: e.outcome === 'denied' || e.outcome === 'refused-heavy' ? 'bad' : e.outcome === 'asked' ? 'warn' : 'good',
-                  text: `${e.outcome === 'refused-heavy' ? 'held back' : e.outcome}  ${e.evidence}`,
+                  glyph: e.outcome === 'approved' ? G.ok : G.fail,
+                  tone: e.outcome === 'approved' ? 'good' : e.outcome === 'declined' ? 'warn' : 'bad',
+                  text: spaced(kit, [OUTCOME_WORD[e.outcome] ?? e.outcome, e.evidence]),
                   right: fmt.clock(e.at),
                 }),
               ),

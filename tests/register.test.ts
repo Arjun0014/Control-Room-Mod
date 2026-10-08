@@ -97,18 +97,55 @@ describe('register', () => {
     expect(fine.deny).toBeUndefined()
   })
 
-  test('Ask tightens an engine allow; Allow answers an engine ask but never a deny', async ($, on) => {
-    world(on, { settings: withSettings(s => { s.permissions.install = 'allow' }) })
+  test('Ask: Control Room asks first where Claude Code would not ask, never answers a permission check, and a settings deny stands', async ($, on) => {
+    const w = world(on)
     let engine: 'allow' | 'ask' | 'deny' = 'allow'
-    on('tool.check', () => ({ decision: engine, rule: 'Bash' }))
+    const checked: string[] = []
+    on('tool.check', ($, e) => {
+      checked.push(String((e.input as { command?: string }).command))
+      return { decision: engine, rule: 'Bash' }
+    })
     await $.session.start(SESSION)
-    expect((await $.tool.check({ tool: 'Bash', input: { command: 'git push origin main' } })).decision).toBe('ask')
+    // Claude Code would run it without asking: Control Room asks, and a yes passes the call on.
+    w.live.askAnswer = 'Run it'
+    const yes = await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    expect(yes.deny).toBeUndefined()
+    expect(w.kept.asked.length).toBe(1)
+    expect(w.kept.asked[0]).toContain('Git push is set to Ask')
+    expect(checked).toEqual(['git push origin main'])
+    // A no refuses it, and what the person typed reaches Claude.
+    w.live.askAnswer = 'not from main'
+    const no = await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    expect(no.deny).toContain('the user declined "Git push"')
+    expect(no.deny).toContain('The user said: "not from main"')
+    // Claude Code will ask itself: its own dialog is the question, so Control Room adds none.
     engine = 'ask'
-    expect((await $.tool.check({ tool: 'Bash', input: { command: 'npm install zod' } })).decision).toBe('allow')
+    await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    expect(w.kept.asked.length).toBe(2)
+    // Claude Code refuses it (a settings deny): no question, and the call goes on to be refused there.
     engine = 'deny'
-    expect((await $.tool.check({ tool: 'Bash', input: { command: 'npm install zod' } })).decision).toBe('deny')
+    await $.tool.call({ tool: 'Bash', command: 'npm install zod' })
+    expect(w.kept.asked.length).toBe(2)
+    // Default categories are never asked about.
     engine = 'allow'
-    expect((await $.tool.check({ tool: 'Bash', input: { command: 'ls' } })).decision).toBe('allow')
+    const plain = await $.tool.call({ tool: 'Bash', command: 'ls' })
+    expect(plain.deny).toBeUndefined()
+    expect(w.kept.asked.length).toBe(2)
+    // Control Room has no permission check of its own: a query gets Claude Code's verdict unchanged.
+    expect((await $.tool.check({ tool: 'Bash', input: { command: 'git push origin main' } })).decision).toBe('allow')
+    engine = 'deny'
+    expect((await $.tool.check({ tool: 'Bash', input: { command: 'git push origin main' } })).decision).toBe('deny')
+  })
+
+  test('machine load on Windows starts the one fixed sampler command: machine-wide totals, no policy change', async ($, on) => {
+    const w = world(on, { settings: withSettings(s => void (s.resources.level = 'medium')) })
+    await $.session.start({ ...SESSION, cwd: 'C:\\work' })
+    await w.clock.advance(500)
+    const argv = w.kept.spawned[0] ?? []
+    expect(argv.slice(0, 4)).toEqual(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command'])
+    expect(argv[4]).toContain('GetSystemTimes')
+    expect(argv[4]).toContain('$sec=2')
+    expect(argv.join(' ')).not.toContain('ExecutionPolicy')
   })
 
   test('Subagent Control: Off blocks and hides, Max N counts, Ask asks', async ($, on) => {
@@ -209,7 +246,15 @@ describe('register', () => {
     await $.turn.start({ text: framed(handoff), turnId: 't2' })
     await $.turn.complete({ answer: 'Handoff written.', durationMs: 10, isAborted: false, turnId: 't2', reason: 'answer' })
     await w.clock.advance(2000)
-    expect(fresh?.additionalContext?.join(' ')).toContain('fresh context')
+    // The session's start is passed on as Claude Code made it; the fresh context's first message carries the notes.
+    expect(fresh).toBeDefined()
+    expect(fresh?.additionalContext).toBeUndefined()
+    expect(w.kept.invalidated).toContain('prompt.context')
+    const blocks = await $.prompt.context({ blocks: [{ name: 'currentDate', text: 'Today' }] })
+    expect(blocks.blocks.map(b => b.name)).toEqual(['currentDate', 'contextAutopilot'])
+    expect(blocks.blocks[1]?.text).toContain('fresh context')
+    // Once: a later read of the conversation's context (a compaction) carries no stale notes.
+    expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([])
     await w.clock.advance(1000)
     const continuation = w.kept.submitted.find(t => t.includes('Context Autopilot continuation'))
     expect(continuation).toBeDefined()
@@ -246,9 +291,9 @@ describe('register', () => {
 
     await finishReset!()
     await w.clock.advance(1000)
-    expect(fresh?.additionalContext?.join(' ')).toContain('fresh context')
-    const continuation = w.kept.submitted.find(t => t.includes('Context Autopilot continuation'))
-    expect(continuation).toContain('(session 2)')
+    expect(fresh?.additionalContext).toBeUndefined()
+    expect((await $.prompt.context({ blocks: [] })).blocks.map(b => b.text).join(' ')).toContain('fresh context')
+    expect(w.kept.submitted.find(t => t.includes('Context Autopilot continuation'))).toContain('(session 2)')
     const runs = Object.entries(w.store).filter(([k]) => k.startsWith('run.v1.')).map(([, v]) => v as { sessions: { end: string | null }[] })
     expect(runs.at(-1)?.sessions.map(s => s.end)).toEqual(['handoff', null])
   })

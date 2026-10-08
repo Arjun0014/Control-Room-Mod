@@ -37,8 +37,8 @@ function checkItem(kit: Kit, prefix: string, c: HandoffCheckView): RenderElement
   })
 }
 
-export function handoffCard(kit: Kit, h: HandoffView): RenderElement {
-  const aside = `Session ${h.fromSession}${h.toSession === null ? '' : ` → ${h.toSession}`} · ${fmt.clock(h.at)}`
+export function handoffCard(kit: Kit, view: HandoffView): RenderElement {
+  const aside = `Session ${view.fromSession}${view.toSession === null ? '' : ` → ${view.toSession}`} · ${fmt.clock(view.at)}`
   return card(kit, {
     key: 'last-handoff',
     title: 'Last handoff',
@@ -46,16 +46,16 @@ export function handoffCard(kit: Kit, h: HandoffView): RenderElement {
     aside,
     footer: 'Counted from the tool calls Control Room saw, never from what Claude said.',
     rows: k => [
-      pair(k, { key: 'handoff-left', left: 'Left for the fresh context', right: scoreText(h.health) }),
-      ...h.health.map(c => checkItem(k, 'health', c)),
-      h.continuity !== null
-        ? pair(k, { key: 'handoff-picked', left: `Picked up in session ${h.toSession ?? h.fromSession + 1}`, right: scoreText(h.continuity) })
-        : h.isChecking
-          ? note(k, `Picked up: checked when session ${h.toSession ?? h.fromSession + 1}'s first turn ends.`, 'handoff-checking')
-          : h.via === 'compact'
+      pair(k, { key: 'handoff-left', left: 'Left for the fresh context', right: scoreText(view.health) }),
+      ...view.health.map(c => checkItem(k, 'health', c)),
+      view.continuity !== null
+        ? pair(k, { key: 'handoff-picked', left: `Picked up in session ${view.toSession ?? view.fromSession + 1}`, right: scoreText(view.continuity) })
+        : view.isChecking
+          ? note(k, `Picked up: checked when session ${view.toSession ?? view.fromSession + 1}'s first turn ends.`, 'handoff-checking')
+          : view.via === 'compact'
             ? note(k, 'The context was compacted, so the work carried on in the same session.', 'handoff-compact')
             : null,
-      ...(h.continuity ?? []).map(c => checkItem(k, 'continuity', c)),
+      ...(view.continuity ?? []).map(c => checkItem(k, 'continuity', c)),
     ],
   })
 }

@@ -13,6 +13,8 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
   const store: Record<string, unknown> = options.settings === undefined ? {} : { 'settings.v1': options.settings }
   const kept = {
     submitted: [] as string[],
+    /** The context each submitted prompt carried (what Claude reads after it), by the same index. */
+    contexts: [] as string[][],
     appended: [] as string[],
     commandsRun: [] as { command: string; args: string }[],
     registered: [] as string[],
@@ -21,6 +23,7 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
     opened: [] as string[],
     asked: [] as string[],
     spawned: [] as string[][],
+    invalidated: [] as string[],
   }
   const live = {
     sessionId: 'session-1',
@@ -65,8 +68,12 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
   })
   on('prompt.submit', ($, e) => {
     kept.submitted.push(e.text)
+    kept.contexts.push([...(e.context ?? [])])
     return { text: e.text, origin: e.origin }
   })
+
+  // The context blocks of a conversation's first message, as the engine computed them.
+  on('prompt.context', ($, e) => ({ blocks: e.blocks }))
 
   on('agent.list', () => ({ value: [] }))
   on('model.classify', () => ({ value: 'premature' }))
@@ -108,7 +115,10 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
-  on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.invalidate', ($, e) => {
+    kept.invalidated.push(e.event)
+    return { value: undefined }
+  })
   on('ui.open', ($, e) => {
     kept.opened.push(e.id)
     return { value: { isPlaced: true as const } }

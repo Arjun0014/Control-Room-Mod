@@ -65,7 +65,7 @@ export function alertCallout(kit: Kit, data: PaneData): RenderElement | null {
 
 function permissionSummary(p: Record<PermissionCategory, string>): string {
   const count = (state: string) => PERMISSION_CATEGORIES.filter(c => p[c] === state).length
-  const parts = [count('ask') > 0 ? `${count('ask')} ask` : '', count('deny') > 0 ? `${count('deny')} deny` : '', count('allow') > 0 ? `${count('allow')} allow` : ''].filter(Boolean)
+  const parts = [count('ask') > 0 ? `${count('ask')} ask` : '', count('deny') > 0 ? `${count('deny')} deny` : ''].filter(Boolean)
   return parts.length === 0 ? 'Claude Code decides' : parts.join(' · ')
 }
 

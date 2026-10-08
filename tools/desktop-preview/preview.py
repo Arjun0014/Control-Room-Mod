@@ -1,7 +1,8 @@
 """Desktop preview (development only): what the status bar and the panel draw on Claude Desktop, as HTML.
 
 Claude cannot drive the Claude Desktop window, so this renders the same element trees outside the
-app: it copies the plugin into a scratch mod folder with preview.test.ts as its only test, runs it
+app: it copies the plugin into a scratch mod folder with preview.test.ts as its only test (and the
+tests' fixtures from the repository's tests/), runs it
 with `claude plugin test` (the engine mounts the status bar and the panel's pages on the `desktop`
 surface in several states and prints each drawn element tree), and renders those trees as HTML
 with the CSS Desktop's own renderer gives them (read from the app's bundle, 2.26454): a Box is a
@@ -29,7 +30,9 @@ import sys
 import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN = os.path.normpath(os.path.join(HERE, '..', '..', 'plugins', 'control-room'))
+REPO = os.path.normpath(os.path.join(HERE, '..', '..'))
+# The plugin folder the marketplace names; the tests and their fixtures live in the repository's tests/.
+PLUGIN = os.path.normpath(os.path.join(REPO, json.load(open(os.path.join(REPO, '.claude-plugin', 'marketplace.json'), encoding='utf-8'))['plugins'][0]['source']))
 
 # Desktop's row unit: rowGap, marginY and paddingY count half lines (`--engine-row-unit`, .5lh).
 ROW = '.5lh'
@@ -45,7 +48,8 @@ def trees_of(out_dir):
     mod = os.path.join(out_dir, 'mod')
     if os.path.isdir(mod):
         shutil.rmtree(mod)
-    shutil.copytree(PLUGIN, mod, ignore=shutil.ignore_patterns('*.test.ts', '*.test.tsx'))
+    shutil.copytree(PLUGIN, mod)
+    shutil.copytree(os.path.join(REPO, 'tests', 'fixtures'), os.path.join(mod, 'tests', 'fixtures'))
     shutil.copy(os.path.join(HERE, 'preview.test.ts'), os.path.join(mod, 'tests', 'preview.test.ts'))
     run = subprocess.run(['claude', 'plugin', 'test', mod], capture_output=True, text=True, encoding='utf-8', errors='replace', shell=os.name == 'nt')
     trees = []

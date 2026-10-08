@@ -68,7 +68,8 @@ export type Host = {
   compact(instructions: string): Promise<SessionCompactResult>
 
   submit(text: string): Promise<PromptSubmitResult>
-  runCommand(command: string, args?: string): Promise<CommandRunResult>
+  /** Runs /clear (an Autopilot handoff's fresh context): the only slash command Control Room runs. */
+  clearContext(): Promise<CommandRunResult>
   registerCommand(spec: CommandSpec): Promise<unknown>
   listCommands(): Promise<CommandInfo[]>
 
@@ -89,7 +90,10 @@ export type Host = {
   panes(): Promise<readonly UiPane[]>
   /** Brings the top of the Control Room pane into view (after a section change, or "Back to top"). */
   scrollPaneToTop(): Promise<void>
+  /** Asks the person in Claude Code's own question dialog (AskUserQuestion); rejects when dismissed or with nobody to ask. */
   ask(question: string, options: readonly string[], header?: string): Promise<string>
+  /** What Claude Code's own permission check would decide for a call (its rules and the mode), running nothing. */
+  checkTool(tool: string, input: Record<string, unknown>): Promise<{ decision: 'allow' | 'ask' | 'deny'; reason?: string; rule?: string }>
   copy(text: string, surface?: RenderSurface): Promise<boolean>
 
   readText(path: string): Promise<string>
@@ -102,7 +106,8 @@ export type Host = {
 
   settings(source?: 'policy' | 'user' | 'project' | 'local'): Promise<EngineSettings>
 
-  spawn(argv: readonly string[]): SpawnStream
+  /** Starts the machine-wide CPU and memory sampler for the platform: a fixed command, one line every SAMPLER_EVERY_SEC. */
+  spawnSampler(platform: 'windows' | 'macos'): SpawnStream
   /** Whether the session's folder is in a Git repository (its root), else null. */
   repoRoot(): Promise<string | null>
   /** `git status --porcelain=v1 --branch` in the session's folder (read-only; Git runs with repo hooks off). */
@@ -123,6 +128,8 @@ export type Host = {
 
   /** Re-runs agent listings (Subagent Control changed what is offered). */
   invalidateDescribes(): void
+  /** Has the engine ask for a fresh conversation's first-message context blocks again (after Control Room's own /clear). */
+  invalidatePromptContext(): void
 
   /** One line in Claude Code's debug log only (`claude --debug`), never on screen. Absent in tests. */
   trace?(text: string): void

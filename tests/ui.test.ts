@@ -951,7 +951,7 @@ describe('ui', () => {
       await ui.press({ key: 'tab-guardrails' })
       await w.clock.advance(300)
       text = textOf(await ui.drawn())
-      const order = ['PROJECT', 'Project edits', 'NETWORK', 'Network access', 'GIT', 'Git push', 'EXTERNAL', 'Deploy', 'SAFETY', 'Dangerous commands', 'Deny stops an action', 'SUBAGENTS']
+      const order = ['PROJECT', 'Project edits', 'NETWORK', 'Network access', 'GIT', 'Git push', 'EXTERNAL', 'Deploy', 'SAFETY', 'Dangerous commands', 'Ask always asks you first', 'SUBAGENTS']
       for (let i = 1; i < order.length; i++) expect(text.indexOf(order[i - 1]!), `${surface}: ${order[i]}`).toBeLessThan(text.indexOf(order[i]!))
       // Each group is a card of its own, titled in the section's accent: a heading inside a box reads as a row on Desktop.
       for (const id of ['project', 'network', 'git', 'external', 'safety']) {
@@ -1010,7 +1010,7 @@ describe('ui', () => {
       expect(at('card-perm-safety'), surface).toBeLessThan(at('foot-permissions'))
       expect(at('foot-permissions'), surface).toBeLessThan(at('perm-reset'))
       expect(at('perm-reset'), surface).toBeLessThan(at('card-agents'))
-      expect(textOf(await ui.find({ key: 'foot-permissions' })), surface).toContain('Deny stops an action')
+      expect(textOf(await ui.find({ key: 'foot-permissions' })), surface).toContain('Deny always stops an action')
       // Activity: on Desktop the legend's squares are drawn in the strip's own colors.
       await ui.press({ key: 'tab-activity' })
       await w.clock.advance(300)

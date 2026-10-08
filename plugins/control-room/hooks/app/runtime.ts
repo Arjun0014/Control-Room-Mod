@@ -43,7 +43,8 @@ import { groupOf } from '../features/digest'
 import { answerStyleLabel } from '../core/answers'
 import { type GuardAssessment, assessExit, isRepeat } from '../features/guard'
 import * as Guard from '../features/guard'
-import { adjustVerdict, decisionFor, denyMessage, editPathOf, findingsFor, isEditTool, isShellTool } from '../features/permissions/decide'
+import { APPROVE, DECLINE, approvalQuestion, callWords, declineMessage, decisionFor, denyMessage, editPathOf, findingsFor, isEditTool, isOwnQuestionNeeded, isShellTool } from '../features/permissions/decide'
+import type { Decision } from '../features/permissions/categories'
 import * as prompts from '../features/prompts'
 import { type Pressure, gateHeavy, isOver } from '../features/resources/pressure'
 import { heavyKinds, heavyLabel } from '../features/resources/heavy'
@@ -116,7 +117,7 @@ export class Runtime {
   }
   agents = { list: [] as AgentInfo[], spawned: 0, denied: 0, asked: 0, allowAll: false, poll: null as { cancel: () => void } | null }
   permissionLog: PermissionLogEntry[] = []
-  permissionCounts = { denied: 0, asked: 0, allowed: 0 }
+  permissionCounts = { denied: 0, asked: 0 }
   resourceStats = { refused: 0, noticesSent: 0, lastNoticeAt: 0, lastNoticeLevel: 'ok' as string }
   frontier = { lastEffort: null as string | null, isEffortSupported: null as boolean | null }
   compose = { isReached: false, deliveredFallback: false, isLikelyBypassed: false }
@@ -299,8 +300,9 @@ export class Runtime {
         this.settings = loaded.settings
         this.quest = Quest.questOf(await host.storeGet(STORE_KEYS.quest).catch(() => undefined))
         if (loaded.wasRepaired) this.note('Some saved Control Room settings were invalid and were reset to safe defaults.')
-        if (loaded.tightened.length > 0) {
-          this.note(`${loaded.tightened.join(', ')} no longer offer${loaded.tightened.length === 1 ? 's' : ''} Allow, so Claude Code asks first.`)
+        if (loaded.allowRemoved.length > 0) {
+          const names = loaded.allowRemoved.join(', ')
+          this.note(`Allow was removed: ${names} now use${loaded.allowRemoved.length === 1 ? 's' : ''} Default, so Claude Code's own rules decide. To skip those prompts, add allow rules in Claude Code's permissions.`)
           // Saved at once, so the note shows in one session rather than every one.
           this.saveSettings.schedule(this.settings)
         }
@@ -317,7 +319,7 @@ export class Runtime {
     this.publisher.mark('pane')
   }
 
-  get effective(): Effective {
+  effective(): Effective {
     return effective(this.settings, {
       autopilot: this.autopilot.state,
       autopilotThreshold: Autopilot.handoffPoint(this.autopilot),
@@ -418,19 +420,19 @@ export class Runtime {
       this.persistRun()
       this.publisher.mark('activity', 'hud')
     }
-    this.setPlan(Plan.fromMilestones(this.plan, input, session, Date.now()))
+    this.setPlan(Plan.fromMilestones(this.plan(), input, session, Date.now()))
     this.noteWorkStarted()
-    const p = this.progress
+    const p = this.progress()
     return `Recorded: ${p.done} of ${p.total} milestones done${p.current === null ? '' : `, now: ${p.current.subject}`}.`
   }
 
   /** A new run plan from Claude's task list: kept with the run, and in the Quest log, newly finished milestones pay. */
   private setPlan(plan: Plan.Plan): void {
-    if (this.run === null || plan === this.plan) return
-    const before = Plan.progressOf(this.plan)
-    const wasDone = new Set(this.plan.tasks.filter(t => t.status === 'completed').map(t => t.key))
+    if (this.run === null || plan === this.plan()) return
+    const before = Plan.progressOf(this.plan())
+    const wasDone = new Set(this.plan().tasks.filter(t => t.status === 'completed').map(t => t.key))
     this.run = { ...this.run, plan }
-    const after = this.progress
+    const after = this.progress()
     if (this.turn.isRunning && (this.turn.kind === 'handoff' || this.turn.kind === 'retry')) this.handoffTurn.isPlanUpdated = true
     for (const t of plan.tasks) {
       if (t.status === 'completed' && !wasDone.has(t.key)) this.questEvent('milestone', `Milestone: ${t.subject}`, t.key)
@@ -517,7 +519,7 @@ export class Runtime {
     if (existing !== null) {
       this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan), lastHandoff: Handoff.handoffRecordOf(existing.lastHandoff) }
       // Milestones done before this runtime attached are no turn's doing.
-      this.turnStartDone = this.progress.done
+      this.turnStartDone = this.progress().done
       return
     }
     const resumedFrom = this.startSource?.source === 'resume' ? this.startSource.sessionId : null
@@ -535,7 +537,7 @@ export class Runtime {
         now,
       })
     }
-    this.turnStartDone = this.progress.done
+    this.turnStartDone = this.progress().done
     this.persistRun()
   }
 
@@ -584,13 +586,28 @@ export class Runtime {
     this.saveRunLater.schedule(this.run)
   }
 
-  /** classic.SessionStart: the one place a fresh context after /clear can be given context. */
-  async onClassicSessionStart(input: { source: string; sessionId: string; model?: string }): Promise<string[]> {
+  /**
+   * What the fresh context after Control Room's own handoff is told with its first message (the
+   * continuation, or whatever the person types first): the run, the notes, the milestones. It is
+   * one more context block of that message (`prompt.context`), so the session's start is left
+   * exactly as Claude Code made it.
+   */
+  private freshContext: string | null = null
+
+  /** The fresh context's notes, once: the first message after a handoff carries them. */
+  takeFreshContext(): string | null {
+    const text = this.freshContext
+    this.freshContext = null
+    return text
+  }
+
+  /** classic.SessionStart: a session begins (startup, resume, compact) or a fresh context after /clear. */
+  async onClassicSessionStart(input: { source: string; sessionId: string; model?: string }): Promise<void> {
     await this.ensureLoaded()
     if (input.source !== 'clear') {
       this.startSource = { source: input.source, sessionId: input.sessionId }
       if (input.source === 'compact') this.publisher.mark('chain', 'hud')
-      return []
+      return
     }
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
@@ -627,21 +644,22 @@ export class Runtime {
     this.publisher.forgetPublished()
     this.publisher.markAll()
     if (!wasOurs) {
+      this.freshContext = null
       this.stepAutopilot({ kind: 'externalClear' })
-      return []
+      return
     }
     const policies = this.policies().map(s => s.name)
     const sessionNumber = this.run === null ? 1 : (Chain.currentSession(this.run)?.index ?? 1)
-    return [
-      prompts.continuationContext({
-        runNumber: this.run?.number ?? null,
-        sessionNumber,
-        handoffPath: this.handoffPath(),
-        policies,
-        milestones: this.plan.tasks.map(t => ({ subject: t.subject, status: t.status, detail: t.detail })).slice(-30),
-        objective: this.run?.objectiveBy === 'claude' ? this.run.objective : null,
-      }),
-    ]
+    this.freshContext = prompts.continuationContext({
+      runNumber: this.run?.number ?? null,
+      sessionNumber,
+      handoffPath: this.handoffPath(),
+      policies,
+      milestones: this.plan().tasks.map(t => ({ subject: t.subject, status: t.status, detail: t.detail })).slice(-30),
+      objective: this.run?.objectiveBy === 'claude' ? this.run.objective : null,
+    })
+    // The fresh conversation is empty, so asking for its context blocks again costs nothing.
+    this.host?.invalidatePromptContext()
   }
 
   async onSessionEnd(e: SessionEndInput): Promise<void> {
@@ -869,7 +887,7 @@ export class Runtime {
    */
   private recordHandoffHealth(isNotesWritten: boolean): void {
     if (this.run === null) return
-    const p = this.progress
+    const p = this.progress()
     const ctx = { root: this.root, handoffFile: this.settings.autopilot.handoffFile }
     const from = this.handoffTurn.fromTurn
     const changed = from < 0 ? [] : this.activity.changeList().filter(f => f.lastTurn >= from)
@@ -886,7 +904,7 @@ export class Runtime {
         hasPlan: p.total > 0,
         isPlanUpdated: this.handoffTurn.isPlanUpdated,
         current: p.current === null ? null : { key: p.current.key, subject: p.current.subject },
-        isPlanSettled: p.total > 0 && this.plan.tasks.every(t => t.status === 'completed' || Plan.isHeld(t.status)),
+        isPlanSettled: p.total > 0 && this.plan().tasks.every(t => t.status === 'completed' || Plan.isHeld(t.status)),
         next: p.next === null ? null : { subject: p.next.subject },
         isNotesWritten,
         handoffFile: this.settings.autopilot.handoffFile,
@@ -916,15 +934,15 @@ export class Runtime {
     if (run === null || h === undefined || h === null || h.toSession === null || h.continuity !== null) return
     const index = Chain.currentSession(run)?.index ?? 1
     if (h.toSession !== index) return
-    const p = this.progress
+    const p = this.progress()
     const ctx = { root: this.root, handoffFile: this.settings.autopilot.handoffFile }
     const continuity = Handoff.continuityOf(
       {
         handoffFile: this.settings.autopilot.handoffFile,
         reads: this.reads,
         isDoc: path => groupOf(path, ctx) === 'docs',
-        isPlanUpdated: this.plan.session >= index && this.plan.updatedAt !== null,
-        tasks: this.plan.tasks.map(t => ({ key: t.key, subject: t.subject, status: t.status })),
+        isPlanUpdated: this.plan().session >= index && this.plan().updatedAt !== null,
+        tasks: this.plan().tasks.map(t => ({ key: t.key, subject: t.subject, status: t.status })),
         done: p.done,
         current: p.current === null ? null : { key: p.current.key, subject: p.current.subject },
         edits: this.activity.items.filter(i => i.kind === 'edit' && i.status === 'ok' && i.agentId === null).length,
@@ -984,7 +1002,7 @@ export class Runtime {
       this.onOwnClearSeen = null
     }
     try {
-      await host.runCommand('clear')
+      await host.clearContext()
     } catch (error) {
       settle()
       this.stepAutopilot({ kind: 'clearFailed', error: error instanceof Error ? clean(error.message, 160) : String(error) })
@@ -1065,16 +1083,16 @@ export class Runtime {
   }
 
   /** Claude's milestones for this run. */
-  get plan(): Plan.Plan {
+  plan(): Plan.Plan {
     return this.run?.plan ?? Plan.emptyPlan()
   }
 
-  get progress(): Plan.Progress {
-    return Plan.progressOf(this.plan)
+  progress(): Plan.Progress {
+    return Plan.progressOf(this.plan())
   }
 
   private planRoute(text: string): void {
-    const eff = this.effective
+    const eff = this.effective()
     if (!eff.router.isMainLoop) {
       this.router.turnModel = null
       return
@@ -1115,7 +1133,7 @@ export class Runtime {
     this.guard.turnBlocks = 0
     this.guard.lastBlockedAnswer = ''
     this.activity.turnStarted(Date.now())
-    this.turnStartDone = this.progress.done
+    this.turnStartDone = this.progress().done
     if (kind === 'handoff') this.handoffTurn = { fromTurn: this.activity.turn.index, isPlanUpdated: false }
     this.questGreen.clear()
     this.publisher.mark('hud', 'pane', 'activity', 'spinner')
@@ -1131,7 +1149,7 @@ export class Runtime {
   stepRequest(e: TurnStepInput): { model?: string; effort?: TurnStepInput['effort'] } {
     this.composeObserved = true
     const out: { model?: string; effort?: TurnStepInput['effort'] } = {}
-    const eff = this.effective
+    const eff = this.effective()
     const isMain = e.agentId === undefined
     if (isMain && this.router.turnModel !== null && eff.router.isMainLoop && this.router.turnModel !== e.model) {
       out.model = this.router.turnModel
@@ -1283,7 +1301,7 @@ export class Runtime {
       at: Date.now(),
     }
     this.publisher.mark('hud', 'activity')
-    const eff = this.effective
+    const eff = this.effective()
     if (!eff.guard.isActive) return null
     if (this.turn.kind !== 'person' && this.turn.kind !== 'continuation') return null
     const threshold = Autopilot.handoffPoint(this.autopilot)
@@ -1388,6 +1406,14 @@ export class Runtime {
         return refusal
       }
     }
+    if (decision.state === 'ask' && decision.category !== null) {
+      const declined = await this.askFirst(tool, input, decision)
+      if (declined !== null) {
+        this.activity.refused({ id, tool, input, agentId, now: Date.now(), status: 'denied', reason: `Permission Policy: you declined ${PERMISSION_LABEL[decision.category].toLowerCase()}` })
+        this.publisher.mark('activity', 'hud')
+        return declined
+      }
+    }
     this.turn.toolCount += 1
     if (isEdit) this.turn.editCount += 1
     this.activity.started({ id, tool, input, agentId, now: Date.now() })
@@ -1412,7 +1438,7 @@ export class Runtime {
   }
 
   private gateHeavy(command: string): string | null {
-    const ceilings = this.effective.resources.ceilings
+    const ceilings = this.effective().resources.ceilings
     if (ceilings === null || heavyKinds(command).length === 0) return null
     const running = this.activity.runningHeavy()
     const gate = gateHeavy({ pressure: this.monitor.pressure, ceilings, running: running.length })
@@ -1433,7 +1459,7 @@ export class Runtime {
     // Claude's own task list is the run's plan; a subagent's list is its own business.
     if (status === 'ok' && agentId === undefined && Plan.isPlanTool(tool) && this.run !== null) {
       const session = Chain.currentSession(this.run)?.index ?? 1
-      this.setPlan(Plan.applyTool(this.plan, { tool, input, result: result?.result, session, now }))
+      this.setPlan(Plan.applyTool(this.plan(), { tool, input, result: result?.result, session, now }))
     }
     // A fresh context starts working when it records its plan, edits a file or hands work to an agent.
     if (status === 'ok' && agentId === undefined && (Plan.isPlanTool(tool) || isEditTool(tool) || tool === 'Agent' || tool === 'Task')) this.noteWorkStarted()
@@ -1469,30 +1495,39 @@ export class Runtime {
     }
   }
 
-  /** tool.check: the engine's verdict adjusted by the policy (never looser than allowed). */
-  async checkTool(
-    tool: string,
-    input: unknown,
-    verdict: { decision: 'allow' | 'ask' | 'deny'; reason?: string; rule?: string; hook?: string },
-  ): Promise<{ decision: 'allow' | 'ask' | 'deny'; reason?: string; rule?: string; hook?: string }> {
-    await this.ensureLoaded()
-    const record = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {}
-    const path = isEditTool(tool) ? editPathOf(record) : null
-    const inside = path === null ? null : await this.isInsideProject(path)
-    const decision = decisionFor(findingsFor(tool, record, inside), this.settings.permissions)
-    const adjusted = adjustVerdict({ engine: verdict, decision, permissionMode: this.permissionMode })
-    if (decision.category !== null && adjusted.decision !== verdict.decision) {
-      if (adjusted.decision === 'ask') this.permissionCounts.asked += 1
-      if (adjusted.decision === 'allow') this.permissionCounts.allowed += 1
-      this.logPermission({
-        tool,
-        category: decision.category,
-        state: decision.state,
-        evidence: clean(decision.evidence, 120),
-        outcome: adjusted.decision === 'ask' ? 'asked' : adjusted.decision === 'allow' ? 'allowed' : 'denied',
-      })
+  /** The questions Control Room has open for Ask categories, oldest first, while it waits for the person. */
+  pendingApprovals: { id: number; label: string; what: string; since: number }[] = []
+  private approvalSeq = 0
+
+  /**
+   * An Ask category, before the call goes on: unless Claude Code is about to ask the person itself
+   * (or refuses the call anyway), Control Room asks them, in Claude Code's own question dialog. A yes
+   * passes the call on to Claude Code's permission check, so its rules and PreToolUse hooks still
+   * apply after it; anything else refuses the call. Returns the refusal, or null to go on.
+   */
+  private async askFirst(tool: string, input: Record<string, unknown>, decision: Decision): Promise<string | null> {
+    const host = this.host
+    const category = decision.category
+    if (host === null || category === null) return null
+    const engine = await host.checkTool(tool, input).catch(() => null)
+    if (!isOwnQuestionNeeded(engine, this.permissionMode)) return null
+    const what = callWords(tool, input, decision)
+    const id = ++this.approvalSeq
+    this.permissionCounts.asked += 1
+    this.pendingApprovals = [...this.pendingApprovals, { id, label: PERMISSION_LABEL[category], what, since: Date.now() }]
+    this.publisher.mark('hud', 'activity', 'permissions')
+    let answer: string | null
+    try {
+      answer = await host.ask(approvalQuestion(decision, what), [APPROVE, DECLINE], 'Approve')
+    } catch {
+      answer = null
+    } finally {
+      this.pendingApprovals = this.pendingApprovals.filter(p => p.id !== id)
+      this.publisher.mark('hud', 'activity')
     }
-    return adjusted
+    const isApproved = answer === APPROVE
+    this.logPermission({ tool, category, state: 'ask', evidence: clean(what, 120), outcome: isApproved ? 'approved' : 'declined' })
+    return isApproved ? null : declineMessage(decision, answer)
   }
 
   // -------------------------------------------------------------------------
@@ -1533,7 +1568,7 @@ export class Runtime {
       }
     }
     this.agents.spawned += 1
-    const eff = this.effective
+    const eff = this.effective()
     const isWorkflowAgent = (e as { workflow?: unknown }).workflow !== undefined
     if (eff.router.isSubagents && !isWorkflowAgent) {
       const route = routeSubagent({
@@ -1575,7 +1610,7 @@ export class Runtime {
     this.publisher.mark('resources', 'hud')
     if (pressure.level === previous.level) return
     const host = this.host
-    const ceilings = this.effective.resources.ceilings
+    const ceilings = this.effective().resources.ceilings
     if (host === null || ceilings === null) return
     const now = Date.now()
     const isEnteringOver = isOver(pressure) && !isOver(previous)
@@ -1634,7 +1669,7 @@ export class Runtime {
       this.companionTicker = null
     }
     if (host !== null) {
-      const ceilings = this.effective.resources.ceilings
+      const ceilings = this.effective().resources.ceilings
       const isLiveWanted = this.settings.ui.liveLoad && this.settings.ui.hud !== 'off'
       void this.monitor.configure(host, this.cwd || this.root, ceilings, this.settings.resources.intervalSec, isLiveWanted)
     }
@@ -1701,7 +1736,7 @@ export class Runtime {
     }
   }
 
-  get profileLabel(): string {
+  profileLabel(): string {
     return profileLabel(this.settings)
   }
 
@@ -1787,7 +1822,7 @@ export class Runtime {
     this.publisher.mark('activity')
   }
 
-  get runningSubagents(): number {
+  runningSubagents(): number {
     return activeAgents(this.agents.list, true).length
   }
 

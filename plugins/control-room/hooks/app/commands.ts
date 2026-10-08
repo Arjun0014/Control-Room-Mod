@@ -137,10 +137,10 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
     case 'profiles': {
       if (a1 === undefined) {
         const list = listProfiles(rt.settings).map(p => `  ${p.id.padEnd(20)} ${p.name} — ${p.tagline}`)
-        return { text: `Active: ${rt.profileLabel}\n${list.join('\n')}` }
+        return { text: `Active: ${rt.profileLabel()}\n${list.join('\n')}` }
       }
       const name = words.slice(1).join(' ')
-      return rt.applyProfileById(name) ? { text: `Profile ${rt.profileLabel} applied.` } : { text: `No profile named "${name}". Try /cr profile.` }
+      return rt.applyProfileById(name) ? { text: `Profile ${rt.profileLabel()} applied.` } : { text: `No profile named "${name}". Try /cr profile.` }
     }
     case 'autopilot':
     case 'auto': {
@@ -210,7 +210,7 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       } else return { text: 'Usage: /cr resources off|low|medium|high|<cpu>/<ram>' }
       const r = rt.settings.resources
       if (r.level === 'off') return { text: 'Machine load limit off. Readings only.' }
-      const ceilings = rt.effective.resources.ceilings
+      const ceilings = rt.effective().resources.ceilings
       return { text: `Machine load ${r.level.charAt(0).toUpperCase()}${r.level.slice(1)}: ceilings at CPU ${ceilings?.cpu ?? r.cpu}% · RAM ${ceilings?.ram ?? r.ram}%. Claude was told.` }
     }
     case 'agents':

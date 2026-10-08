@@ -8,36 +8,36 @@
 
 import { LIMITS, STORE_KEYS } from '../constants'
 import { type Run, isRun, updateIndex } from '../features/chain'
-import { HIGH_RISK_CATEGORIES, PERMISSION_LABEL, type Settings, normalizeSettings } from '../core/settings'
+import { PERMISSION_CATEGORIES, PERMISSION_LABEL, type Settings, normalizeSettings } from '../core/settings'
 import type { Host } from '../host'
 
 export async function loadSettings(
   host: Host,
-): Promise<{ settings: Settings; isFresh: boolean; wasRepaired: boolean; tightened: string[] }> {
+): Promise<{ settings: Settings; isFresh: boolean; wasRepaired: boolean; allowRemoved: string[] }> {
   const raw = await host.storeGet(STORE_KEYS.settings).catch(() => undefined)
-  if (raw === undefined || raw === null) return { settings: normalizeSettings(undefined), isFresh: true, wasRepaired: false, tightened: [] }
+  if (raw === undefined || raw === null) return { settings: normalizeSettings(undefined), isFresh: true, wasRepaired: false, allowRemoved: [] }
   const settings = normalizeSettings(raw)
-  const { value, tightened } = withHighRiskAsk(raw)
-  return { settings, isFresh: false, wasRepaired: hasChangedValues(value, settings), tightened }
+  const { value, allowRemoved } = withAllowRemoved(raw)
+  return { settings, isFresh: false, wasRepaired: hasChangedValues(value, settings), allowRemoved }
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /**
- * A saved Allow for a category that no longer offers it (deleting files,
- * before 1.0.2) reads as Ask. That is a deliberate tightening, not a repair:
- * it is reported by name, in the settings and in custom profiles alike.
+ * Allow ("answers prompts for you") was removed in 1.4.0. A saved Allow reads as Default, so Claude
+ * Code's own rules decide again: that is a deliberate change, not a repair, and it is reported by
+ * name, in the settings and in custom profiles alike.
  */
-export function withHighRiskAsk(raw: unknown): { value: unknown; tightened: string[] } {
-  if (!isRecord(raw)) return { value: raw, tightened: [] }
-  const tightened = new Set<string>()
+export function withAllowRemoved(raw: unknown): { value: unknown; allowRemoved: string[] } {
+  if (!isRecord(raw)) return { value: raw, allowRemoved: [] }
+  const removed = new Set<string>()
   const fix = (permissions: unknown): unknown => {
     if (!isRecord(permissions)) return permissions
     const out: Record<string, unknown> = { ...permissions }
-    for (const category of HIGH_RISK_CATEGORIES) {
+    for (const category of PERMISSION_CATEGORIES) {
       if (out[category] === 'allow') {
-        out[category] = 'ask'
-        tightened.add(PERMISSION_LABEL[category])
+        out[category] = 'default'
+        removed.add(PERMISSION_LABEL[category])
       }
     }
     return out
@@ -48,7 +48,7 @@ export function withHighRiskAsk(raw: unknown): { value: unknown; tightened: stri
       isRecord(p) && isRecord(p.systems) ? { ...p, systems: { ...p.systems, permissions: fix(p.systems.permissions) } } : p,
     )
   }
-  return { value, tightened: [...tightened] }
+  return { value, allowRemoved: [...removed] }
 }
 
 /** Whether normalising changed a value that was present (missing fields are not repairs). */

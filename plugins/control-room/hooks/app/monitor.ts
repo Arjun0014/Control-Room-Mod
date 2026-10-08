@@ -16,13 +16,12 @@ import {
   type ProcStat,
   type Sample,
   cpuBetween,
-  macArgv,
   parseMacLine,
   parseMeminfo,
   parseProcStat,
   parseWindowsLine,
+  SAMPLER_EVERY_SEC,
   platformOf,
-  windowsArgv,
 } from '../features/resources/sampler'
 import type { Host, SpawnStream } from '../host'
 
@@ -96,17 +95,18 @@ export class ResourceMonitor {
       return
     }
     if (platform === 'windows' || platform === 'macos') {
-      const argv = platform === 'windows' ? windowsArgv(this.interval) : macArgv(this.interval)
-      void this.consume(host, argv, platform, generation, cwd)
+      void this.consume(host, platform, generation, cwd)
       return
     }
     this.fail('unsupported platform: monitoring needs Windows, macOS or Linux')
   }
 
-  private async consume(host: Host, argv: string[], platform: Platform, generation: number, cwd: string): Promise<void> {
+  private async consume(host: Host, platform: 'windows' | 'macos', generation: number, cwd: string): Promise<void> {
     let buffer = ''
+    // The sampler reports every SAMPLER_EVERY_SEC; a reading is taken at the interval the person set.
+    let takenAt = 0
     try {
-      const stream = host.spawn(argv)
+      const stream = host.spawnSampler(platform)
       this.stream = stream
       for await (const chunk of stream) {
         if (generation !== this.generation) break
@@ -118,7 +118,10 @@ export class ResourceMonitor {
           buffer = buffer.slice(i + 1)
           const at = Date.now()
           const sample = platform === 'windows' ? parseWindowsLine(line, at) : parseMacLine(line, at)
-          if (sample !== null) this.push(sample)
+          if (sample !== null && at - takenAt >= this.interval * 1000 - SAMPLER_EVERY_SEC * 500) {
+            takenAt = at
+            this.push(sample)
+          }
         }
         if (buffer.length > 4096) buffer = buffer.slice(-1024)
       }

@@ -10,3 +10,6 @@ Thumbs.db
 
 # Desktop preview output (tools/desktop-preview).
 tools/desktop-preview/out/
+
+# The scratch mod the tests run against (tools/test/mod.mjs).
+/.build/

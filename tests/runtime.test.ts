@@ -81,7 +81,7 @@ describe('runtime', () => {
       { cwd: 'C:\\work', samplerLines: ['P 96 1000000 10000000'] },
     )
     await advance(500)
-    expect(kept.spawned[0]?.[0]).toBe('powershell.exe')
+    expect(kept.spawned[0]?.[0]).toBe('windows')
     expect(rt.monitor.pressure.level).toBe('critical')
     expect(kept.appended.some(t => t.includes('Resource pressure CRITICAL'))).toBe(true)
     expect(await rt.beforeTool('Bash', { command: 'npm run build' }, 'b1', undefined)).toBeNull()
@@ -130,12 +130,14 @@ describe('runtime', () => {
       s.autopilot.enabled = true
     })
     live.sessionId = 'S2'
-    const external = await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S2' })
-    expect(external).toEqual([])
+    await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S2' })
+    expect(rt.takeFreshContext()).toBeNull()
     expect(rt.run?.sessions.map(s => s.end)).toEqual(['clear', null])
     rt.autopilot = { ...rt.autopilot, state: 'clearing' }
-    const ours = await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S3' })
-    expect(ours.join(' ')).toContain('NEXT_SESSION_PROMPT.md')
+    await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S3' })
+    // The fresh context's first message carries the notes, once.
+    expect(rt.takeFreshContext()).toContain('NEXT_SESSION_PROMPT.md')
+    expect(rt.takeFreshContext()).toBeNull()
     expect(rt.run?.sessions.map(s => s.start)).toEqual(['startup', 'clear', 'handoff'])
   })
 
@@ -213,23 +215,37 @@ describe('runtime', () => {
     await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
     expect(rt.settings.frontier.enabled).toBe(true)
     expect(rt.settings.frontier.effort).toBe('max')
-    expect(rt.settings.permissions.dangerous).toBe('ask')
+    // Allow was removed in 1.4.0: a saved one reads as Default (Claude Code decides), never Ask.
+    expect(rt.settings.permissions.dangerous).toBe('default')
     expect(rt.notes.join(' ')).toContain('reset to safe defaults')
   })
 
-  test('a saved Allow for deleting files reads as Ask, is named once, and is saved tightened', async () => {
+  test('a saved Allow reads as Default, in the settings and custom profiles alike, is named once and saved so', async () => {
     const f = fakeHost()
-    const custom = { id: 'fast', name: 'Fast', createdAt: 1, systems: { ...systemsOf(defaultSettings()), permissions: { ...defaultSettings().permissions, delete: 'allow' } } }
-    f.kept.store['settings.v1'] = { ...defaultSettings(), permissions: { ...defaultSettings().permissions, delete: 'allow' }, customProfiles: [custom] }
+    const custom = { id: 'fast', name: 'Fast', createdAt: 1, systems: { ...systemsOf(defaultSettings()), permissions: { ...defaultSettings().permissions, delete: 'allow', install: 'allow' } } }
+    f.kept.store['settings.v1'] = { ...defaultSettings(), permissions: { ...defaultSettings().permissions, delete: 'allow', network: 'allow' }, customProfiles: [custom] }
     const rt = new Runtime()
     rt.bind(f.host)
     await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    expect(rt.settings.permissions.delete).toBe('ask')
-    expect(rt.settings.customProfiles[0]?.systems.permissions.delete).toBe('ask')
-    expect(rt.notes.join(' ')).toContain('Deleting files no longer offers Allow')
-    expect(rt.notes.join(' ')).not.toContain('reset to safe defaults')
+    expect(rt.settings.permissions.delete).toBe('default')
+    expect(rt.settings.permissions.network).toBe('default')
+    expect(rt.settings.customProfiles[0]?.systems.permissions.delete).toBe('default')
+    expect(rt.settings.customProfiles[0]?.systems.permissions.install).toBe('default')
+    const note = rt.notes.join(' ')
+    expect(note).toContain('Allow was removed')
+    expect(note).toContain('Deleting files')
+    expect(note).toContain('Network access')
+    expect(note).toContain('Package installs')
+    expect(note).not.toContain('reset to safe defaults')
     await f.advance(2000)
-    expect((f.kept.store['settings.v1'] as Settings).permissions.delete).toBe('ask')
+    const saved = f.kept.store['settings.v1'] as Settings
+    expect(saved.permissions.delete).toBe('default')
+    expect(saved.customProfiles[0]?.systems.permissions.install).toBe('default')
+    // Saved once: the next session has nothing to say about it.
+    const next = new Runtime()
+    next.bind(f.host)
+    await next.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    expect(next.notes.join(' ')).not.toContain('Allow was removed')
   })
 
   test('a reload in the middle of a handoff carries it on instead of starting a second one', async () => {
@@ -273,7 +289,7 @@ describe('runtime', () => {
     reloaded.bind(host)
     await reloaded.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await advance(200)
-    expect(reloaded.progress.done).toBe(2)
+    expect(reloaded.progress().done).toBe(2)
     expect(Views.activityOf(reloaded).turnSummary.lines.join(' ')).not.toContain('Finished')
   })
 

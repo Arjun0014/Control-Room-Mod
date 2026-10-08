@@ -107,7 +107,7 @@ export function frontierStatus(rt: Runtime): StatusView {
 
 export function guardStatus(rt: Runtime): StatusView {
   if (!rt.settings.guard.enabled) return { text: 'Off', tone: 'muted' }
-  const eff = rt.effective.guard
+  const eff = rt.effective().guard
   if (!eff.isActive) return { text: eff.reason ?? 'Paused', tone: 'muted' }
   if (rt.guard.turnBlocks > 0) return { text: `Kept Claude going ${rt.guard.turnBlocks}× this turn`, tone: 'warn' }
   if (rt.guard.sessionBlocks > 0) return { text: `Kept Claude going ${rt.guard.sessionBlocks}× this session`, tone: 'normal' }
@@ -121,7 +121,7 @@ export function routerStatus(rt: Runtime): StatusView {
 
 export function subagentStatus(rt: Runtime): StatusView {
   const s = rt.settings.subagents
-  const running = rt.runningSubagents
+  const running = rt.runningSubagents()
   const live = running > 0 ? ` · ${running} running` : ''
   switch (s.mode) {
     case 'unrestricted':
@@ -197,7 +197,7 @@ export function runLabelOf(rt: Runtime): string {
 function liveLoadOf(rt: Runtime): HudModel['load'] {
   if (rt.monitor.status === 'off') return null
   const latest = rt.monitor.status === 'live' ? rt.monitor.latest() : null
-  const ceilings = rt.effective.resources.ceilings
+  const ceilings = rt.effective().resources.ceilings
   const cpu = latest?.cpu ?? null
   const ram = latest?.ram ?? null
   return {
@@ -218,7 +218,7 @@ const turnItemsOf = (rt: Runtime): ActivityItem[] => rt.activity.items.filter(i 
 
 const validationNow = (rt: Runtime, now: number): ValidationSummary[] => summarize(rt.activity.validationRuns(), now)
 
-const nowLine = (rt: Runtime) => nowOf({ isTurnRunning: rt.turn.isRunning, running: rt.activity.runningItems(), progress: rt.progress })
+const nowLine = (rt: Runtime) => nowOf({ isTurnRunning: rt.turn.isRunning, running: rt.activity.runningItems(), progress: rt.progress() })
 
 // ---------------------------------------------------------------------------
 // Projections
@@ -240,7 +240,7 @@ export function hudOf(rt: Runtime): HudModel {
   const failing = validation.filter(v => v.isFailing).map(v => v.label)
   const attention = barAttentionOf(rt, now)
   const load = liveLoadOf(rt)
-  const agents = { running: rt.runningSubagents, limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode }
+  const agents = { running: rt.runningSubagents(), limit: s.subagents.mode === 'limit' ? s.subagents.limit : null, mode: s.subagents.mode }
   const guard = { isOn: s.guard.enabled, continued: rt.guard.turnBlocks }
   const quest = questHudOf(rt)
   const summary = activity === null || activity.state !== 'done' ? null : { text: activity.text, durationMs: activity.durationMs, isFailing: failing.length > 0 || attention > 0 }
@@ -280,7 +280,7 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   if (!s.ui.companion || rt.companionFault !== null) return null
   const turn = rt.activity.turn
   const thisTurn = rt.activity.validationRuns().filter(r => r.turn === turn.index)
-  const p = rt.progress
+  const p = rt.progress()
   const threshold = s.autopilot.enabled ? handoffPoint(rt.autopilot) : null
   const window = rt.usage.window ?? null
   const ref = threshold ?? (window === null ? null : window * 0.9)
@@ -329,8 +329,8 @@ function barAttentionOf(rt: Runtime, now: number): number {
 function hudActivityOf(rt: Runtime, now: number): HudModel['activity'] {
   const turn = rt.activity.turn
   if (turn.index === 0 && !rt.turn.isRunning) return null
-  const p = rt.progress
-  const tasks = rt.plan.tasks
+  const p = rt.progress()
+  const tasks = rt.plan().tasks
   const milestone = p.current === null ? null : { subject: p.current.subject, index: tasks.indexOf(p.current) + 1, total: tasks.length }
   if (rt.turn.isRunning) {
     const line = nowLine(rt) ?? { text: 'Thinking', source: 'thinking' as const }
@@ -370,9 +370,9 @@ function questHudOf(rt: Runtime): HudModel['quest'] {
 }
 
 function workOf(rt: Runtime): HudModel['work'] {
-  const p = rt.progress
+  const p = rt.progress()
   if (p.total === 0) return null
-  return { done: p.done, total: p.total, current: p.current === null ? null : (p.current.activeForm ?? p.current.subject), track: trackOf(rt.plan.tasks) }
+  return { done: p.done, total: p.total, current: p.current === null ? null : (p.current.activeForm ?? p.current.subject), track: trackOf(rt.plan().tasks) }
 }
 
 /** The live status bar for Claude Code's own status line (`/cr hud status`): the run in one line. */
@@ -404,7 +404,7 @@ export function paneOf(rt: Runtime): PaneModel {
     status: statusOf(rt),
     activitySub: rt.ui.activitySub,
     settings: rt.settings,
-    profileLabel: rt.profileLabel,
+    profileLabel: rt.profileLabel(),
     runLabel: runLabelOf(rt),
     engine: { version: rt.engineVersion, isSupported: rt.engineVersion === null || versionAtLeast(rt.engineVersion, MIN_ENGINE) },
     surfaces: rt.surfaces,
@@ -441,8 +441,8 @@ export function paneOf(rt: Runtime): PaneModel {
       turn: rt.guard.turnBlocks,
       session: rt.guard.sessionBlocks,
       last: rt.guard.last === null ? null : { verdict: rt.guard.last.verdict, score: rt.guard.last.score, reasons: rt.guard.last.reasons.slice(0, 4), at: rt.guard.last.at },
-      isActive: rt.effective.guard.isActive,
-      reason: rt.effective.guard.reason,
+      isActive: rt.effective().guard.isActive,
+      reason: rt.effective().guard.reason,
     },
     frontier: {
       lastEffort: rt.frontier.lastEffort,
@@ -475,7 +475,7 @@ function handoffOf(rt: Runtime): PaneModel['handoff'] {
 }
 
 export function resourcesOf(rt: Runtime): ResourcesView {
-  const ceilings = rt.effective.resources.ceilings
+  const ceilings = rt.effective().resources.ceilings
   // The newest reading, as the status bar shows it. Pressure (a smoothed
   // window) exists only under ceilings; readings alone still have values.
   const latest = rt.monitor.status === 'live' ? rt.monitor.latest() : null
@@ -538,8 +538,8 @@ export function chainOf(rt: Runtime): ChainView {
 const PLAN_WINDOW = { done: 2, shown: 7 }
 
 export function missionOf(rt: Runtime): MissionView {
-  const p = rt.progress
-  const tasks = rt.plan.tasks
+  const p = rt.progress()
+  const tasks = rt.plan().tasks
   let plan: MissionView['plan'] = null
   if (tasks.length > 0) {
     const done = tasks.filter(t => t.status === 'completed')
@@ -594,7 +594,7 @@ export function activityOf(rt: Runtime): ActivityView {
   const validation = summarize(runs, now)
   const turn = rt.activity.turn
   return {
-    summary: rt.activity.summaryLine({ subagentsRunning: rt.runningSubagents }),
+    summary: rt.activity.summaryLine({ subagentsRunning: rt.runningSubagents() }),
     turn: turn.index,
     sessionTools: rt.activity.sessionTools,
     mission: missionOf(rt),
@@ -605,7 +605,7 @@ export function activityOf(rt: Runtime): ActivityView {
         groupOf: group,
         validation,
         attention,
-        milestonesDone: Math.max(0, rt.progress.done - rt.turnStartDone),
+        milestonesDone: Math.max(0, rt.progress().done - rt.turnStartDone),
       }),
       isRunning: rt.turn.isRunning,
       durationMs: turn.startedAt === null ? null : (turn.endedAt ?? now) - turn.startedAt,
@@ -694,5 +694,5 @@ export function focusOf(rt: Runtime): FocusModel {
 export function spinnerOf(rt: Runtime): SpinnerModel {
   const f = rt.settings.focus
   if (!f.enabled || !f.spinner || !rt.turn.isRunning) return { line: null }
-  return { line: rt.activity.summaryLine({ subagentsRunning: rt.runningSubagents }) }
+  return { line: rt.activity.summaryLine({ subagentsRunning: rt.runningSubagents() }) }
 }

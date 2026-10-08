@@ -4,7 +4,8 @@
  * - Windows: one long-lived PowerShell process. It P/Invokes
  *   GetSystemTimes/GlobalMemoryStatusEx (true interval CPU %, near-zero
  *   steady-state cost) and falls back to CIM queries where Add-Type is not
- *   allowed (constrained language mode).
+ *   allowed (constrained language mode). It runs as `-Command` text, which
+ *   the execution policy does not govern, so it changes no policy.
  * - macOS: one long-lived `top -l 0` for CPU, plus `sysctl
  *   kern.memorystatus_level` (the kernel's memory-free percentage, i.e.
  *   memory pressure) per sample.
@@ -26,48 +27,12 @@ export function platformOf(input: { cwd: string; hasProcStat: boolean; hasMacSys
   return 'unknown'
 }
 
-const WIN_PINVOKE = `$ErrorActionPreference='Stop'
-$sec=[int]$args[0]
-try {
-Add-Type -TypeDefinition @"
-using System; using System.Runtime.InteropServices;
-public static class CrSys {
-  [StructLayout(LayoutKind.Sequential)] public struct FT { public uint L; public uint H; }
-  [StructLayout(LayoutKind.Sequential)] public struct MS { public uint Len; public uint Load; public ulong Total; public ulong Avail; public ulong TP; public ulong AP; public ulong TV; public ulong AV; public ulong AE; }
-  [DllImport("kernel32.dll")] static extern bool GetSystemTimes(out FT i, out FT k, out FT u);
-  [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx(ref MS m);
-  static ulong V(FT f){ return ((ulong)f.H<<32)|f.L; }
-  public static ulong[] Times(){ FT i,k,u; GetSystemTimes(out i,out k,out u); return new ulong[]{V(i),V(k),V(u)}; }
-  public static ulong[] Mem(){ MS m=new MS(); m.Len=(uint)Marshal.SizeOf(typeof(MS)); GlobalMemoryStatusEx(ref m); return new ulong[]{m.Total,m.Avail}; }
-}
-"@
-$a=[CrSys]::Times()
-while ($true) { Start-Sleep -Seconds $sec; $b=[CrSys]::Times(); $idle=$b[0]-$a[0]; $tot=($b[1]-$a[1])+($b[2]-$a[2]); $cpu= if ($tot -gt 0) { [math]::Round(100*($tot-$idle)/$tot,1) } else { 0 }; $m=[CrSys]::Mem(); [Console]::Out.WriteLine("P $cpu $($m[1]) $($m[0])"); [Console]::Out.Flush(); $a=$b }
-} catch {
-$ErrorActionPreference='SilentlyContinue'
-while ($true) { $p=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; $o=Get-CimInstance Win32_OperatingSystem; [Console]::Out.WriteLine("C $p $($o.FreePhysicalMemory) $($o.TotalVisibleMemorySize)"); [Console]::Out.Flush(); Start-Sleep -Seconds $sec }
-}`
-
-export function windowsArgv(intervalSec: number): string[] {
-  return [
-    'powershell.exe',
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-Command',
-    `& { ${WIN_PINVOKE} } ${Math.max(1, Math.round(intervalSec))}`,
-  ]
-}
-
-export function macArgv(intervalSec: number): string[] {
-  const s = Math.max(1, Math.round(intervalSec))
-  return [
-    '/bin/sh',
-    '-c',
-    `top -l 0 -s ${s} -n 0 | while IFS= read -r line; do case "$line" in "CPU usage:"*) echo "M $line ## $(sysctl -n kern.memorystatus_level 2>/dev/null)";; "PhysMem:"*) echo "R $line";; esac; done`,
-  ]
-}
+/**
+ * The samplers report every this many seconds. Their commands are written out in full, as fixed
+ * text, at the one place they are started (`spawnSampler` in register.tsx); the monitor takes a
+ * reading from them at the interval the person set.
+ */
+export const SAMPLER_EVERY_SEC = 2
 
 /** One line of the Windows sampler: `P <cpu%> <availBytes> <totalBytes>` or `C <cpu%> <freeKB> <totalKB>`. */
 export function parseWindowsLine(line: string, at: number): Sample | null {

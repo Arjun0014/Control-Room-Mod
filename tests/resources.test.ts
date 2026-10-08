@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { heavyKinds, isHeavy } from '../hooks/features/resources/heavy'
 import { UNKNOWN, ceilingsOf, evaluate, gateHeavy } from '../hooks/features/resources/pressure'
 import type { Ceilings, Pressure } from '../hooks/features/resources/pressure'
-import { cpuBetween, macArgv, parseMacLine, parseMeminfo, parsePhysMem, parseProcStat, parseWindowsLine, platformOf, windowsArgv } from '../hooks/features/resources/sampler'
+import { cpuBetween, parseMacLine, parseMeminfo, parsePhysMem, parseProcStat, parseWindowsLine, platformOf } from '../hooks/features/resources/sampler'
 
 describe('samplers', () => {
   test('Windows lines: P/Invoke bytes and CIM kilobytes', () => {
@@ -25,13 +25,10 @@ describe('samplers', () => {
     expect(parseMeminfo('MemTotal:       16000000 kB\nMemFree:  1000 kB\nMemAvailable:    4000000 kB\n')).toBe(75)
   })
 
-  test('platform detection and sampler commands', () => {
+  test('platform detection', () => {
     expect(platformOf({ cwd: 'C:\\work', hasProcStat: false, hasMacSystem: false })).toBe('windows')
     expect(platformOf({ cwd: '/home/a', hasProcStat: true, hasMacSystem: false })).toBe('linux')
     expect(platformOf({ cwd: '/Users/a', hasProcStat: false, hasMacSystem: true })).toBe('macos')
-    expect(windowsArgv(5)[0]).toBe('powershell.exe')
-    expect(windowsArgv(5).at(-1)).toContain('GetSystemTimes')
-    expect(macArgv(5).join(' ')).toContain('kern.memorystatus_level')
   })
 })
 

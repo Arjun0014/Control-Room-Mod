@@ -81,10 +81,14 @@ export function endsWithQuestion(text: string): boolean {
 
 export function headlineOf(rt: Runtime, now: number, summary: { text: string; durationMs: number | null; isFailing: boolean } | null): HudHeadline {
   const ap = rt.settings.autopilot.enabled ? rt.autopilot.state : 'off'
-  const p = rt.progress
-  const tasks = rt.plan.tasks
+  const p = rt.progress()
+  const tasks = rt.plan().tasks
   const handoff = HANDOFF_WORDS[ap]
   if (handoff !== undefined) return { state: 'handoff', text: handoff, detail: rt.run === null ? null : `run ${rt.run.number}`, tone: 'accent' }
+
+  // A call set to Ask waits for the person's answer to Control Room's question.
+  const approval = rt.pendingApprovals[0]
+  if (approval !== undefined) return { state: 'waitingUser', text: `Waiting for you to approve: ${approval.label.toLowerCase()}`, detail: approval.what, tone: 'accent' }
 
   if (rt.turn.isRunning) {
     const running = rt.activity.runningItems().filter(i => i.agentId === null)

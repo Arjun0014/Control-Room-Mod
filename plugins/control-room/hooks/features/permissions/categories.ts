@@ -15,8 +15,6 @@ export type CategoryInfo = {
   id: PermissionCategory
   label: string
   description: string
-  /** The loosest state the UI offers. High-risk categories never offer Allow. */
-  loosest: Exclude<PermissionState, 'default'> | 'default'
   examples: string
 }
 
@@ -25,78 +23,67 @@ export const CATEGORY_INFO: Record<PermissionCategory, CategoryInfo> = {
     id: 'install',
     label: 'Package installation',
     description: 'npm/pnpm/yarn/pip/uv/cargo/go/gem/brew/apt/winget installs, npx -y, uvx',
-    loosest: 'allow',
     examples: 'npm install zod · pip install requests',
   },
   network: {
     id: 'network',
     label: 'Internet & network access',
     description: 'WebFetch, WebSearch, curl/wget, ssh/scp, git fetch/pull/clone, gh',
-    loosest: 'allow',
-    examples: 'curl https://… · git pull',
+    examples: 'curl (a web address) · git pull',
   },
   download: {
     id: 'download',
     label: 'Downloading files',
     description: 'curl -o / wget / Invoke-WebRequest -OutFile, git clone, release downloads',
-    loosest: 'allow',
-    examples: 'wget https://…/model.bin',
+    examples: 'wget (a model file) · git clone',
   },
   edit: {
     id: 'edit',
     label: 'Project file changes',
     description: 'Edit, Write and NotebookEdit inside the project',
-    loosest: 'allow',
     examples: 'Edit src/app.ts',
   },
   editOutside: {
     id: 'editOutside',
     label: 'Changes outside the project',
     description: 'Edit, Write and NotebookEdit on paths outside the project root',
-    loosest: 'ask',
     examples: 'Write ~/.bashrc',
   },
   delete: {
     id: 'delete',
     label: 'File deletion',
     description: 'rm, del, Remove-Item, rimraf, git rm, find -delete',
-    loosest: 'ask',
     examples: 'rm -rf dist',
   },
   commit: {
     id: 'commit',
     label: 'Git commits',
     description: 'git commit (including --amend)',
-    loosest: 'allow',
     examples: 'git commit -m "…"',
   },
   push: {
     id: 'push',
     label: 'Git push',
     description: 'git push to any remote (non-force)',
-    loosest: 'ask',
     examples: 'git push origin main',
   },
   gitDestructive: {
     id: 'gitDestructive',
     label: 'Force push & destructive Git',
     description: 'push --force/--delete, reset --hard, clean -f, branch -D, checkout/restore that discard work, stash drop, history rewrites',
-    loosest: 'ask',
     examples: 'git push --force · git reset --hard',
   },
   deploy: {
     id: 'deploy',
     label: 'Deploy & publish',
     description: 'npm/cargo publish, docker push, gh release, vercel/netlify/fly/firebase deploy, kubectl/helm/terraform apply, MCP publish/send/deploy tools',
-    loosest: 'ask',
     examples: 'npm publish · terraform apply',
   },
   dangerous: {
     id: 'dangerous',
     label: 'Dangerous system commands',
-    description: 'recursive deletes of root/home/project root, disk formatting, dd to devices, shutdown, registry deletes, curl | sh',
-    loosest: 'ask',
-    examples: 'rm -rf ~ · curl … | sh',
+    description: 'recursive deletes of root/home/project root, disk formatting, dd to devices, shutdown, registry deletes, a download piped into a shell',
+    examples: 'rm -rf ~ · mkfs on a disk',
   },
 }
 
@@ -159,7 +146,7 @@ const NETWORK_CMDS = new Set([
 function classifyNetwork(cmd: string, args: string[]): string | null {
   if (NETWORK_CMDS.has(cmd)) {
     if (cmd === 'rsync' && !args.some(a => /^[^/\\]*:/.test(a) && !/^[A-Za-z]:[\\/]/.test(a))) return null
-    if (cmd === 'gh' && ['help', '--help', '--version', 'version', 'auth'].includes(lower(args[0]))) return null
+    if (cmd === 'gh' && ['help', '--help', '--version', 'version'].includes(lower(args[0]))) return null
     return cmd
   }
   if (cmd === 'git') {
@@ -338,15 +325,32 @@ export function classifyMcp(tool: string): Finding[] {
 /**
  * The last-resort check a failed hook falls back on: only the unmistakable
  * catastrophes, matched on the raw text, so a crash in the full classifier
- * never lets one through.
+ * never lets one through. A download piped into a shell is found by parts
+ * (a fetcher before a pipe, a shell after it), as the full classifier does.
  */
 const OBVIOUS =
-  /\brm\s+(-[a-z]*\s+)*-[a-z]*r[a-z]*\s+(-[a-z]*\s+)*(\/|\/\*|~|~\/|\$HOME)(\s|$)|\bmkfs(\.\w+)?\b|\bdd\b[^|;&]*\bof=\/dev\/|\bformat\s+[a-z]:|\bRemove-Item\b[^|;&]*-Recurse[^|;&]*\s([A-Za-z]:\\?|~|\$env:USERPROFILE)(\s|$)|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/i
+  /\brm\s+(-[a-z]*\s+)*-[a-z]*r[a-z]*\s+(-[a-z]*\s+)*(\/|\/\*|~|~\/|\$HOME)(\s|$)|\bmkfs(\.\w+)?\b|\bdd\b[^|;&]*\bof=\/dev\/|\bformat\s+[a-z]:|\bRemove-Item\b[^|;&]*-Recurse[^|;&]*\s([A-Za-z]:\\?|~|\$env:USERPROFILE)(\s|$)/i
 
-export const isObviouslyDangerous = (command: string): boolean => OBVIOUS.test(command)
+const FETCHERS = ['curl', 'wget']
+const SHELLS = ['sh', 'bash', 'zsh', 'dash']
 
-/** Strictness order: deny > ask > allow > default. */
-const RANK: Record<PermissionState, number> = { deny: 3, ask: 2, allow: 1, default: 0 }
+/** A download piped straight into a shell, found by its parts: a fetcher left of a pipe, a shell right after it. */
+function isPipedIntoShell(command: string): boolean {
+  const parts = command.split('|')
+  for (let i = 1; i < parts.length; i++) {
+    const left = (parts[i - 1] ?? '').toLowerCase()
+    const right = (parts[i] ?? '').trim().toLowerCase().split(/\s+/)
+    const runner = (right[0] === 'sudo' ? right[1] : right[0])?.replace(/^.*[\\/]/, '')
+    const words = left.split(/[^a-z0-9_.-]+/)
+    if (FETCHERS.some(f => words.includes(f)) && runner !== undefined && SHELLS.includes(runner)) return true
+  }
+  return false
+}
+
+export const isObviouslyDangerous = (command: string): boolean => OBVIOUS.test(command) || isPipedIntoShell(command)
+
+/** Strictness order: deny > ask > default. */
+const RANK: Record<PermissionState, number> = { deny: 2, ask: 1, default: 0 }
 
 export type Decision = {
   state: PermissionState
@@ -360,10 +364,6 @@ export function strictest(findings: readonly Finding[], states: Record<Permissio
   for (const f of findings) {
     const state = states[f.category]
     if (RANK[state] > RANK[best.state]) best = { state, category: f.category, evidence: f.evidence }
-  }
-  // Allow only wins when every finding allows (a mixed command is never auto-approved).
-  if (best.state === 'allow' && findings.some(f => states[f.category] === 'default')) {
-    return { state: 'default', category: null, evidence: null }
   }
   return best
 }

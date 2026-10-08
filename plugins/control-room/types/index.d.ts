@@ -5,7 +5,8 @@
 // ---------------------------------------------------------------------------
 // Settings
 
-export type PermissionState = 'default' | 'allow' | 'ask' | 'deny'
+/** Default leaves the call to Claude Code; Ask always asks the person first; Deny never runs it. */
+export type PermissionState = 'default' | 'ask' | 'deny'
 
 export type PermissionCategory =
   | 'install'
@@ -529,10 +530,11 @@ export type PermissionLogEntry = {
   category: string
   state: string
   evidence: string
-  outcome: 'denied' | 'asked' | 'allowed' | 'refused-heavy'
+  /** Denied by a Deny category; approved or declined by the person when asked; held back on a busy machine. */
+  outcome: 'denied' | 'approved' | 'declined' | 'refused-heavy'
 }
 
-export type PermissionsView = { recent: PermissionLogEntry[]; denied: number; asked: number; allowed: number }
+export type PermissionsView = { recent: PermissionLogEntry[]; denied: number; asked: number }
 
 export type FocusModel = { isOn: boolean; tools: 'compact' | 'hidden'; results: boolean; diffs: boolean; expanded: string[] }
 

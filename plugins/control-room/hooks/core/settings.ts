@@ -79,10 +79,18 @@ export const SYSTEM_KEYS = [
   'cache',
 ] as const satisfies readonly (keyof SystemSettings)[]
 
-/** Categories whose loosest state is Ask: Control Room never auto-allows them. */
-export const HIGH_RISK_CATEGORIES: readonly PermissionCategory[] = ['editOutside', 'delete', 'push', 'gitDestructive', 'deploy', 'dangerous']
+export const PERMISSION_STATES: readonly PermissionState[] = ['default', 'ask', 'deny']
 
-/** Safe defaults: the Normal profile. */
+/**
+ * A saved permission state as it reads now. Allow ("answers prompts for you") was removed in 1.4.0:
+ * a saved Allow becomes Default, so Claude Code's own rules decide again, never Ask, which would
+ * start asking about what the person had chosen to let through. Anything else unknown falls back.
+ */
+export function permissionStateOf(raw: unknown, fallback: PermissionState): PermissionState {
+  if (raw === 'allow') return 'default'
+  return pick(raw, PERMISSION_STATES, fallback)
+}
+
 /** Each category's name as the person reads it. */
 export const PERMISSION_LABEL: Record<PermissionCategory, string> = {
   install: 'Package installs',
@@ -206,10 +214,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
   const ca = isRecord(r.cache) ? r.cache : {}
 
   const permissions = {} as Record<PermissionCategory, PermissionState>
-  for (const category of PERMISSION_CATEGORIES) {
-    const state = pick(pe[category], ['default', 'allow', 'ask', 'deny'] as const, base.permissions[category])
-    permissions[category] = state === 'allow' && HIGH_RISK_CATEGORIES.includes(category) ? 'ask' : state
-  }
+  for (const category of PERMISSION_CATEGORIES) permissions[category] = permissionStateOf(pe[category], base.permissions[category])
 
   return {
     autopilot: {

@@ -1,14 +1,14 @@
 /**
- * Permission decisions for one tool call.
- *
- * `tool.call` refuses Deny categories outright (before any dialog, in every
- * permission mode, main loop and subagents alike). `tool.check` then adjusts
- * the engine's verdict: Ask forces approval even where a rule or the mode
- * would allow; Allow turns an engine *ask* into an allow for categories that
- * permit it. Invariants, enforced here and tested:
- *   - an engine `deny` is never loosened;
- *   - nothing is auto-allowed in plan mode;
- *   - a mixed command (one part unconfigured) is never auto-allowed.
+ * Permission decisions for one tool call, all taken in `tool.call`, before
+ * the call goes on to Claude Code's own permission check:
+ *   - Deny refuses the call outright (before any dialog, in every permission
+ *     mode, main loop and subagents alike);
+ *   - Ask puts the call to the person first, unless Claude Code is about to
+ *     ask them itself or refuses it anyway; their yes passes the call on, so
+ *     Claude Code's rules and PreToolUse hooks still apply after it;
+ *   - Default leaves it to Claude Code.
+ * Control Room never answers a permission check itself, so it can never
+ * loosen one: a settings deny stays a deny, plan mode stays plan mode.
  */
 
 import type { PermissionCategory, PermissionState } from '../../core/settings'
@@ -58,43 +58,57 @@ export function denyMessage(decision: Decision): string {
   return `Control Room Permission Policy: "${label}" is set to Deny in this session (${decision.evidence ?? 'matched'}). Do not retry it or work around it; continue without it, or tell the user it is needed.`
 }
 
-export function askReason(decision: Decision): string {
-  const label = decision.category === null ? 'This action' : CATEGORY_INFO[decision.category].label
-  return `Control Room: ${label} needs approval (${decision.evidence ?? 'policy'})`
-}
-
 export type EngineVerdict = { decision: 'allow' | 'ask' | 'deny'; reason?: string; rule?: string; hook?: string }
 
-/** The verdict after the session's policy, never looser than allowed. */
-export function adjustVerdict(input: {
-  engine: EngineVerdict
-  decision: Decision
-  permissionMode: string | undefined
-}): EngineVerdict {
-  const { engine, decision } = input
-  if (engine.decision === 'deny') return engine
-  switch (decision.state) {
-    case 'default':
-      return engine
-    case 'deny':
-      return { decision: 'deny', reason: denyMessage(decision) }
-    case 'ask':
-      return engine.decision === 'ask' ? { ...engine, reason: engine.reason ?? askReason(decision) } : { decision: 'ask', reason: askReason(decision) }
-    case 'allow': {
-      if (engine.decision !== 'ask') return engine
-      if (input.permissionMode === 'plan') return engine
-      if (decision.category === null || CATEGORY_INFO[decision.category].loosest !== 'allow') return engine
-      return { decision: 'allow', reason: `Control Room Permission Policy allows ${CATEGORY_INFO[decision.category].label.toLowerCase()}` }
-    }
+/**
+ * Whether Control Room asks the person about an Ask category itself, given
+ * what Claude Code would decide (its `tool.check` verdict, from a query that
+ * runs nothing). Claude Code refusing it: nothing to ask. Claude Code putting
+ * it to the person's own dialog: that dialog is the question. Otherwise (it
+ * would run without asking, a mode that answers for the person, an auto-mode
+ * classifier, or no verdict at all) Control Room asks.
+ */
+export function isOwnQuestionNeeded(engine: EngineVerdict | null, permissionMode: string | undefined): boolean {
+  if (engine === null) return true
+  if (engine.decision === 'deny') return false
+  if (engine.decision === 'allow') return true
+  // An engine ask goes to the person's dialog, except in auto mode, where a classifier settles it.
+  return permissionMode === 'auto'
+}
+
+/** The question put to the person for an Ask category, and the answers it offers. */
+export const APPROVE = 'Run it'
+export const DECLINE = "Don't run it"
+
+/** What a call does, in a few words for the question: the command, the file, the address. */
+export function callWords(tool: string, input: Record<string, unknown>, decision: Decision): string {
+  const command = isShellTool(tool) && typeof input.command === 'string' ? input.command.trim().replace(/\s+/g, ' ') : null
+  const text = command ?? (isEditTool(tool) ? `${tool} ${editPathOf(input) ?? ''}`.trim() : (decision.evidence ?? tool))
+  return text.length > 140 ? `${text.slice(0, 139)}…` : text
+}
+
+export function approvalQuestion(decision: Decision, what: string): string {
+  const label = decision.category === null ? 'This action' : CATEGORY_INFO[decision.category].label
+  return `${label} is set to Ask in Control Room. Let Claude run this? ${what}`
+}
+
+/** What Claude reads when the person declined (or could not be asked). */
+export function declineMessage(decision: Decision, answer: string | null): string {
+  const label = decision.category === null ? 'this action' : CATEGORY_INFO[decision.category].label
+  const said = answer !== null && answer.trim() !== '' && answer !== DECLINE ? ` The user said: "${answer.trim().slice(0, 300)}".` : ''
+  if (answer === null) {
+    return `Control Room Permission Policy: "${label}" is set to Ask and was not approved: the question was dismissed, or nobody could be asked in this session (${decision.evidence ?? 'matched'}). Do not retry it or work around it; continue without it, or tell the user it is needed.`
   }
+  return `Control Room Permission Policy: the user declined "${label}" (${decision.evidence ?? 'matched'}).${said} Do not retry it or work around it; continue without it, or ask the user.`
 }
 
-/** The states the UI offers for a category, loosest last. */
-export function statesFor(category: PermissionCategory): PermissionState[] {
-  const loosest = CATEGORY_INFO[category].loosest
-  return loosest === 'allow' ? ['default', 'allow', 'ask', 'deny'] : ['default', 'ask', 'deny']
+/** The states the UI offers for a category, loosest first. */
+export function statesFor(_category: PermissionCategory): PermissionState[] {
+  return ['default', 'ask', 'deny']
 }
 
-export function clampState(category: PermissionCategory, state: PermissionState): PermissionState {
-  return statesFor(category).includes(state) ? state : 'ask'
+/** A state picked or read for a category: a removed Allow is Default; anything unknown is Ask, the safe reading. */
+export function clampState(category: PermissionCategory, state: string): PermissionState {
+  if (state === 'allow') return 'default'
+  return (statesFor(category) as string[]).includes(state) ? (state as PermissionState) : 'ask'
 }

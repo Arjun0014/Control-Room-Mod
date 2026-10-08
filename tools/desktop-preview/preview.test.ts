@@ -3,7 +3,8 @@ import { describe, test } from 'claude-code/testing'
 import { SESSION, world } from './fixtures/world'
 
 const band = (bodyColumns: number) => ({ hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} })
-const WIDTHS = [120, 96, 64]
+// From a full window (1400 px, about 175 columns) down to about 500 px (64 columns).
+const WIDTHS = [175, 140, 120, 96, 80, 64]
 const PANE = 90
 const cmd = (args: string) => ({ command: 'cr', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 120 } })
 
@@ -12,7 +13,8 @@ describe('preview', () => {
     on('tool.call', { tool: 'Bash' }, ($, e) =>
       e.command === 'npm run lint' ? { isError: true as const, result: 'Exit code 1', text: 'Exit code 1\nnpm error Missing script: "lint"' } : { result: { stdout: 'ok', stderr: '', interrupted: false } },
     )
-    const w = world(on, { tokens: 240_000 })
+    // Machine load readings from the sampler (34% CPU, 85% memory), on a Windows session.
+    const w = world(on, { tokens: 240_000, samplerLines: ['P 34 1500000000 10000000000'] })
     w.store['cache.v1'] = { v: 1, ttl: '1h', ttlSource: 'engine', verified: 'unknown', verifiedAt: null }
     on('turn.start', ($, e) => ({ turnId: e.turnId }))
     on('turn.complete', ($, e) => ({ text: e.answer }))
@@ -23,7 +25,7 @@ describe('preview', () => {
       read = 240_000
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage }
     })
-    await $.session.start(SESSION)
+    await $.session.start({ ...SESSION, cwd: 'C:\\work' })
     await w.clock.advance(300)
     await $.command.run(cmd('autopilot on'))
     await w.clock.advance(300)

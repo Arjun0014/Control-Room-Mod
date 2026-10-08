@@ -311,6 +311,23 @@ export function svgWorkTrack(input: { stops: readonly TrackStop[]; height?: numb
 }
 
 /**
+ * A machine reading's level as SVG: a slim upright bar filling from the bottom, in its tone (blue
+ * while calm, amber near a ceiling, red at it), so two readings sit side by side in a narrow cell.
+ */
+export function svgLevel(input: { fraction: number; tone: Tone; height?: number }): string {
+  const h = input.height ?? 14
+  const w = 6
+  const f = Number.isFinite(input.fraction) ? Math.min(1, Math.max(0, input.fraction)) : 0
+  const fill = f > 0 ? Math.max(2, Math.round(f * h)) : 0
+  return svgDoc(
+    w,
+    h,
+    `<rect x="0" y="0" width="${w}" height="${h}" rx="2" fill="#8E8E93" fill-opacity="0.22"/>` +
+      (fill > 0 ? `<rect x="0" y="${h - fill}" width="${w}" height="${fill}" rx="2" fill="${SVG_COLOR[input.tone === 'good' || input.tone === 'normal' ? 'info' : input.tone]}"/>` : ''),
+  )
+}
+
+/**
  * The context meter as SVG: a rounded bar, filled in its tone, with the
  * handoff point as an orange notch that stands proud of the bar above and
  * below, so it reads as a line the fill must not cross.

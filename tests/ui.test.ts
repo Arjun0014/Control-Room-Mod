@@ -775,7 +775,8 @@ describe('ui', () => {
     each(await desktop.drawn(), n => void (n.type === 'Svg' ? svgs.push(n) : undefined))
     expect(svgs.map(s => String(s.props?.alt))).toEqual(['working', 'Work: 1 of 3 milestones done', 'Context 30% used', expect.stringMatching(/^Prompt cache warm/)])
     for (const svg of svgs) expect(String(svg.props?.source)).toContain('color-scheme:light dark')
-    expect(textOf(await desktop.find({ key: 'cell-cache' }))).toBe('Cachewarm')
+    // Where there is room, the cache says what it holds as well.
+    expect(textOf(await desktop.find({ key: 'cell-cache' }))).toBe('Cachewarm · 300k')
     expect((await desktop.find({ type: 'Button', key: 'open' }))?.props.variant).toBe('primary')
     await desktop.unmount()
     // Once the turn ends and the person is away, the cache shows how long it has left.
@@ -784,14 +785,14 @@ describe('ui', () => {
     const away = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(textOf(await away.drawn())).toMatch(/CACHE ● (1h|59m) left/)
     await away.unmount()
-    for (const [columns, expected] of [[120, /^Cache(1h|59m) left$/], [60, /^Cache(1h|59m)$/]] as const) {
+    for (const [columns, expected] of [[120, /^Cache(1h|59m) left · 300k$/], [96, /^Cache(1h|59m) left$/], [60, /^Cache(1h|59m)$/]] as const) {
       const remote = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(columns) })
       expect(textOf(await remote.find({ key: 'cell-cache' })), String(columns)).toMatch(expected)
       await remote.unmount()
     }
   })
 
-  test('on Desktop the four readings keep their cells, a quiet word standing in for one with nothing yet', async ($, on) => {
+  test('on Desktop the five readings keep their cells, a quiet word standing in for one with nothing yet', async ($, on) => {
     const w = world(on, { tokens: 300_000 })
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await boot($, w)
@@ -804,15 +805,45 @@ describe('ui', () => {
         const work = await ui.find({ key: 'cell-work' })
         expect(textOf(work), where).toBe(`Work${none}`)
         expect(textOf(await ui.find({ key: 'cell-cache' })), where).toBe('Cache—')
+        // No machine readings (the sampler is off): the Machine cell keeps its place too.
+        expect(textOf(await ui.find({ key: 'cell-machine' })), where).toBe('Machine—')
         let dimmed = 0
         each(work, n => void (n.type === 'Text' && n.props?.dimColor === true && textOf(n) === none ? dimmed++ : undefined))
         expect(dimmed, where).toBe(1)
-        // The three readings share the row equally; the run's cost takes what it needs at the right edge.
-        for (const key of ['cell-work', 'cell-ctx', 'cell-cache']) expect((await ui.find({ key }))?.props.flexGrow, `${where} ${key}`).toBe(1)
+        // Columns weighted by what they hold, on a zero basis (fixed shares); the run's cost takes what it needs at the right edge.
+        for (const [key, weight] of [['cell-work', 3], ['cell-ctx', 3], ['cell-cache', 2], ['cell-machine', 2]] as const) {
+          const cell = await ui.find({ key })
+          expect(cell?.props.flexGrow, `${where} ${key}`).toBe(weight)
+          expect(cell?.props.width, `${where} ${key}`).toBe(0)
+        }
         expect((await ui.find({ key: 'cell-run' }))?.props.flexGrow, where).toBe(0)
         await ui.unmount()
       }
     }
+  })
+
+  test('the Machine cell: CPU and memory as level bars with their percentages, toned near a ceiling; on Desktop the headline does not repeat them', async ($, on) => {
+    const w = world(on, { tokens: 300_000, samplerLines: ['P 34 1500000000 10000000000'] })
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await $.session.start({ ...SESSION, cwd: 'C:\\work' })
+    await w.clock.advance(500)
+    // 34% CPU, 85% memory (1.5 of 10 GB free): calm, then near the 92% mark.
+    for (const [columns, caption, labels] of [[140, 'Machine', true], [96, 'CPU · RAM', false], [64, 'CPU · RAM', false]] as const) {
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(columns) })
+      const cell = await ui.find({ key: 'cell-machine' })
+      const text = textOf(cell)
+      expect(text, String(columns)).toBe(labels ? 'MachineCPU34%RAM85%' : `${caption}34%85%`)
+      const bars: Node[] = []
+      each(cell, n => void (n.type === 'Svg' ? bars.push(n) : undefined))
+      expect(bars.map(b => String(b.props?.alt)), String(columns)).toEqual(columns < 80 ? [] : ['CPU 34%', 'RAM 85%'])
+      // No machine chip in the headline on Desktop: the cell carries it.
+      expect(textOf(await ui.find({ key: 'hud-head' })), String(columns)).not.toContain('RAM')
+      await ui.unmount()
+    }
+    // The terminal has no such cell: the chip stays there.
+    const term = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    expect(textOf(await term.find({ key: 'hud-head' }))).toContain('▲ RAM 85%')
+    await term.unmount()
   })
 
   test('Overview leads with the run, then Work, Context and Cache, each with how it starts over', async ($, on) => {

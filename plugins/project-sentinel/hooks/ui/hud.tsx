@@ -34,7 +34,7 @@ import * as fmt from '../core/format'
 import { type CompanionAnimation, LANE_H, svgCompanion } from '../features/companion'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
-import { G, STATE_MARK, STOP_LOOK, clockGlyph, meterCells, scaleTrack, svgClock, svgContextMeter, svgStateIcon, svgWorkTrack, toneProps } from './theme'
+import { G, STATE_MARK, STOP_LOOK, clockGlyph, meterCells, scaleTrack, svgClock, svgContextMeter, svgLevel, svgStateIcon, svgWorkTrack, toneProps } from './theme'
 
 /**
  * A run of text in one style. `isTrack` draws the empty part of a graphic in the theme's quietest
@@ -307,7 +307,9 @@ function headlineRow(kit: Kit, hud: HudModel): RenderElement {
   const isStrong = line.state === 'working' || line.state === 'validating' || line.state === 'handoff' || line.state === 'waitingUser' || line.state === 'waitingExternal' || line.state === 'blocked'
   const isQuiet = line.state === 'ready' || line.state === 'thinking'
   const buttonWidth = buttonLabel(hud, kit.columns).length + (isNative(kit) ? 6 : 4)
-  const chips = chipsThatFit(hud.chips, Math.max(0, Math.floor((kit.columns - buttonWidth) * 0.45)))
+  // On Desktop the Machine cell carries CPU and memory, in their tones; the headline does not repeat them.
+  const shown = isNative(kit) ? hud.chips.filter(c => c.key !== 'cpu' && c.key !== 'ram') : hud.chips
+  const chips = chipsThatFit(shown, Math.max(0, Math.floor((kit.columns - buttonWidth) * 0.45)))
   return (
     <Box key="hud-head" flexDirection="row" alignItems="center" columnGap={3}>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} alignItems="center" columnGap={Svg !== undefined ? 1 : 0} {...clip(kit)}>
@@ -439,103 +441,164 @@ function edgeRow(kit: Kit, hud: HudModel, hasLane: boolean): RenderElement | nul
 // ---------------------------------------------------------------------------
 // Desktop and mobile: the same readings laid out by the surface, not by counted cells.
 //
-//   (▸) Running tests · step 8 of 10                              ▲ 1 issue   [◆ Control Room]
-//   Work                 Context · hands off at 80%    Cache                         Run
-//   ●━●━◉─○─○  2 of 10   ▬▬▬▬▬▬▬▬┃▬▬▬  24%            ◔ 42m left                 $43.00
+//   (▸) Running tests · step 8 of 10                                         ▲ 1 issue   [◆ Control Room]
+//   Work                     Context · hands off at 80%     Cache              Machine              Run
+//   ●━●━◉─○─○  2 of 10       ▬▬▬▬▬▬▬▬┃▬▬▬  24%              ◔ warm · 345k      CPU ▮ 34%  RAM ▮ 85%   $43.00
 //
-// Each reading is a cell of an equal share of the row: a quiet caption over its
-// graphic and value, so the row never overflows and nothing drifts. The four
-// readings always hold their cells, a quiet word standing in for one with
-// nothing to show yet, so the row keeps its rhythm instead of collapsing into
-// two readings far apart. Every graphic is an image of a fixed size (never a
-// sandboxed frame, which Desktop sizes on its own and may paint opaque).
+// Each reading is a column weighted by what it holds (Work and Context wider, Cache and Machine
+// narrower; the run's cost takes what it needs at the right edge), on a zero basis, so the columns
+// never drift as values change and no cell is left with a hole. Every reading keeps its column, a
+// quiet `—` standing in for one with nothing yet. Width decides the detail: three tiers, each sized
+// so every cell fits (from about 500 pixels to a full window). Every graphic is an image of a fixed
+// size (never a sandboxed frame, which Desktop sizes on its own and may paint opaque).
 
-/** One instrument on the remote surfaces: its caption, its graphic and its value. */
-export type Cell = { key: string; caption: Span[]; graphic?: { source: string; alt: string; width: number; height: number }; value: Span[]; isEnd?: boolean }
+/** One part of a cell's value line: an optional dim label, an optional graphic, and its value. */
+export type CellPart = { key: string; label?: Span[]; graphic?: { source: string; alt: string; width: number; height: number }; value: Span[] }
 
-/** The prompt cache's words in its cell: "warm" while a turn keeps it so, else its time left, or what became of it. */
-function cacheWord(cache: NonNullable<HudModel['cache']>, isCompact: boolean): string {
-  if (cache.recentMiss !== null || cache.warmth !== 'warm' || cache.leftMs === null) return cache.text
-  // A turn's requests keep the cache warm; its time left matters only near the expiry (a long call).
-  if (cache.isInUse && cache.tone !== 'warn') return 'warm'
-  return isCompact ? cache.text : `${cache.text} left`
+/** One instrument on the remote surfaces: its caption over its parts, its column's weight. */
+export type Cell = { key: string; caption: Span[]; parts: CellPart[]; weight: number; isEnd?: boolean }
+
+/** How much a cell row shows at a width: compact below 80 columns, wide from 110. */
+export type CellTier = 'compact' | 'medium' | 'wide'
+
+export const cellTierOf = (columns: number): CellTier => (columns < 80 ? 'compact' : columns < 110 ? 'medium' : 'wide')
+
+/** The columns' weights: Work and Context hold graphics and words, Cache and Machine a mark and a value. */
+const WEIGHT = { work: 3, ctx: 3, cache: 2, machine: 2 } as const
+
+/** The work track's stop pitch in pixels at each tier. */
+const PITCH: Record<CellTier, number> = { compact: 12, medium: 14, wide: 16 }
+
+/** CSS pixels per column, on the low side (Desktop's text is about 8): graphics sized by it always fit their column. */
+const PX_PER_COLUMN = 7.5
+
+/** Columns the row spends outside the weighted cells: four gaps of three, and the run's cost. */
+const ROW_OVERHEAD = 19
+
+/**
+ * The graphics' sizes for a width: each fills its column (its weight's share of the row) less the
+ * room its value needs, so a wide window has no hole inside a cell and a narrow one never overflows.
+ * They depend on the width alone, never on the values, so nothing drifts as readings change.
+ */
+export function graphicsFor(columns: number, tier: CellTier): { stops: number; pitch: number; meter: number } {
+  const share = Math.max(0, columns - ROW_OVERHEAD) / (WEIGHT.work + WEIGHT.ctx + WEIGHT.cache + WEIGHT.machine)
+  const pitch = PITCH[tier]
+  // Work: the track, a gap and "12 of 16" (or "2/10"); Context: the meter, a gap and "100%".
+  const workPx = WEIGHT.work * share * PX_PER_COLUMN - (tier === 'wide' ? 10 : 6) * PX_PER_COLUMN
+  const ctxPx = WEIGHT.ctx * share * PX_PER_COLUMN - 5 * PX_PER_COLUMN
+  const stops = Math.max(5, Math.min(16, Math.floor((workPx - 13) / pitch) + 1))
+  return { stops, pitch, meter: Math.round(Math.max(56, Math.min(280, ctxPx))) }
 }
 
-/** The instruments as cells, `isCompact` in a narrow band (fewer stops, a shorter meter, terse values). */
-export function hudCells(hud: HudModel, isCompact: boolean): Cell[] {
+/** The prompt cache's words in its cell: what it holds while warm, its time left near the expiry or while you are away, what became of it. */
+function cacheWord(cache: NonNullable<HudModel['cache']>, tier: CellTier): string {
+  if (cache.recentMiss !== null || cache.warmth !== 'warm') return cache.text
+  // A turn's requests keep the cache warm; its time left matters only near the expiry (a long call).
+  const left = cache.leftMs === null || (cache.isInUse && cache.tone !== 'warn') ? null : cache.text
+  if (tier === 'compact') return left ?? 'warm'
+  const state = left === null ? 'warm' : `${left} left`
+  return tier === 'wide' && cache.cachedTokens > 0 ? `${state} · ${fmt.tokens(cache.cachedTokens)}` : state
+}
+
+const none = (text: string = G.none): Span[] => [{ text, isDim: true }]
+
+/** The instruments as cells for a width (its tier decides the words, the width the graphics' sizes). */
+export function hudCells(hud: HudModel, columns: number): Cell[] {
+  const tier = cellTierOf(columns)
+  const size = graphicsFor(columns, tier)
   const cells: Cell[] = []
+  const caption = (text: string): Span[] => [{ text, isDim: true }]
+
   const work = hud.work
   if (work === null || work.total === 0) {
-    cells.push({ key: 'work', caption: [{ text: 'Work', isDim: true }], value: [{ text: isCompact ? 'None' : 'No milestones yet', isDim: true }] })
+    cells.push({ key: 'work', caption: caption('Work'), parts: [{ key: 'v', value: none(tier === 'compact' ? 'None' : 'No milestones yet') }], weight: WEIGHT.work })
   } else {
     const isDone = work.done === work.total
-    const stops = scaleTrack(work.track.length === work.total ? work.track : fallbackTrack(work.done, work.total, work.current !== null), isCompact ? 7 : 12)
-    const pitch = isCompact ? 14 : 17
+    const stops = scaleTrack(work.track.length === work.total ? work.track : fallbackTrack(work.done, work.total, work.current !== null), size.stops)
     const height = 14
-    const source = svgWorkTrack({ stops, height, pitch })
-    const width = Math.round(2 * (Math.max(3, height / 2 - 2) + 1.5) + (stops.length - 1) * pitch)
+    const source = svgWorkTrack({ stops, height, pitch: size.pitch })
+    const width = Math.round(2 * (Math.max(3, height / 2 - 2) + 1.5) + (stops.length - 1) * size.pitch)
     cells.push({
       key: 'work',
-      caption: [{ text: 'Work', isDim: true }],
-      graphic: { source, alt: `Work: ${work.done} of ${work.total} milestones done`, width, height },
-      value: [{ text: isCompact ? `${work.done}/${work.total}` : `${work.done} of ${work.total}`, tone: isDone ? 'good' : undefined, isBold: true }],
+      caption: caption('Work'),
+      parts: [{ key: 'v', graphic: { source, alt: `Work: ${work.done} of ${work.total} milestones done`, width, height }, value: [{ text: tier === 'wide' ? `${work.done} of ${work.total}` : `${work.done}/${work.total}`, tone: isDone ? 'good' : undefined, isBold: true }] }],
+      weight: WEIGHT.work,
     })
   }
 
   const ctx = hud.ctx
   const event = hud.autopilot.isOn && hud.autopilot.state !== 'armed' && hud.autopilot.state !== 'off' ? hud.autopilot.text : null
   if (ctx.pct === null || ctx.tokens === null || ctx.window === null || ctx.window <= 0) {
-    cells.push({ key: 'ctx', caption: [{ text: 'Context', isDim: true }], value: [{ text: G.none, isDim: true }] })
+    cells.push({ key: 'ctx', caption: caption('Context'), parts: [{ key: 'v', value: none() }], weight: WEIGHT.ctx })
   } else {
     const fraction = ctx.tokens / ctx.window
     const marker = ctx.threshold === null ? null : ctx.threshold / ctx.window
     const tone: Tone = ctx.tone === 'muted' || ctx.tone === 'normal' ? 'good' : ctx.tone
+    // The handoff point is the meter's notch; the wide tier also says it in words.
     const note: Span[] =
       event !== null
         ? [{ text: ` · ${event}`, tone: 'accent' }]
-        : marker !== null && hud.autopilot.isOn && !isCompact
+        : marker !== null && hud.autopilot.isOn && tier === 'wide'
           ? [{ text: ` · hands off at ${Math.round(marker * 100)}%`, isDim: true }]
           : []
-    const width = isCompact ? 80 : 144
+    const width = size.meter
     cells.push({
       key: 'ctx',
-      caption: [{ text: 'Context', isDim: true }, ...note],
-      graphic: { source: svgContextMeter({ fraction, marker, tone, width, height: 14 }), alt: `Context ${ctx.pct}% used`, width, height: 14 },
-      value: [{ text: `${ctx.pct}%`, tone: valueTone(ctx.tone), isBold: true }],
+      caption: [...caption('Context'), ...note],
+      parts: [{ key: 'v', graphic: { source: svgContextMeter({ fraction, marker, tone, width, height: 14 }), alt: `Context ${ctx.pct}% used`, width, height: 14 }, value: [{ text: `${ctx.pct}%`, tone: valueTone(ctx.tone), isBold: true }] }],
+      weight: WEIGHT.ctx,
     })
   }
 
   const cache = hud.cache
   if (cache === null || cache.warmth === 'none') {
-    cells.push({ key: 'cache', caption: [{ text: 'Cache', isDim: true }], value: [{ text: G.none, isDim: true }] })
+    cells.push({ key: 'cache', caption: caption('Cache'), parts: [{ key: 'v', value: none() }], weight: WEIGHT.cache })
   } else {
-    const word = cacheWord(cache, isCompact)
     const glyphTone: Tone = cache.tone === 'normal' ? 'info' : cache.tone
     const alt = cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
     cells.push({
       key: 'cache',
-      caption: [{ text: 'Cache', isDim: true }],
-      graphic: { source: svgClock({ fraction: cache.fraction, tone: glyphTone, size: 14 }), alt, width: 14, height: 14 },
-      value: [{ text: word, tone: cache.tone === 'warn' ? 'warn' : undefined, isDim: cache.tone === 'muted' ? true : undefined }],
+      caption: caption('Cache'),
+      parts: [{ key: 'v', graphic: { source: svgClock({ fraction: cache.fraction, tone: glyphTone, size: 14 }), alt, width: 14, height: 14 }, value: [{ text: cacheWord(cache, tier), tone: cache.tone === 'warn' ? 'warn' : undefined, isDim: cache.tone === 'muted' ? true : undefined }] }],
+      weight: WEIGHT.cache,
+    })
+  }
+
+  // Machine: CPU and memory, each a slim level bar and its percentage, from the sampler's live readings.
+  const load = hud.load
+  if (load === null || (load.cpu === null && load.ram === null)) {
+    cells.push({ key: 'machine', caption: caption('Machine'), parts: [{ key: 'v', value: none() }], weight: WEIGHT.machine })
+  } else {
+    const isWide = tier === 'wide'
+    const reading = (key: 'cpu' | 'ram', label: string, value: number | null, tone: Tone): CellPart => ({
+      key,
+      label: isWide ? [{ text: label, isDim: true }] : undefined,
+      graphic: tier === 'compact' || value === null ? undefined : { source: svgLevel({ fraction: value / 100, tone, height: 14 }), alt: `${label} ${Math.round(value)}%`, width: 6, height: 14 },
+      value: value === null ? none() : [{ text: `${Math.round(value)}%`, tone: valueTone(tone), isBold: tone === 'bad' ? true : undefined }],
+    })
+    cells.push({
+      key: 'machine',
+      // Narrower tiers name the two readings once, in their order, over their values.
+      caption: caption(isWide ? 'Machine' : 'CPU · RAM'),
+      parts: [reading('cpu', 'CPU', load.cpu, load.cpuTone), reading('ram', 'RAM', load.ram, load.ramTone)],
+      weight: WEIGHT.machine,
     })
   }
 
   const run = hud.cost.runUsd ?? hud.cost.usd
   cells.push({
     key: 'run',
-    caption: [{ text: 'Run', isDim: true }],
-    value: [{ text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null, isBold: run !== null }],
+    caption: caption('Run'),
+    parts: [{ key: 'v', value: [{ text: `${fmt.cost(run)}${run !== null && hud.cost.isRunPartial ? '+' : ''}`, isDim: run === null, isBold: run !== null }] }],
+    weight: 0,
     isEnd: true,
   })
   return cells
 }
 
-/** Below this many columns the remote surfaces take the compact cells. */
-const COMPACT_BELOW = 80
-
 function cellsRow(kit: Kit, hud: HudModel): RenderElement {
   const { Box, Text, Svg } = kit.ui
-  const cells = hudCells(hud, kit.columns < COMPACT_BELOW)
+  const cells = hudCells(hud, kit.columns)
   const line = (key: string, spans: readonly Span[]) => <Text key={key} wrap="truncate-end">{spans.map((p, i) => spanEl(kit, `${key}-${i}`, p))}</Text>
   return (
     <Box key="hud-cells" flexDirection="row" columnGap={3} alignItems="flex-start">
@@ -543,21 +606,26 @@ function cellsRow(kit: Kit, hud: HudModel): RenderElement {
         <Box
           key={`cell-${c.key}`}
           flexDirection="column"
-          // The readings share the row equally; the run's cost takes what it needs at the right edge.
-          flexGrow={c.isEnd === true ? 0 : 1}
+          // Weighted columns on a zero basis: fixed shares that never drift; the run's cost takes what it needs at the right edge.
+          flexGrow={c.isEnd === true ? 0 : c.weight}
           flexShrink={c.isEnd === true ? 0 : 1}
           width={c.isEnd === true ? undefined : 0}
           alignItems={c.isEnd === true ? 'flex-end' : 'flex-start'}
           {...clip(kit)}
         >
           {line(`cell-${c.key}-caption`, c.caption)}
-          <Box flexDirection="row" alignItems="center" columnGap={1} {...clip(kit)}>
-            {c.graphic === undefined || Svg === undefined ? null : (
-              <Box flexShrink={0}>
-                <Svg key={`cell-${c.key}-svg`} source={c.graphic.source} alt={c.graphic.alt} width={c.graphic.width} height={c.graphic.height} />
+          <Box flexDirection="row" alignItems="center" columnGap={1.5} {...clip(kit)}>
+            {c.parts.map(part => (
+              <Box key={`cell-${c.key}-${part.key}`} flexDirection="row" alignItems="center" columnGap={part.label === undefined ? 1 : 0.5} flexShrink={0}>
+                {part.label === undefined ? null : line(`cell-${c.key}-${part.key}-label`, part.label)}
+                {part.graphic === undefined || Svg === undefined ? null : (
+                  <Box flexShrink={0}>
+                    <Svg key={`cell-${c.key}-${part.key}-svg`} source={part.graphic.source} alt={part.graphic.alt} width={part.graphic.width} height={part.graphic.height} />
+                  </Box>
+                )}
+                {line(`cell-${c.key}-${part.key}-value`, part.value)}
               </Box>
-            )}
-            {line(`cell-${c.key}-value`, c.value)}
+            ))}
           </Box>
         </Box>
       ))}

@@ -8,7 +8,7 @@ import { mock } from 'claude-code/testing'
  */
 export type World = ReturnType<typeof world>
 
-export function world(on: On, options: { settings?: unknown; window?: number; tokens?: number; isHandoffWritten?: boolean } = {}) {
+export function world(on: On, options: { settings?: unknown; window?: number; tokens?: number; isHandoffWritten?: boolean; samplerLines?: string[] } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 })
   const store: Record<string, unknown> = options.settings === undefined ? {} : { 'settings.v1': options.settings }
   const kept = {
@@ -92,6 +92,11 @@ export function world(on: On, options: { settings?: unknown; window?: number; to
 
   on('process.spawn', async function* ($, e) {
     kept.spawned.push([...e.argv])
+    // A machine sampler's lines; then it keeps running, as a real one does, until the test ends.
+    if (options.samplerLines !== undefined) {
+      for (const line of options.samplerLines) yield { stream: 'stdout' as const, text: `${line}\n` }
+      await new Promise<never>(() => undefined)
+    }
     return { value: { code: 0, signal: null } }
   })
 

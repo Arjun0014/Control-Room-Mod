@@ -194,8 +194,8 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 - **Headless runs (`claude -p`, CI) failing on installs, deletes or pushes:** with no one to
   answer, a call set to Ask is refused. Set those categories to *Default* for headless use.
 - **Allow is gone (1.4.0):** answering permission prompts is left to Claude Code: add an allow
-  rule (`/permissions`) or use one of its permission modes. A saved Allow reads as *Default*; the
-  panel says so once. In Bypass permissions mode nothing changes.
+  rule (`/permissions`) or use one of its permission modes. A saved Allow reads as *Default*; a toast
+  says so once, and Guardrails for that session. In Bypass permissions mode nothing changes.
 
 ## Machine load
 

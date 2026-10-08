@@ -364,6 +364,8 @@ export type PaneModel = {
   guard: { turn: number; session: number; last: { verdict: string; score: number; reasons: string[]; at: number } | null; isActive: boolean; reason: string | null }
   frontier: { lastEffort: string | null; isEffortSupported: boolean | null; isComposeReached: boolean | null }
   notes: string[]
+  /** Categories whose saved Allow now reads as Default (Allow was removed in 1.4.0): Guardrails says so in this session. */
+  allowRemoved: string[]
   savedAt: number | null
   /** Where run progress comes from: Claude Code's own task list, Control Room's milestones tool, or nothing. */
   planSource: 'tasks' | 'milestones' | 'none'

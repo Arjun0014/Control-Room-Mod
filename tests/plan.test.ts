@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { applyTool, emptyPlan, fromMilestones, fromTodoWrite, objectiveOf, planOf, progressOf } from '../hooks/features/plan'
+import { applyTool, emptyPlan, fromMilestones, fromTodoWrite, isNewWork, objectiveOf, planOf, progressOf } from '../hooks/features/plan'
 import { continuationContext } from '../hooks/features/prompts'
 
 const todo = (content: string, status: 'pending' | 'in_progress' | 'completed', activeForm = `${content}ing`) => ({ content, status, activeForm })
@@ -34,6 +34,18 @@ describe('run plan', () => {
     // With nothing in progress, the latest one being verified is what Claude is on.
     const checking = fromMilestones(plan, { milestones: [{ title: 'Redesign the status bar', status: 'verifying' }, { title: 'Redesign Kit', status: 'verifying' }] }, 2, 20)
     expect(progressOf(checking).current?.subject).toBe('Redesign Kit')
+  })
+
+  test('new work is another objective naming none of the plan’s milestones; a reworded objective or a shared milestone is the same work', () => {
+    const done = fromMilestones(emptyPlan(), { milestones: [{ title: 'Ship the release', status: 'completed' }, { title: 'Write the report', status: 'completed' }] }, 1, 10)
+    const video = { milestones: [{ title: 'Storyboard the video', status: 'in_progress' }, { title: 'Render both formats', status: 'pending' }] }
+    expect(isNewWork(done, video, true)).toBe(true)
+    // The same objective (a rewritten list mid-run) keeps what was finished.
+    expect(isNewWork(done, video, false)).toBe(false)
+    // A list that carries any old milestone continues the work.
+    expect(isNewWork(done, { milestones: [{ title: 'Write the report', status: 'completed' }, { title: 'Render both formats', status: 'pending' }] }, true)).toBe(false)
+    expect(isNewWork(emptyPlan(), video, true)).toBe(false)
+    expect(isNewWork(done, { milestones: [] }, true)).toBe(false)
   })
 
   test('a rewritten list drops open work it no longer names, but never forgets finished work', () => {

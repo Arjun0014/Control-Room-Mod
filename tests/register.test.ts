@@ -50,6 +50,7 @@ describe('register', () => {
       return { decision: 'allow' as const }
     })
     await $.session.start(SESSION)
+    await w.clock.advance(2000)
     expect(w.kept.toasts).toEqual(['Project Sentinel is installed. Control Room keeps this session until it restarts.'])
     // Control Room keeps /control-room, /cr and its milestones tool: nothing of Project Sentinel's is registered.
     expect(w.kept.registered).toEqual([])

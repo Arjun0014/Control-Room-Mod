@@ -269,7 +269,7 @@ Each category is `default` (shown as *Default*: Claude Code decides), `ask` or `
   it waits. A *Don't run it* refuses the call with a reason Claude can read.
 - **Default** leaves the call to Claude Code and its rules.
 - There is no **Allow** any more (1.4.0): answering prompts for you is Claude Code's job (its allow
-  rules, its permission modes). A saved Allow reads as Default, and the panel says so once. In
+  rules, its permission modes). A saved Allow reads as Default: a toast says so once, and Guardrails for that session. In
   Bypass permissions mode nothing changes; outside it, calls Allow used to answer are asked again
   unless your Claude Code allow rules cover them.
 

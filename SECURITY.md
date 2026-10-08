@@ -95,7 +95,7 @@ It reads totals only: no per-process data, no process names, nothing about other
   settings or Claude Code.
 - Plan mode is never overridden.
 - It never answers a permission check, and there is no *Allow* (removed in 1.4.0): only Claude
-  Code and you approve a call. A saved *Allow* reads as *Default*, and the panel says so once.
+  Code and you approve a call. A saved *Allow* reads as *Default*; a toast says so once, and Guardrails for that session.
 - *Ask* always asks. Where Claude Code would ask anyway, its own prompt does. Where it would not
   (an allow rule, auto mode, Bypass permissions), Project Sentinel asks in Claude Code's question
   dialog first and passes the call on only after *Run it*, so your rules and other hooks still

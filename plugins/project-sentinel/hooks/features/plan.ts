@@ -199,6 +199,22 @@ export const isPlanTool = (tool: string): boolean => tool === 'TodoWrite' || too
  * Control Room's own milestones tool, where Claude Code offers no task list:
  * the whole list each time, as TodoWrite sends it.
  */
+/**
+ * Whether a milestone list starts new work: Claude states another objective and names none of the
+ * plan's milestones. Its plan then starts empty, so the finished milestones of the work before do
+ * not count toward it ("10 of 17" for work just begun). A list rewritten for the same work, or one
+ * that carries any of the old milestones, keeps them.
+ */
+export function isNewWork(plan: Plan, input: Record<string, unknown>, isOtherObjective: boolean): boolean {
+  if (!isOtherObjective || plan.tasks.length === 0 || !Array.isArray(input.milestones)) return false
+  const keys = new Set(plan.tasks.map(t => t.key))
+  const titles = input.milestones
+    .filter(isRecord)
+    .map(m => keyOf(clean(str(m.title), 120)))
+    .filter(k => k !== '')
+  return titles.length > 0 && !titles.some(k => keys.has(k))
+}
+
 export function fromMilestones(plan: Plan, input: Record<string, unknown>, session: number, now: number): Plan {
   if (!Array.isArray(input.milestones)) return plan
   const todos = input.milestones.filter(isRecord).map(m => ({

@@ -77,6 +77,9 @@ export type UsageFigures = { tokens: number | undefined; window: number | undefi
 
 const OWN_PLUGIN = 'project-sentinel'
 
+/** How long after the load an announcement waits, so the session's window is there to show it. */
+const ANNOUNCE_DELAY_MS = 1500
+
 const isOwnPrompt = (origin: PromptOrigin | undefined): boolean => origin?.kind === 'plugin' && origin.name === OWN_PLUGIN
 
 const isPersonOrigin = (origin: PromptOrigin | undefined): boolean =>
@@ -134,6 +137,8 @@ export class Runtime {
     showAllChanges: false,
   }
   notes: string[] = []
+  /** Categories whose saved Allow read as Default at this load (Guardrails says so for the session). */
+  allowRemoved: string[] = []
   savedAt: number | null = null
 
   /** Quest log: lifetime XP and achievements (kept while the Quest log style is chosen). */
@@ -304,7 +309,8 @@ export class Runtime {
         if (loaded.wasRepaired) this.note('Some saved Control Room settings were invalid and were reset to safe defaults.')
         if (loaded.allowRemoved.length > 0) {
           const names = loaded.allowRemoved.join(', ')
-          this.note(`Allow was removed: ${names} now use${loaded.allowRemoved.length === 1 ? 's' : ''} Default, so Claude Code's own rules decide. To skip those prompts, add allow rules in Claude Code's permissions.`)
+          this.allowRemoved = loaded.allowRemoved
+          this.announce(`Allow was removed: ${names} now use${loaded.allowRemoved.length === 1 ? 's' : ''} Default, so Claude Code's own rules decide.`)
           // Saved at once, so the note shows in one session rather than every one.
           this.saveSettings.schedule(this.settings)
         }
@@ -316,9 +322,25 @@ export class Runtime {
     await this.loading
   }
 
+  /** Something that needs a look (settings repaired, an old Claude Code): a line at the top of the panel. */
   note(text: string): void {
     if (!this.notes.includes(text)) this.notes = [...this.notes, text].slice(-6)
     this.publisher.mark('pane')
+  }
+
+  private announced = new Set<string>()
+
+  /**
+   * Something worth saying once that is not a problem (the rename, a removed setting): a toast a
+   * moment after the load, never a warning pinned at the top of the panel.
+   */
+  announce(text: string): void {
+    const host = this.host
+    if (host === null || this.announced.has(text)) return
+    this.announced.add(text)
+    host.after(ANNOUNCE_DELAY_MS, () => {
+      if (this.settings.ui.toasts) host.toast(text, 8000)
+    })
   }
 
   effective(): Effective {
@@ -417,12 +439,15 @@ export class Runtime {
     const session = Chain.currentSession(this.run)?.index ?? 1
     // Claude's own statement of the objective, when it gives one, says it better than the request's first sentence.
     const objective = typeof input.objective === 'string' ? clean(input.objective, 140) : ''
+    // Another objective of Claude's with none of the plan's milestones is new work: it counts from nothing.
+    const isOtherObjective = objective.length >= 8 && this.run.objectiveBy === 'claude' && this.run.objective !== null && objective !== this.run.objective
+    const base = Plan.isNewWork(this.plan(), input, isOtherObjective) ? Plan.emptyPlan() : this.plan()
     if (objective.length >= 8 && (objective !== this.run.objective || this.run.objectiveBy !== 'claude')) {
       this.run = { ...this.run, objective, objectiveBy: 'claude' }
       this.persistRun()
       this.publisher.mark('activity', 'hud')
     }
-    this.setPlan(Plan.fromMilestones(this.plan(), input, session, Date.now()))
+    this.setPlan(Plan.fromMilestones(base, input, session, Date.now()))
     this.noteWorkStarted()
     const p = this.progress()
     return `Recorded: ${p.done} of ${p.total} milestones done${p.current === null ? '' : `, now: ${p.current.subject}`}.`
@@ -699,7 +724,7 @@ export class Runtime {
     const marker: CarriedMarker = { from: former.file, at: now, keys: keys.length }
     await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
     this.trace(`carried ${keys.length} keys over from ${former.file}`)
-    if (keys.length > 0) this.note('Project Sentinel is Control Room renamed: your settings, runs, Quest log and cache memory came along.')
+    if (keys.length > 0) this.announce('Project Sentinel is Control Room renamed: your settings, runs, Quest log and cache memory came along.')
     return keys
   }
 
@@ -757,7 +782,7 @@ export class Runtime {
     // Once per session: a later reload (an install, an update) stands by without saying it again.
     if (!(await host.isStandbyNoted().catch(() => false))) {
       await host.noteStandby().catch(() => undefined)
-      host.toast('Project Sentinel is installed. Control Room keeps this session until it restarts.', 6000)
+      host.after(ANNOUNCE_DELAY_MS, () => host.toast('Project Sentinel is installed. Control Room keeps this session until it restarts.', 8000))
     }
     return true
   }

@@ -8,11 +8,31 @@ match. `claude plugin tag plugins/project-sentinel` checks this when tagging a r
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-08
+
+### Fixed
+
+- **Work counted the finished milestones of the work before.** When Claude states another
+  objective with milestones of its own, the run's progress counts from nothing ("0 of 7"), no longer
+  on top of what the previous work finished ("10 of 17", which also crowded the track). A list
+  rewritten for the same objective, or one that carries any earlier milestone, still keeps the
+  finished ones.
+
+### Changed
+
+- **The update's messages are toasts, not warnings in the panel.** "Project Sentinel is Control Room
+  renamed…" and "Allow was removed…" were pinned in amber at the top of Overview for the whole
+  session. Each is now a toast, once, a moment after the load; the Allow change is also a quiet note
+  under the permissions in Guardrails for that session. The top of the panel keeps amber for what
+  needs a look (settings repaired, an old Claude Code).
+
 ### Development
 
 - Windows CI runs the tests again: the test runner starts `claude` through `cmd.exe` where npm
   installed it as a `.cmd` shim (a bare spawn failed with `ENOENT`, the one red step of 1.4.0's
-  release commit). The plugin is unchanged.
+  release commit).
+- Kit's pacing test watches the lane a while instead of sampling it once (a walk there and back
+  could land it where it began). 276 tests.
 
 ## [1.4.0] - 2026-10-08
 

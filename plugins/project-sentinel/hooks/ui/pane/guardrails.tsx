@@ -97,6 +97,12 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
         actions: isDefault ? undefined : [{ key: 'perm-reset', label: 'Restore safe defaults', onPress: () => u(d => void (d.permissions = { ...DEFAULT_PERMISSIONS })) }],
         text: 'Ask always asks you first and Deny always stops an action, in every mode; Claude Code’s own rules still apply after a yes. Shell commands are matched by pattern: this narrows what Claude does, it is not a sandbox.',
       })}
+      {pane.allowRemoved.length === 0
+        ? null
+        : footnote(kit, {
+            key: 'allow-removed',
+            text: `Allow was removed in 1.4.0: ${pane.allowRemoved.join(', ')} now use${pane.allowRemoved.length === 1 ? 's' : ''} Default, so Claude Code’s own rules decide. To skip those prompts, add allow rules in Claude Code’s permissions.`,
+          })}
 
       {recent.length === 0
         ? null

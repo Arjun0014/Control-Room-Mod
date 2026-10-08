@@ -108,7 +108,9 @@ describe('the store kept under the former name', () => {
     expect(f.kept.store['runs.index.v1']).toContain('r32')
     expect(f.kept.store['run.v1.r32']).toBeDefined()
     expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json', keys: 6 })
-    expect(rt.notes.join(' ')).toContain('Project Sentinel is Control Room renamed')
+    // Said once, as a toast: not a warning pinned at the top of the panel.
+    expect(f.kept.toasts.join(' ')).toContain('Project Sentinel is Control Room renamed')
+    expect(rt.notes.join(' ')).not.toContain('renamed')
     // Once: a later session leaves the store as it is, even if it changed since.
     ;(f.kept.store['settings.v1'] as Settings).autopilot.thresholdPercent = 60
     const next = new Runtime()
@@ -116,7 +118,8 @@ describe('the store kept under the former name', () => {
     await next.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await next.onClassicSessionStart({ source: 'startup', sessionId: 'session-2', transcriptPath: '/home/a/.claude/projects/-work/session-2.jsonl' })
     expect(next.settings.autopilot.thresholdPercent).toBe(60)
-    expect(next.notes.join(' ')).not.toContain('Project Sentinel is Control Room renamed')
+    await f.advance(2000)
+    expect(f.kept.toasts.filter(t => t.includes('Control Room renamed')).length).toBe(1)
   })
 
   test('loaded into a running session (an update), it carries over at the load, from the store written last, before a setting is read', async () => {
@@ -152,7 +155,8 @@ describe('the store kept under the former name', () => {
     expect(rt.settings.permissions.gitDestructive).toBe('default')
     expect(rt.run?.number).toBe(33)
     expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
-    expect(rt.notes.join(' ')).toContain('Project Sentinel is Control Room renamed')
+    await f.advance(2000)
+    expect(f.kept.toasts.join(' ')).toContain('Project Sentinel is Control Room renamed')
   })
 
   test('an environment that names a folder without plugin stores is not trusted at the load: the session start looks by its transcript', async () => {
@@ -177,16 +181,19 @@ describe('the store kept under the former name', () => {
     expect(await rt.checkStandby()).toBe(true)
     expect(await rt.checkStandby()).toBe(true)
     expect(rt.isStandby).toBe(true)
+    await f.advance(2000)
     expect(f.kept.toasts).toEqual(['Project Sentinel is installed. Control Room keeps this session until it restarts.'])
     // A reload (an install, an update) builds a new runtime: it stands by again without a second note.
     const reloaded = new Runtime()
     reloaded.bind(f.host)
     expect(await reloaded.checkStandby()).toBe(true)
+    await f.advance(2000)
     expect(f.kept.toasts.length).toBe(1)
     const alone = fakeHost()
     const own = new Runtime()
     own.bind(alone.host)
     expect(await own.checkStandby()).toBe(false)
+    await alone.advance(2000)
     expect(alone.kept.toasts).toEqual([])
   })
 
@@ -197,7 +204,8 @@ describe('the store kept under the former name', () => {
     await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await rt.onClassicSessionStart({ source: 'startup', sessionId: 'session-1', transcriptPath: '/home/a/.claude/projects/-work/session-1.jsonl' })
     expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: null, keys: 0 })
-    expect(rt.notes.join(' ')).not.toContain('renamed')
+    await f.advance(2000)
+    expect(f.kept.toasts.join(' ')).not.toContain('renamed')
   })
 
   test('without a transcript path nothing is looked for, so a later session can still carry it over', async () => {

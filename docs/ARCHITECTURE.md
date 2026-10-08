@@ -450,7 +450,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (273 tests in 22 files, run on 2.1.293, and in CI on the latest
+* `claude plugin test` (276 tests in 22 files, run on 2.1.293, and in CI on the latest
   Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux). The
   tests live in the repository's `tests/`, outside the plugin folder (which
   Anthropic's directory scans, and which ships only the plugin);

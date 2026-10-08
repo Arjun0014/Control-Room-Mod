@@ -71,7 +71,7 @@ export const LIMITS = {
 } as const
 
 /** The plugin's version, as in .claude-plugin/plugin.json (kept in step on release). */
-export const VERSION = '1.4.0'
+export const VERSION = '1.4.1'
 
 /** Version floor this release was verified on (Desktop 2.1.289, CLI 2.1.292). */
 export const MIN_ENGINE = '2.1.289'

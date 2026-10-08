@@ -231,13 +231,16 @@ describe('runtime', () => {
     expect(rt.settings.permissions.network).toBe('default')
     expect(rt.settings.customProfiles[0]?.systems.permissions.delete).toBe('default')
     expect(rt.settings.customProfiles[0]?.systems.permissions.install).toBe('default')
-    const note = rt.notes.join(' ')
-    expect(note).toContain('Allow was removed')
-    expect(note).toContain('Deleting files')
-    expect(note).toContain('Network access')
-    expect(note).toContain('Package installs')
-    expect(note).not.toContain('reset to safe defaults')
     await f.advance(2000)
+    // Said once as a toast, and in Guardrails for the session; not a warning at the top of the panel.
+    const toast = f.kept.toasts.join(' ')
+    expect(toast).toContain('Allow was removed')
+    expect(toast).toContain('Deleting files')
+    expect(toast).toContain('Network access')
+    expect(toast).toContain('Package installs')
+    expect(rt.notes.join(' ')).not.toContain('Allow was removed')
+    expect(rt.notes.join(' ')).not.toContain('reset to safe defaults')
+    expect(Views.paneOf(rt).allowRemoved).toEqual(['Network access', 'Deleting files', 'Package installs'])
     const saved = f.kept.store['settings.v1'] as Settings
     expect(saved.permissions.delete).toBe('default')
     expect(saved.customProfiles[0]?.systems.permissions.install).toBe('default')
@@ -245,7 +248,9 @@ describe('runtime', () => {
     const next = new Runtime()
     next.bind(f.host)
     await next.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    expect(next.notes.join(' ')).not.toContain('Allow was removed')
+    await f.advance(2000)
+    expect(f.kept.toasts.filter(t => t.includes('Allow was removed')).length).toBe(1)
+    expect(next.allowRemoved).toEqual([])
   })
 
   test('a reload in the middle of a handoff carries it on instead of starting a second one', async () => {
@@ -276,6 +281,21 @@ describe('runtime', () => {
     await advance(3000)
     expect(kept.submitted.filter(t => t.includes('final handoff')).length).toBe(1)
     expect(kept.commands).toContain('clear')
+  })
+
+  test('a new objective with new milestones counts from nothing; the same objective keeps finished milestones', async () => {
+    const { rt } = await started(() => undefined)
+    rt.onTurnStart({ turnId: 't1', text: 'release it' })
+    const release = ['Pass the checks', 'Rename the plugin', 'Ship the release'].map(title => ({ title, status: 'completed' }))
+    rt.recordMilestones({ objective: 'Release 1.4.0 with the rename', milestones: release }, undefined)
+    expect([rt.progress().done, rt.progress().total]).toEqual([3, 3])
+    // Mid-run, a list that leaves out finished milestones still counts them.
+    rt.recordMilestones({ objective: 'Release 1.4.0 with the rename', milestones: [{ title: 'Write the report', status: 'in_progress' }] }, undefined)
+    expect([rt.progress().done, rt.progress().total]).toEqual([3, 4])
+    // Another objective with milestones of its own: 0 of 2, not 4 of 6.
+    rt.recordMilestones({ objective: 'Make the launch video', milestones: [{ title: 'Storyboard the video', status: 'in_progress' }, { title: 'Render both formats', status: 'pending' }] }, undefined)
+    expect([rt.progress().done, rt.progress().total]).toEqual([0, 2])
+    expect(rt.run?.objective).toBe('Make the launch video')
   })
 
   test('after a reload, milestones finished earlier are not counted as this turn’s', async () => {

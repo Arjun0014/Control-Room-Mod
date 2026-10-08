@@ -927,8 +927,13 @@ describe('ui', () => {
     await live.redraw()
     expect(((await live.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('think')
     const before = await liveLeft()
-    await live.advance(15_000)
-    expect(await liveLeft()).not.toBe(before)
+    // It ponders, then paces a few units and back, so one sample may find it where it began: watch it a while.
+    const seen = new Set<number>()
+    for (let i = 0; i < 12; i++) {
+      await live.advance(1500)
+      seen.add(await liveLeft())
+    }
+    expect([...seen].some(x => x !== before)).toBe(true)
     // It works on a milestone; a touch while Claude works: a quick look up, and nothing opens.
     await $.tool.call({ tool: 'mcp__project-sentinel__milestones', milestones: [{ title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
     await w.clock.advance(300)
@@ -1123,6 +1128,20 @@ describe('ui', () => {
     await ui.press({ key: 'perm-reset' })
     await w.clock.advance(2000)
     expect(saved(w).permissions.commit).toBe('default')
+  })
+
+  test('a removed Allow is said in Guardrails beside the permissions, never as a warning atop the panel', async ($, on) => {
+    const w = world(on, { settings: { permissions: { install: 'allow', commit: 'allow' } } })
+    await boot($, w)
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(100) })
+    expect(await ui.find({ text: /Allow was removed/ })).toBeUndefined()
+    await ui.press({ key: 'tab-guardrails' })
+    await w.clock.advance(300)
+    const said = await ui.find({ text: /Allow was removed in 1\.4\.0: Package installs, Git commits now use Default/ })
+    expect(said).toBeDefined()
+    await ui.unmount()
+    await w.clock.advance(2000)
+    expect(w.kept.toasts.some(t => t.startsWith('Allow was removed'))).toBe(true)
   })
 
   test('on Desktop no text of the panel or the status bar trips the app’s monospace rule', async ($, on) => {

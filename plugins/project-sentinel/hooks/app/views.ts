@@ -468,6 +468,7 @@ export function paneOf(rt: Runtime): PaneModel {
       isComposeReached: rt.compose.isReached ? true : rt.composeObserved ? false : null,
     },
     notes: rt.notes,
+    allowRemoved: rt.allowRemoved,
     savedAt: rt.savedAt,
     planSource: rt.planSource,
     nativeOutputStyle: rt.nativeOutputStyle,

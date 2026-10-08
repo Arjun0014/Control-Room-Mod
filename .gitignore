@@ -13,3 +13,7 @@ tools/desktop-preview/out/
 
 # The scratch mod the tests run against (tools/test/mod.mjs).
 /.build/
+
+# Local secrets (API keys for tooling): never committed
+.env
+.env.*

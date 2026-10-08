@@ -1,25 +1,33 @@
 # Troubleshooting
 
 Start with `/cr status`, which prints every system's state on one screen. For anything deeper,
-run Claude Code with `claude --debug`. The debug log names every Control Room hook that ran,
+run Claude Code with `claude --debug`. The debug log names every Project Sentinel hook that ran,
 anything the engine refused, and why.
 
-## Control Room doesn't load
+## Project Sentinel doesn't load
 
 - **Check the version.** Run `claude --version`; 2.1.289 or newer is needed.
-- **Validate the folder.** `claude plugin validate /path/to/plugins/control-room` reports what
+- **Validate the folder.** `claude plugin validate /path/to/plugins/project-sentinel` reports what
   the engine would refuse.
-- **Installed via a marketplace:** `claude plugin list` should show `control-room@control-room`
-  as enabled, with `Read from:` naming your folder. After you pull changes, run `/reload-plugins`
-  in the session.
+- **Installed via a marketplace:** `claude plugin list` should show
+  `project-sentinel@control-room` as enabled, with `Read from:` naming your folder. After you pull
+  changes, run `/reload-plugins` in the session.
+- **Still `control-room@control-room` after 1.4.0** (the plugin was renamed): run
+  `claude plugin marketplace update control-room`. The marketplace maps the old name to the new
+  one, so the update moves your install over (your `enabledPlugins` entry included), and the next
+  session loads Project Sentinel and copies your settings and run history over once.
 - **Desktop:** the Code tab's local sessions load installed plugins and folders named in
   `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. Start a new session
   after changing either.
 - **Desktop shows an older version** (for example the 0.1 status bar, `CTX … | AUTO 700k`): the
   Code tab loads the copy recorded in `~/.claude/plugins/installed_plugins.json`, not the folder.
-  Run `claude plugin update control-room@control-room`, then start a new session.
-- **Organisation policy:** managed settings can disable plugins. Control Room cannot and does not
-  work around that.
+  Run `claude plugin update project-sentinel@control-room`, then start a new session.
+- **Organisation policy:** managed settings can disable plugins. Project Sentinel cannot and does
+  not work around that.
+- **Settings or runs missing after the rename:** they are carried over once, at the first session
+  start that can see Claude Code's configuration folder, and only into an empty store. The old file
+  (`~/.claude/plugins/store/control-room_<source>-<id>.json`) is never changed, so nothing is lost;
+  `claude --debug` names what was carried (`carried … keys over from control-room_…`).
 
 ## `/cr` does nothing, or goes to Claude
 
@@ -66,7 +74,7 @@ anything the engine refused, and why.
   waiting. `Waiting for your answer` means Claude's last message asked you something.
 - **A white bar in the middle of the status bar on Desktop:** that was 1.2.0, whose animated work
   track Desktop drew in a frame of its own default size. 1.3.0 draws every graphic as an image.
-  Update (`claude plugin update control-room@control-room`) and start a new session.
+  Update (`claude plugin update project-sentinel@control-room`) and start a new session.
 - **No Cache reading:** it appears once Claude has answered in this context, and only for a prompt
   of 4,096 tokens or more.
 - **Kit is missing:** see [Kit](#kit-the-companion).
@@ -80,7 +88,7 @@ anything the engine refused, and why.
   Room can count: a milestone done (Claude must keep a task list), a check passing, a finished plan,
   a verified handoff. Each milestone pays once per run, and a check's first pass once per turn.
 - **Claude names points or levels:** it is asked not to. The numbers in Activity and the status bar
-  are Control Room's own.
+  are Project Sentinel's own.
 
 ## The prompt cache
 
@@ -88,23 +96,28 @@ Claude Code reports how many tokens each request read from the cache and wrote t
 (the expiry, the hit ratio, why it was rebuilt) is derived from those, and the panel says so.
 
 - **"Lifetime not known yet"**: Claude Code reports the cache's lifetime only at a model switch.
-  Otherwise Control Room learns it: a request that still reads the cache after more than five idle
-  minutes proves the one-hour cache, and with Keep warm on, one refresh six minutes after the last
-  request tells. Until then the status bar reads `warm`, then `lapsed?`. Once learned, it is
-  remembered across sessions.
+  Otherwise Project Sentinel learns it: a request that still reads the cache after more than five
+  idle minutes proves the one-hour cache, and with Keep warm on, one refresh six minutes after the
+  last request tells. On a claude.ai plan it starts at the one-hour cache (*1-hour cache, the
+  plan's default*) until a request shows otherwise. Until it is known the status bar reads `warm`,
+  then `lapsed?` once you have been away five minutes; never while Claude is working. Once learned,
+  it is remembered across sessions.
+- **It said `lapsed?` while a long command ran** (before 1.4.0): Claude Code's own requests keep
+  the cache warm during a turn, so now it stays `warm` until the turn ends, unless the five-minute
+  lifetime is known.
 - **"Cache rebuilt: 446k tokens · Model changed"**: the request after a change had to write the
   conversation to the cache again, at a higher price than reading it. Context → Cache health says
   what happened and what would avoid it. The usual causes: switching models or effort in the
   middle of a context, the model router switching models, a setting changed with *Keep policies
   stable* off, an MCP server or plugin connected mid-session, or a long break. Compaction always
   rebuilds it, and reads *Expected*.
-- **"Unexplained"**: nothing Control Room saw changed. Once is usually the server evicting the
+- **"Unexplained"**: nothing Project Sentinel saw changed. Once is usually the server evicting the
   cache. If it keeps happening, check for a proxy or gateway between Claude Code and the API that
   does not keep the cache.
 - **A model switch asks first**: *Ask before a model switch* (on by default) confirms a switch that
   would re-send 100k or more warm tokens. Switch at the start of a fresh context instead, or turn it
   off (`/cr cache guard off`).
-- **"Effort changes rebuild the prompt cache on …"**: Control Room saw an effort change rebuild the
+- **"Effort changes rebuild the prompt cache on …"**: Project Sentinel saw an effort change rebuild the
   cache on that model before, so it says so before the next request.
 
 ### Keep warm
@@ -127,14 +140,21 @@ Claude Code reports how many tokens each request read from the cache and wrote t
 ## Kit, the companion
 
 - **Kit doesn't appear**: it is off by default (Setup → *Companion*, or `/cr companion on`). It
-  lives on the status bar above the prompt, so not with `/cr hud status`, and not on mobile.
-- **Kit appeared, then went away**: its drawing failed on this surface, so Control Room left it out
-  and the status bar draws without it. `/reload-plugins` tries again; `claude --debug` names the
-  reason.
-- **It moves too much**: Setup → *Reduce motion* (or `/cr motion off`) holds it still. On a busy
-  machine it slows down by itself.
-- **Clicking it does nothing on Desktop**: a click opens Control Room in the terminal; on Desktop,
-  use the status bar's button.
+  lives in a lane above the status bar, so not with `/cr hud status`, and not on mobile. VS Code
+  shows it still, in its mood's pose.
+- **Kit appeared, then went away**: its drawing failed on this surface, so Project Sentinel left it
+  out and the status bar draws without it. `/reload-plugins` tries again; `claude --debug` names
+  the reason.
+- **It moves too much**: Setup → *Reduce motion* (or `/cr motion off`) holds it in one pose. On a
+  busy machine (the processor near its ceiling) it draws two frames a second and stops walking; at
+  the machine's limit it holds still.
+- **It is tired all the time**: the processor is near the ceiling set in Guardrails → Machine load,
+  or the context is nearly full. Memory alone does not tire it.
+- **A click does nothing much**: a click is a reaction (a purr, a hop, a spin…; several clicks in a
+  row make it dizzy). While Claude works it only looks up; asleep, it is startled. It never opens
+  anything: the status bar's *Control Room* button opens the panel.
+- **It walked off and did not come back**: it carries the notes off at a handoff and stays away
+  until the handoff ends; then it walks back in from the left.
 
 ## Git
 
@@ -147,7 +167,7 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 | Symptom | Cause and fix |
 | --- | --- |
 | Threshold reached but nothing happens | The handoff starts when the current turn ends. Claude is first asked to finish the step it is on (**Handoff soon**). **Hand off now** starts it at once; **Later** postpones it. |
-| "Handoff notes were not written, so the context was not cleared" | Control Room only clears after `NEXT_SESSION_PROMPT.md` (or your configured file) was written during the handoff. Claude gets one reminder; after that it waits for you. Check that Claude may write files in the project (permission mode, Permission Policy *Project file changes*). Then run `/cr handoff` again, or `/cr fresh` once the file exists. |
+| "Handoff notes were not written, so the context was not cleared" | Project Sentinel only clears after `NEXT_SESSION_PROMPT.md` (or your configured file) was written during the handoff. Claude gets one reminder; after that it waits for you. Check that Claude may write files in the project (permission mode, Permission Policy *Project file changes*). Then run `/cr handoff` again, or `/cr fresh` once the file exists. |
 | Waiting for you | `/clear` was refused and compaction was not allowed or also failed, or the continuation is `manual`. Press **Start fresh context** (or `/cr fresh`). |
 | The threshold is lower than I set | It is kept below Claude Code's own auto-compact point, so the handoff runs first. The Context section shows the clamp. |
 | The fresh context didn't continue by itself | *Auto-continue* is off, or the session was waiting on an approval. Ask Claude to continue from `NEXT_SESSION_PROMPT.md`. Your policies and profile are already active. |
@@ -161,16 +181,15 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 
 - **"Control Room Permission Policy: … is set to Deny"**: change that category in Guardrails →
   Permissions. Deny categories are refused before any dialog, in every permission mode.
-- **Unexpected approval prompts in bypass or auto mode:** a category set to **Ask** forces an
-  approval even where the mode would allow it. Set it to *Default* to restore Claude Code's own
-  behaviour.
+- **A question "Run it / Don't run it" in bypass or auto mode:** a category set to **Ask** asks
+  you even where the mode would allow the call: Project Sentinel asks in Claude Code's question
+  dialog, and the status bar reads *Waiting for you to approve*. Set the category to *Default* to
+  leave it to Claude Code's own behaviour.
 - **Headless runs (`claude -p`, CI) failing on installs, deletes or pushes:** with no one to
-  answer, Claude Code refuses an Ask. Set those categories to *Default* for headless use.
-- **Allow had no effect:** Allow only answers a prompt Claude Code would show. It never lifts a
-  deny rule, never acts in plan mode, and is not available for high-risk categories.
-- **"Deleting files no longer offers Allow"**: since 1.0.2, deleting files is high-risk like push
-  and deploys. A saved Allow now reads as Ask, so Claude Code asks before a delete. *Default*
-  leaves it to Claude Code's own rules and permission mode; *Deny* refuses deletes outright.
+  answer, a call set to Ask is refused. Set those categories to *Default* for headless use.
+- **Allow is gone (1.4.0):** answering permission prompts is left to Claude Code: add an allow
+  rule (`/permissions`) or use one of its permission modes. A saved Allow reads as *Default*; the
+  panel says so once. In Bypass permissions mode nothing changes.
 
 ## Machine load
 
@@ -179,9 +198,9 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
   it reads `/proc`. Restricted shells or policies can block these, and the static policy still
   applies.
 - **Readings look high:** they are machine-wide totals, including other programs. That is
-  intended, because the goal is to keep the machine responsive. Control Room never stops or
+  intended, because the goal is to keep the machine responsive. Project Sentinel never stops or
   changes other programs.
-- **A heavy command was "held back":** over a ceiling, Control Room refuses *additional* heavy
+- **A heavy command was "held back":** over a ceiling, Project Sentinel refuses *additional* heavy
   jobs (tests, builds, installs…). Claude is told why and can wait or run fewer at once. Set
   *When over* to *Just tell Claude* to only notify, or raise the level.
 
@@ -210,16 +229,16 @@ It changes presentation only. Press `▸` on a row to expand it, or see everythi
 - **A check is not under Validation:** checks are recognised by their runner (`npm test`, `pytest`,
   `cargo build`, `tsc`, `eslint`, `npm run check`, a script named for a simulation, …). A custom
   script with another name shows under *All tool calls* only.
-- **"in the background"**: a check sent to the background has no outcome Control Room can see.
+- **"in the background"**: a check sent to the background has no outcome Project Sentinel can see.
 - **"diff unavailable"**: no tool reported the lines (a file a shell command created, or a diff
-  Claude Code skipped). Control Room never shows `+0 −0` for an unknown change.
+  Claude Code skipped). Project Sentinel never shows `+0 −0` for an unknown change.
 - **A file I care about is under "Generated and temporary"**: files in temp, cache and build
   folders (`dist`, `target`, `coverage`, …), in `.claude`, outside the project, and the handoff
   notes are grouped there. Press the row to open it.
 
 ## Cost shows "—"
 
-Claude Code didn't report a cost for that session (some hosts or providers don't). Control Room
+Claude Code didn't report a cost for that session (some hosts or providers don't). Project Sentinel
 never estimates. A run total with `+` includes sessions whose cost was not reported.
 
 ## Resetting

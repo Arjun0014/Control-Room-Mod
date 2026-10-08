@@ -1,6 +1,7 @@
 # Contributing
 
-Thanks for helping. Control Room is a privileged plugin, so changes are held to a few firm rules.
+Thanks for helping. Project Sentinel (called Control Room until 1.4.0; its panel still is) is a
+privileged plugin, so changes are held to a few firm rules.
 This page lists them and how to check your work.
 
 ## Setup
@@ -13,11 +14,11 @@ This page lists them and how to check your work.
    ```
 
 3. Load the plugin once so Claude Code writes the engine's type declarations next to it
-   (`plugins/control-room/.claude-plugin/types/` and `plugins/control-room/tsconfig.json`, both
-   git-ignored and rewritten for each Claude Code build):
+   (`plugins/project-sentinel/.claude-plugin/types/` and `plugins/project-sentinel/tsconfig.json`,
+   both git-ignored and rewritten for each Claude Code build):
 
    ```bash
-   claude --plugin-dir plugins/control-room
+   claude --plugin-dir plugins/project-sentinel
    ```
 
    Then `/exit`. While that session is open, every save reloads the plugin live.
@@ -28,8 +29,11 @@ This page lists them and how to check your work.
    npm run check
    ```
 
-   That is `tsc -p plugins/control-room`, `claude plugin validate plugins/control-room --strict`,
-   `claude plugin validate .` (the marketplace) and `claude plugin test plugins/control-room`.
+   That is the type-check, `claude plugin validate plugins/project-sentinel --strict`,
+   `claude plugin validate .` (the marketplace), the source rules (`npm run source`) and the tests.
+   The type-check and the tests run on `.build/mod`, a scratch copy of the plugin folder with the
+   repository's `tests/` beside its `hooks/` (`tools/test/mod.mjs` assembles it), because the
+   plugin folder ships only the plugin.
 
 ## Rules the code follows
 
@@ -43,7 +47,7 @@ This page lists them and how to check your work.
   performs effects.
 - **No network, no telemetry, no secrets.** Don't add HTTP calls, telemetry hooks, environment
   reads or project-file reads. File access is limited to `stat` of the handoff file and of edited
-  paths, plus `/proc` on Linux.
+  paths, `/proc` on Linux, and the one-time read of the store the plugin kept as Control Room.
 - **Never loosen safety.** A deny stays a deny, plan mode stays plan mode, and managed settings
   win. Fallbacks (`.catch`) must be at least as strict as Claude Code without the plugin.
 - **No invented numbers.** Show cost, context and effort only as Claude Code reports them;
@@ -55,12 +59,18 @@ This page lists them and how to check your work.
   `hooks/ui/primitives.tsx`, which draw natively per surface. Decide capabilities by surface
   (`uiOf`), not by whether an element exists in the table. Never use the terminal's `Select`: its
   options cannot be picked or closed with the pointer. Read [docs/DESIGN.md](docs/DESIGN.md) first.
-- **Surface modules stand alone.** A `Client` surface module (Kit's `hooks/ui/companion.client.tsx`)
-  runs on Claude Code's drawing thread: it never touches `$`, imports nothing from the plugin, takes
-  everything it draws from its props, and posts only plain data. `register.tsx` names it with a
-  string literal (`module="./ui/companion.client.tsx"`), as the validator requires.
-- **Never name a local `h` in a `.tsx` module.** JSX compiles to `h(...)`, the environment's
-  factory; a local of that name shadows it and the render hook fails ("h is not a function").
+- **Surface modules stand alone.** A `Client` surface module (Kit's `hooks/kit.client.tsx`) runs on
+  the surface's drawing thread (in Desktop's own page on Desktop): it never touches `$`, imports
+  nothing from the plugin but types, takes everything it draws from its props, and posts only plain
+  data. `register.tsx` names it in the element itself, `<ui.Client module="./kit.client.tsx" />`
+  with `const ui = $.ui.resolve(e)`: never take `Client` out of the table into a name of its own
+  (Anthropic's directory reads that as a Client with no fixed path).
+- **Write what Anthropic's directory can read.** `npm run source` (`tools/test/source.mjs`) checks
+  the rules its scanner holds a plugin to: no local `h` or `Fragment` in a `.tsx` file (JSX compiles
+  to them; a local of that name shadows the environment's factory), no call like `name('!', VALUE)`
+  (read as a hook on a pattern: pass an object), no `get`/`set` accessors (use methods), no tests or
+  system files in the plugin folder, and every `Client` named with a fixed path in its element.
+  Gating hooks decide before `next(e)` or pass it on; nothing answers a permission check.
 - **Every SVG goes through `svgDoc` (`ui/theme.ts`)** or carries its root style: Desktop draws an
   interactive SVG in a sandboxed frame, and without `color-scheme: light dark` the frame is
   painted with an opaque (white) canvas on a dark page.
@@ -70,13 +80,16 @@ This page lists them and how to check your work.
 
 ## Tests
 
-Tests live in `plugins/control-room/tests/` and run with `claude plugin test`:
+Tests live in the repository's `tests/` folder, written as if they sat beside `hooks/`
+(`import … from '../hooks/…'`), and run with `npm test`, which assembles `.build/mod` and runs
+`claude plugin test` on it:
 
 - **Pure logic:** settings, profiles, permissions classifier, guard heuristics, Autopilot reducer
   (and its recovery after a reload), router, chain, run plan, validation and Activity's signal
   (`signal.test.ts`), activity, resource parsers, answer styles (`answers.test.ts`), the Quest
-  log (`quest.test.ts`), the prompt cache model (`cache.test.ts`), Kit's moods and frames
-  (`companion.test.ts`) and Git's status parser (`git.test.ts`).
+  log (`quest.test.ts`), the prompt cache model (`cache.test.ts`), Kit's moods, its behaviour model
+  (never a jump, moods that settle, reactions, calm) and both renderers (`companion.test.ts`), the
+  former store's carry-over (`formerstore.test.ts`) and Git's status parser (`git.test.ts`).
 - **Runtime:** `runtime.test.ts`, with the in-memory host in `tests/fixtures/fake-host.ts` (a manual
   clock and recorded effects); Cache Guardian and Keep warm (`guardian.test.ts`); Handoff Health
   and Continuity, through a whole handoff (`handoff.test.ts`).
@@ -90,7 +103,7 @@ assuming one.
 ### Continuous integration
 
 `.github/workflows/check.yml` runs on every push to `main` and every pull request: the type-check,
-strict validation of the plugin and the marketplace, and the tests, on Linux, Windows and macOS
+strict validation of the plugin and the marketplace, the source rules and the tests, on Linux, Windows and macOS
 with the latest Claude Code from npm, and on Linux with the oldest supported engine (2.1.289). The
 engine's type declarations are laid by loading the plugin once in a headless session, which stops
 at "Not logged in" before any model call; no step signs in. CI does not run the live machine-load
@@ -106,7 +119,8 @@ Unit tests don't paint. Before a release:
   the screen back as text. [`tools/demo`](tools/demo/README.md) plays a scripted turn of real tool
   calls without a model, so the status bar's top line, This turn, the prompt cache and the Quest
   log have something to show (`/demo miss` adds a model switch that rebuilds the cache). Load it
-  with `console.ps1 launch … -Also tools\demo`, so its hooks sit beneath Control Room's.
+  with `console.ps1 launch … -Also tools\demo`, so its hooks sit beneath Project Sentinel's. With
+  Kit on (`/cr companion on`), watch it through the turn and give it a click.
 - Run one Autopilot chain end to end, both in the interactive terminal and in the Desktop host
   protocol (stream-json): they order the `/clear` differently. With a cheap model, set the
   threshold a little above the session's base context (`/cr autopilot 64k` against a 45k base),
@@ -114,25 +128,32 @@ Unit tests don't paint. Before a release:
   step and turn is traced there (`autopilot: … → …`, `turn … started (handoff)`).
 - Keep live tests away from your own settings. Every session that loads the plugin from a folder
   shares one plugin store, your own working session included, so a threshold set in a test would
-  reach it. Load a copy renamed `cr-test` instead (its store is its own), and disable the
-  installed copy in the test project's `.claude/settings.local.json`
-  (`"enabledPlugins": { "control-room@control-room": false }`). Claude Code's `/effort` and
-  `/model` save your default for new sessions: put it back after a test.
+  reach it. Load a frozen copy renamed `cr-test` instead (`npm run snapshot -- <folder>`, then
+  `console.ps1 launch … -Plugin <folder>` or `claude --plugin-dir <folder>`): its store, tool and
+  policy section are its own, it never carries a former store over, and saving the working copy
+  does not reload it mid-test. Disable the installed copy in the test project's
+  `.claude/settings.local.json` (`"enabledPlugins": { "project-sentinel@control-room": false }`).
+  Claude Code's `/effort` and `/model` save your default for new sessions: pass `--model` instead,
+  or put it back after a test.
 - Desktop first through [`tools/desktop-preview`](tools/desktop-preview/README.md): it renders
   the status bar's and the panel's `desktop` element trees as HTML with the CSS the app's own
   renderer gives them (units, row alignment, the picker), so layout and graphics are faithful; the
   font, the design tokens and the colors are close guesses. Then the app itself, which has the last
   word: install the build (bump the pre-release number, `claude plugin update`), start a fresh
-  session so it loads it, and look. Never drive Claude's own window with simulated input; a
+  session so it loads it, and look: Kit walks, takes a click and never jumps; the status bar keeps
+  its five cells at a narrow and at a wide window. Never drive Claude's own window with simulated input; a
   read-only capture of it is fine when the person agrees.
 - On macOS and Linux, turn machine load on and confirm `/cr status` shows live CPU and memory.
 
 ## Releases
 
-1. Update `version` in `plugins/control-room/.claude-plugin/plugin.json`, in
-   `.claude-plugin/marketplace.json` **and** `VERSION` in `plugins/control-room/hooks/constants.ts`.
+1. Update `version` in `plugins/project-sentinel/.claude-plugin/plugin.json`, in
+   `.claude-plugin/marketplace.json` **and** `VERSION` in `plugins/project-sentinel/hooks/constants.ts`.
    The workspace `package.json` is private and carries no version of its own.
 2. Move the `Unreleased` notes in `CHANGELOG.md` under the new version.
 3. Run `npm run check`.
-4. Run `claude plugin tag plugins/control-room` to create the `control-room--v<version>` tag after
-   checking that the manifest and the marketplace entry agree.
+4. Push `main`, then run `claude plugin tag plugins/project-sentinel` to create the
+   `project-sentinel--v<version>` tag (it checks that the manifest and the marketplace entry
+   agree), and push the tag. Never move a tag once it is pushed.
+5. For Anthropic's directory, submit the plugin path `plugins/project-sentinel` at that tag. The
+   listing text is the plugin folder's `README.md`; its icon is `.claude-plugin/icon.png`.

@@ -8,38 +8,74 @@ match. `claude plugin tag plugins/project-sentinel` checks this when tagging a r
 
 ## [Unreleased]
 
-Work toward 1.4.0 (in progress: Kit's rebuild, the listing README, the plugin folder's licence and
-icon, and the docs are still to come; these notes become the 1.4.0 entry).
+## [1.4.0] - 2026-10-08
+
+Control Room is now **Project Sentinel**, ready for Anthropic's plugin directory: the plugin folder
+holds only the plugin, with its listing text, licence and icon, and its source passes the checks
+the directory reads. Kit is rebuilt from the ground up, the Desktop status bar gains a Machine
+cell, and the cache no longer reads "lapsed?" while Claude works.
 
 ### Changed
 
 - **Renamed to Project Sentinel** (`project-sentinel`): Anthropic's directory held `control-room`
   as confusable with another listing. The panel is still Control Room, and `/control-room` and
   `/cr` still open it. The marketplace keeps its name and maps the old name to the new one
-  (`renames`), so an existing `control-room@control-room` install moves to
-  `project-sentinel@control-room` by itself (checked in an isolated configuration: the marketplace
-  update rewrote `enabledPlugins`, and the next session installed and loaded the renamed plugin).
+  (`renames`), so `claude plugin marketplace update control-room` moves an existing
+  `control-room@control-room` install to `project-sentinel@control-room` (checked in an isolated
+  configuration: the update rewrote `enabledPlugins`, and the next session installed and loaded
+  the renamed plugin).
 - **Settings and history come along.** Claude Code keeps a plugin's store under its name, so once,
   at the first session start, Project Sentinel reads the store it kept as Control Room and copies
   the settings, the runs, the Quest log and the cache memory over, never over what its own store
   holds. The old file is only read, never changed.
+- **Kit, rebuilt.** One surface module (`hooks/kit.client.tsx`) now draws Kit in the terminal and
+  on Desktop, on the surface's own clock, with a small behaviour model:
+  - **No jump, ever.** Kit moves only by walking, turns only through a frame that faces you, and
+    sits, stands and lies down only through a crouch or a lie-down frame; a mood change starts
+    from where Kit is. In 1.3.0 Desktop drew Kit as an image that animated itself, and every mood
+    change restarted it from its own start (a walk, then a teleport back); the terminal reset its
+    place at each entrance (the glitch at a session start).
+  - **Moods settle.** A new mood applies once it has held 1.2 seconds and a mood holds at least
+    2.5, so a flicker between tool calls restarts nothing; a handoff, a finish, a failure, a
+    question and a fresh context apply at once. It walks in once per context, never on a redraw.
+  - **Much more to do**, each mood a program of acts chosen without repeats: stretching, yawning,
+    grooming, scratching an ear, swishing its tail, looking around, a stroll, a butterfly, a leaf to
+    pounce on, a sneeze; pacing with thought dots; typing on a tiny keyboard; reading a book in
+    round glasses or walking with a magnifier; watching a check with a spinner; a dance with
+    confetti at a green finish (never beside a failing check); a facepalm at a failure; facing you
+    with a question mark; fanning itself; tending a fire; nodding off, then curled up asleep with
+    Zzz and the odd dream bubble. A flag when a milestone is done, a poke at the fire when Keep warm
+    refreshes. At a handoff it carries the notes off and walks back in with the fresh context.
+  - **It takes a touch**, on Desktop too: a purr with hearts, a hop, a spin, a blush, an ear flick, a
+    nose boop, a roll for a belly rub, a high five (every one before any repeats, never twice
+    running); five clicks make it dizzy; asleep it is startled; while Claude works it only looks
+    up. A click no longer opens the panel: the status bar's button does.
+  - **Drawn anew on Desktop:** an image per frame, 40 × 24 art pixels at 3 pixels each (twice the
+    detail), shaded and outlined, with a soft shadow. The terminal keeps its half blocks, with a
+    tail and glyphs every terminal font has.
+  - **Calm:** Reduce motion and a machine at its limit hold one still pose; a busy processor draws
+    two frames a second and never walks. Memory merely high no longer tires Kit.
+  - VS Code, which draws no surface module, shows Kit's pose for its mood as a still image.
 - **The Allow permission state is removed.** Default, Ask and Deny remain. A saved Allow reads as
   Default (Claude Code's own rules decide), never Ask; the panel says so once. In Bypass
   permissions mode nothing changes; outside it, prompts Allow answered come back unless Claude
   Code's own allow rules cover them.
 - **Ask asks in Claude Code's own question dialog.** Where Claude Code would run a call set to Ask
-  without asking (its own verdict, from a check that runs nothing), Control Room asks first and
-  passes the call on after a yes, so settings rules and PreToolUse hooks still apply after it.
-  Control Room no longer answers permission checks itself.
+  without asking (its own verdict, from a check that runs nothing), Project Sentinel asks first
+  (*Run it* / *Don't run it*) and passes the call on after a yes, so settings rules and PreToolUse
+  hooks still apply after it; the headline reads *Waiting for you to approve* meanwhile. Project
+  Sentinel no longer answers permission checks itself.
 - **The status bar on Desktop has a Machine cell** between Cache and Run: CPU and memory as slim
   level bars with their percentages, amber near a ceiling and red at it. The columns are weighted
   by what they hold (Work and Context wider), the track and the meter fill their column from the
   band's width, and the machine chip leaves the headline on Desktop. The cache cell says what it
   holds where there is room (`warm · 345k`).
-- A fresh context's notes after a handoff ride its first message (one more context block) instead
-  of changing the session's start.
+- A fresh context's notes after a handoff ride its first message (one more context block,
+  `contextAutopilot`) instead of changing the session's start.
 - The CPU and memory sampler and `/clear` are written in full where they run; the Windows sampler
   no longer passes `-ExecutionPolicy` (a `-Command` script is not governed by it).
+- `gh auth …` commands count as network access (they talk to GitHub); only `gh help` and
+  `gh --version` are left alone.
 
 ### Fixed
 
@@ -49,11 +85,28 @@ icon, and the docs are still to come; these notes become the 1.4.0 entry).
   named as the plan's default; a miss after five idle minutes corrects it to five. Overview's Cache
   card says its state once.
 
+### Directory
+
+- The plugin folder carries the directory's listing: `README.md` (what Project Sentinel does,
+  five examples, and everything it runs, reads, sends and stores, with a privacy statement),
+  `LICENSE` and `.claude-plugin/icon.png` (Kit, 1024 × 1024). `plugin.json` names the icon and the
+  documentation, support and privacy links.
+- The source passes the directory's reading of it: the handoff card's `h` is `view`; runtime
+  accessors are methods; `Client` is named in its element with a fixed path; no `ui.fault` hook
+  (not on the directory's list); no `tool.check` hook; `classic.SessionStart` passes its event on
+  unchanged; no call shaped like a pattern hook; a token count is `shortCount`, not a "tokens"
+  word; the classifier's examples carry no URLs. `types` stays in `plugin.json`: Claude Code's own
+  validation needs it.
+
 ### Development
 
 - Tests moved to the repository's `tests/`: the plugin folder ships only the plugin. `npm test` and
-  the type-check assemble `.build/mod` (plugin plus tests); `tools/test/source.mjs` checks the
-  source rules Anthropic's directory reads.
+  the type-check assemble `.build/mod` (plugin plus tests); `tools/test/source.mjs` (`npm run
+  source`, also in CI) checks the source rules Anthropic's directory reads;
+  `tools/test/snapshot.mjs` (`npm run snapshot`) makes a frozen `cr-test` copy for live tests that
+  never carries a former store over. 266 tests, among them a randomized walk through every mood
+  with touches that checks Kit never jumps (also fuzzed over thousands of runs).
+- The Desktop preview draws Kit's surface module inside its region and shows Kit through a turn.
 
 ## [1.3.0] - 2026-10-08
 

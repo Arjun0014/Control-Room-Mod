@@ -1,6 +1,6 @@
 # Design
 
-Control Room sits beside someone's work, all day. It has to be glanceable, quiet and obvious.
+Project Sentinel sits beside someone's work, all day. It has to be glanceable, quiet and obvious.
 This page records the decisions behind the UI, so later changes keep it that way.
 
 ## Principles
@@ -137,9 +137,9 @@ In the terminal (150 columns):
 On Desktop:
 
 ```
-(▸) Running tests · step 3 of 10                                         ✗ Lint failing   [ ◆ Control Room ]
-Work                       Context · hands off at 70%          Cache                                  Run
-●━●━◉─○─○─○  2 of 10       ▬▬▬▬▬▬▬▬▬┃▬▬▬  24%                    ◔ 42m left                         $43.00
+(▸) Running tests · step 3 of 10                                           ✗ Lint failing   [ ◆ Control Room ]
+Work                       Context · hands off at 70%    Cache              Machine                   Run
+●━●━◉─○─○─○  2 of 10       ▬▬▬▬▬▬▬▬▬┃▬▬▬  24%             ◔ warm · 345k      CPU ▮ 34%  RAM ▮ 85%      $43.00
 ```
 
 **The headline** says what the run is doing in words a person would use, with a mark for its
@@ -153,7 +153,7 @@ state (`app/headline.ts`), so it never says one thing while another is true:
 | handoff | `↻` orange | Autopilot's step: writing the notes, starting fresh, resuming |
 | waiting for a result | `◷` blue | a background job, a scheduled wake-up, a milestone marked *waiting*: `Waiting for the test run · 2 more running`, `Waiting to check back · wakes at 06:12` |
 | blocked | `⊘` amber | `Blocked:` what only the person can give |
-| waiting for you | `◆` orange | Claude asked something, or a handoff waits to start fresh |
+| waiting for you | `◆` orange | Claude asked something, a handoff waits to start fresh, or a call set to *Ask* waits for your answer (`Waiting for you to approve: git push`, the command beside it) |
 | done, complete | `✓` green | what the last turn did in counted words; `All 6 milestones done` |
 | failing | `✗` amber | the same, after a turn that left a check failing; the words stay plain, the mark and a chip carry the color |
 | ready | `○` dim | before the first turn: the run's objective as Claude stated it, else `Ready` |
@@ -163,8 +163,9 @@ progress.
 
 **On the right, only what needs a look**, as chips, the most pressing first: a failing check by
 name (`✗ Lint failing`, red; not counted again as an issue), calls that need a look
-(`▲ 2 issues`), the guard keeping Claude going, a busy machine (`▲ RAM 92%`, amber near a ceiling,
-red at it), running agents, the Quest log's level. Then the **Control Room** button: in the
+(`▲ 2 issues`), the guard keeping Claude going, a busy machine in the terminal (`▲ RAM 92%`, amber
+near a ceiling, red at it; Desktop has its Machine cell instead), running agents, the Quest log's
+level. Then the **Control Room** button: in the
 terminal a filled chip in the theme's quiet gray, brand orange while the panel is open; on
 Desktop the native button, primary while the panel is open.
 
@@ -180,9 +181,12 @@ Desktop the native button, primary while the panel is open.
 - **Cache** is a clock face emptying as the prompt cache's lifetime runs out (`◕ 42m left`),
   shown in the terminal only while it can matter: when you are away, or for a few minutes after a
   costly rebuild (`● rebuilt 446k`, amber). While Claude works, its requests keep the cache warm.
-  On Desktop it keeps its cell: `warm` while Claude works (its time left once it nears the
-  expiry, as a long call can let it), the time left while you are away, `—` before anything is
-  cached.
+  On Desktop it keeps its cell: `warm` while Claude works (with what it holds where there is room,
+  `warm · 345k`), the time left while you are away, `—` before anything is cached. While a turn
+  runs it never reads `lapsed?`: Claude Code's own requests keep it warm.
+- **Machine** (Desktop) is CPU and memory as two slim level bars with their percentages
+  (`CPU ▮ 34%  RAM ▮ 85%`), amber near a ceiling and red at it; in a narrower band the caption reads
+  `CPU · RAM` and the labels go, and in a compact one the bars go too.
 - **Run** is the whole run's cost on the right edge, which a fresh context never resets.
 
 Settings (a profile, the threshold) are never shown. A handoff that needs the person takes a line
@@ -198,13 +202,16 @@ readings appear, the meter from 24 cells down to 6, the track from 16 stops down
 the count beside it exact), the notes only with room. Only then does the least important reading
 drop. Docked beside the panel (about 80 columns) the whole line still fits.
 
-**On Desktop the surface lays the row out, not counted cells.** Each reading is a cell of an
-equal share of the row: a quiet caption over its graphic and value. The run's cost takes what it
-needs at the right edge. The four readings always keep their cells, a dim word standing in for
+**On Desktop the surface lays the row out, not counted cells.** Each reading is a column weighted
+by what it holds (Work and Context 3, Cache and Machine 2, on a zero basis, so a column never
+drifts as its value changes): a quiet caption over its graphic and value. The run's cost takes what
+it needs at the right edge. The five readings always keep their cells, a dim word standing in for
 one with nothing yet (`No milestones yet`, `—`): a row that dropped them collapsed to two readings
-with a wide empty middle (a release candidate of 1.3.0, seen in the app). So the row never overflows, nothing
-drifts and its rhythm holds, from 500 pixels to a full window; below 80 columns the cells turn
-compact (fewer stops, a shorter meter, `2/10`, `None`). Every
+with a wide empty middle (a release candidate of 1.3.0, seen in the app). Width decides the detail
+in three tiers, each sized so every cell fits: wide from 110 columns, medium from 80, compact below
+(fewer stops, a shorter meter, `2/10`, `None`). The track's stops and the meter take their size
+from the band's width alone. So the row never overflows, nothing drifts and its rhythm holds, from
+500 pixels to a full window. Every
 graphic is an image of a fixed size (`Svg` with `width` and `height`), never an interactive
 frame: Desktop sizes a frame on its own (300 pixels without a width) and may paint it opaque,
 which drew 1.2.0's work track as a white bar.
@@ -213,34 +220,61 @@ which drew 1.2.0's work track as a white bar.
 components (`AskUserQuestion`, `UserMessage`, `AssistantMessage`, `ToolUse`, `ToolResult`,
 `ToolGroup`, `ToolProgress`, `CommandOutput`, `Spinner`, `TurnDuration`, `InfoNotice`,
 `SessionMode`, `PromptHint`, `AbovePrompt`, `Pane`) include nothing for it, so a plugin can
-neither hide nor move it. Control Room draws no Git UI on Desktop; its Git line is terminal-only
-(Overview and `/cr status`).
+neither hide nor move it. Project Sentinel draws no Git UI on Desktop; its Git line is
+terminal-only (Overview and `/cr status`).
 
 ## Kit, the companion
 
 Off by default: a status bar is calm first. Turned on (Setup → *Companion*), Kit, a small
-Claude-orange creature (18 × 10 pixels, with ears and expressive eyes), shows by what it does what
-the headline says in words. It never carries information the bar does not; it is company, not a
-reading.
+Claude-orange creature with pointed ears, a tail, a cream belly and big eyes, shows by what it does
+what the headline says in words. It never carries information the bar does not; it is company, not
+a reading.
 
-Fifteen moods: sitting by, glancing now and then (idle); pacing while Claude thinks; busy, a
-spark where its arm lands, while it works; a magnifier while it reads or searches; sitting up
-watching a check, a spinner beside it; hopping at a green finish; startled, a bead of sweat, by a
-failure; a question mark when the run needs you or waits for a result; tired and sweating on a
-busy machine or a nearly full context; tending a small fire while Keep warm holds the cache;
-dozing and fading as the cache nears its expiry; sleepy, then asleep, when nothing happens; and at
-a handoff it carries the notes off and walks back in with the fresh context.
+**What it does.** Fifteen moods, each a small program of acts Kit chooses among (never the same
+twice running): sitting by and stretching, yawning, grooming, scratching an ear, swishing its
+tail, looking around or down at the headline, now and then a short stroll, rarely a butterfly to
+paw at, a leaf to pounce on, a sneeze (idle; more yawns at night); pacing with thought dots
+(thinking); typing on a tiny keyboard, sparks now and then (working); reading a book in round
+glasses, or walking with a magnifier (searching); sitting up, tail twitching, a spinner beside it
+(a check running); a dance with confetti, then happy (a green finish); a start, then a facepalm and
+sweat (a failure); facing you with a question mark (the run needs you); fanning itself (a busy
+processor or a nearly full context); tending a small fire (Keep warm); dozing, faded (the cache
+about to lapse); nodding off, then curled up asleep with rising Zzz and now and then a dream
+bubble. Moments get their own act: a flag planted when a milestone is done, the dance at a green
+finish (never beside a failing check), a facepalm when a check fails, a poke at the fire when Keep
+warm refreshes. At a handoff it picks up the notes and carries them off to the right; when the
+fresh context begins it walks back in from the left. It walks in once per context, never again on
+a redraw.
 
-Calm rules: most moods stand or sit still and only blink or glance; walking is slow and pauses. On
-a busy machine it plays at two frames a second at most and stops walking; a machine at its limit
-holds it still; *Reduce motion* holds one frame. In the terminal it is five rows of half blocks
-played by a surface module on its own frame clock (the plugin does no work between frames), and it
-stands on the HUD's top edge, a quiet line; a click on it opens Control Room. On Desktop it is a
-360 × 68 pixel image that animates itself (each sprite pixel 6 × 6, drawn with crisp edges so no
-seam shows between its rows at a display scale like 125%; at 4 × 4 it read as a speck beside the
-app's text), above the headline, lined up with its left edge, in a narrower lane in a narrow band. If
-its module ever fails to draw, it is left out until the plugin reloads, and the status bar draws
-without it.
+**Never a jump.** Kit's place changes only by walking, its facing only through a frame that faces
+you, and it sits, stands and lies down only through a crouch or a lie-down frame; a mood change
+starts from where Kit is. A new mood applies once it has held for 1.2 seconds, and a mood holds at
+least 2.5 seconds, so a flicker between tool calls restarts nothing; a handoff, a finish, a
+failure, a question and a fresh context apply at once. (Checked by a test that runs every mood at
+random moments with touches, and by thousands of fuzzed runs.)
+
+**A touch.** A click on Kit is a reaction: a purr with hearts, a happy hop, a spin, a blush and a
+wiggle, an ear flick, a nose boop, a roll for a belly rub, a high five; every one before any
+repeats, never the same twice in a row, at most one in 0.9 seconds. Five clicks in five seconds
+make it dizzy. Asleep, it is startled (and grumpily dozes off again); while Claude works, it only
+looks up with a `!`. A click beside it while it idles turns its head there, and sometimes it walks
+over. Kit never opens anything: the status bar's button does.
+
+**Calm rules.** Most acts sit still and only blink, breathe or swish a tail; walks are slow. On a
+busy processor it draws two frames a second at most and never walks; a machine at its limit and
+*Reduce motion* hold one still pose for the mood, with at most one mark (a `?`, a `z`). Memory
+merely high changes nothing.
+
+**How it is drawn.** One surface module, `hooks/kit.client.tsx`, plays Kit on the surface's own
+clock in the terminal and on Desktop (the plugin does no work between frames; a frame that changes
+nothing draws nothing). In the terminal Kit is 20 × 10 pixels in five rows of half blocks, standing
+on the HUD's top edge, with glyphs every terminal font has (`♥ * ? z ♪`). On Desktop it is an image
+per frame in a lane above the headline (up to 560 × 84 pixels): 40 × 24 art pixels at 3 pixels
+each, shaded from the top left and outlined, one path per color, with crisp edges so no seam shows
+at a display scale like 125%, a soft shadow under it, and its props and particles in the same
+pixels. VS Code, which draws no surface module, shows the mood's still pose as an image. If its
+module ever fails to draw, it says so and is left out until the plugin reloads; the status bar
+draws without it.
 
 ## Overview
 
@@ -312,7 +346,7 @@ is made by example. A style governs Claude's messages only, never code, files or
 messages. Claude Code's own output style, when the person chose one, outranks it: the card then
 reads *Paused* and says why.
 
-The Quest log is a game layer kept honest. XP comes only from outcomes Control Room counts itself
+The Quest log is a game layer kept honest. XP comes only from outcomes Project Sentinel counts itself
 (a milestone done, once per run; a check's first pass in a turn, or passing again after failing;
 a plan of three or more finished; a handoff with verified notes), never from lines, files or tool
 calls, which would reward churn, and never from what Claude says. Claude is told never to state

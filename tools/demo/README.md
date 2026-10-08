@@ -1,15 +1,15 @@
 # Demo driver (development only)
 
-Not part of the plugin and never installed. It fills Control Room with a short piece of real work
+Not part of the plugin and never installed. It fills Project Sentinel with a short piece of real work
 so the status bar and the panel can be captured for the README without a model: the repository's
 terminal screenshots come from it.
 
 `/demo` submits a request ("The ISS speed test fails. Fix it, add orbitalPeriod with a test, and
 document the helpers.") and answers each model step of that turn from a script, with a
 `turn.step` hook that yields the step's text and tool calls itself. So the turn is a genuine
-engine turn: Claude Code runs every tool call in it through Control Room's hooks, its own
+engine turn: Claude Code runs every tool call in it through Project Sentinel's hooks, its own
 permission check and the tool itself. In the sample project in `project/` the turn records four
-milestones (with Control Room's `milestones` tool where it is offered, else TodoWrite), reads and
+milestones (with Project Sentinel's `milestones` tool where it is offered, a `cr-test` snapshot's included, else TodoWrite), reads and
 searches the code, runs `npm test` (which fails), fixes the bug, runs the tests again (they pass),
 writes a new module with its test, runs `npm run lint` (there is no lint script, so it fails) and
 edits the README. Every other turn goes to the model as usual.
@@ -38,9 +38,9 @@ Copy-Item -Recurse -Force tools\demo\project\* C:\path\to\a\trusted\folder\
 .\tools\console\console.ps1 send -Spec 'text:/demo miss|enter'
 ```
 
-The launch adds `--plugin-dir plugins/control-room` itself, then one for each `-Also` folder.
+The launch adds `--plugin-dir plugins/project-sentinel` (or the `-Plugin` snapshot) itself, then one for each `-Also` folder.
 Load the demo with `-Also`, not with a `--plugin-dir` of its own in `-Claude`: plugins loaded
-later sit beneath the ones before them, and the demo's `turn.step` hook must sit beneath Control
-Room's, or Control Room never sees the scripted steps (no cache figures, no model switch). A turn
+later sit beneath the ones before them, and the demo's `turn.step` hook must sit beneath Project
+Sentinel's, or Project Sentinel never sees the scripted steps (no cache figures, no model switch). A turn
 edits the sample files, so copy `project/` back before the next one, and empty the folder
 afterwards.

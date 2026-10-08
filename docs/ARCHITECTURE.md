@@ -1,8 +1,9 @@
-# Control Room — Architecture & Implementation Plan
+# Project Sentinel — Architecture & Implementation Plan
 
 Status: implemented (see `CHANGELOG.md`). This document is the design record:
-what the platform verifiably supports, how Control Room is built on it, and
-why each decision was made. Written before implementation, kept current.
+what the platform verifiably supports, how Project Sentinel (called Control
+Room until 1.4.0; its panel still is) is built on it, and why each decision was
+made. Written before implementation, kept current.
 
 Target platform: Claude Code function-hooks plugins ("mods"), verified on
 **2.1.289**, **2.1.292** and **2.1.293** (the engine Claude Desktop and the
@@ -19,24 +20,26 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 
 | Need | Mechanism | Result |
 | --- | --- | --- |
-| Automatic `/clear` | `$.command.run({ command: 'clear' })` from a `$.clock.after` timer after `turn.complete` | ✅ Host protocol (Desktop): `session.end{reason:'clear'}` → new session id → `classic.SessionStart{source:'clear'}` → promise resolves; the stream emits `conversation_reset`. ⚠ Interactive terminal: the promise resolves *first* and the reset follows. Control Room therefore waits for `classic.SessionStart{clear}` (up to 15 s, else a changed session id) before it continues. |
-| Inject context into the fresh window | `classic.SessionStart` (source `clear`) answering `additionalContext` | ✅ fresh-context model quoted the injected marker verbatim |
-| Resume autonomously | `$.prompt.submit({ text })` after the clear resolves | ✅ turn starts by itself, framed as "The control-room plugin sent a message" |
+| Automatic `/clear` | `$.command.run({ command: 'clear' })` from a `$.clock.after` timer after `turn.complete` | ✅ Host protocol (Desktop): `session.end{reason:'clear'}` → new session id → `classic.SessionStart{source:'clear'}` → promise resolves; the stream emits `conversation_reset`. ⚠ Interactive terminal: the promise resolves *first* and the reset follows. Project Sentinel therefore waits for `classic.SessionStart{clear}` (up to 15 s, else a changed session id) before it continues. |
+| Inject context into the fresh window | `prompt.context` answering `{ blocks: [...e.blocks, { name: 'contextAutopilot', text }] }` for the fresh context's first message, once; after its own `/clear` the plugin calls `$.ui.invalidate('prompt.context')` so the engine asks again | ✅ in the engine harness. (Until 1.3.0: `classic.SessionStart` answering `additionalContext`, verified live; Anthropic's directory cannot read that answer as leaving the session's start alone, so `classic.SessionStart` now passes `next(e)` on unchanged.) |
+| Resume autonomously | `$.prompt.submit({ text })` after the clear resolves | ✅ turn starts by itself, framed as "The control-room plugin sent a message" (now "The project-sentinel plugin …") |
 | `$.state` across `/clear` | — | ⚠ **reset** by `/clear` (version back to 0). Module memory survives `/clear`; `$.store` survives everything. |
 | Mid-turn policy updates (no user prompt) | `$.session.append({ message: { type: 'user', content } })` during a running turn | ✅ stored as a hidden (`isMeta`) user row and read on the very next model request |
 | Continue a premature stop | `classic.Stop` answering `{ block }` | ✅ model continued in the same turn; 2nd Stop carries `stop_hook_active: true` |
 | Subagent enforcement | `agent.spawn` answering `{ deny }` | ✅ model receives "Subagent spawn denied by a plugin: …" |
-| Force approval | `tool.check` answering `{ decision: 'ask' }` | ✅ tightens an `allow` rule; **holds in `bypassPermissions` mode**; headless with no approver → "needs approval" |
+| Ask before a call | In `tool.call`, before `next`: `$.tool.check({ tool, input })` reads Claude Code's own verdict (it runs nothing); where Claude Code would not ask (allow, no verdict, auto mode), `$.ui.ask(question, { options: ['Run it', "Don't run it"], header: 'Approve' })` asks in Claude Code's question dialog; a decline answers `{ deny }` | ✅ in the engine harness; the dialog is Claude Code's own. There is no `tool.check` hook: the directory refuses one that reads what `next` answered, and answering a permission check is what the removed *Allow* did. (Until 1.3.0: `tool.check` answering `{ decision: 'ask' }`, which held in `bypassPermissions` mode.) |
 | Per-request effort | `turn.step` → `next({ ...e, effort: 'max' })` | ✅ accepted (Sonnet 5.5 default `medium` → sent `max`); `e.effort` is absent for models without effort (Haiku) |
 | Live context / cost | `session.measure` (pushed after every main turn) + `$.session.usage()` | ✅ `context.tokens/window/percent`, `cost.usd`, `rateLimits` |
 | Host CPU/RAM | `$.process.spawn` of one long-lived sampler | ✅ Windows P/Invoke sampler: ~0.5 s CPU / 30 s incl. start-up, ~80 MB; one-shot probes cost ~2.4 s each (rejected). Verified live through the final plugin on 2.1.289 and 2.1.292. |
 | Model per request | `turn.step` → `next({ ...e, model })` | ⚠ **full ids only**: a bare alias (`haiku`) fails the turn on 2.1.292 (`unrecognized_model` → `model_fallback` → an error answer). Ids reported in `usage.model` (main and subagent steps) work. Subagent spawns *do* resolve aliases. |
-| Store scope | `$.store` | One store per plugin name and source (`~/.claude/plugins/store/<name>_<source>-<hash>.json`); every `--plugin-dir` load of `control-room` shares one. |
-| Prompt cache figures | `turn.step` answer `usage` (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `model`) for each main-thread request | ✅ in the engine harness and live. ⚠ Claude Code keeps its own tracker (expiry, hit ratio, misses and their causes), but hands it only to the **status line** (`prompt_cache` in its input), never to a mod: `$.session.usage()` has context, rate limits and cost only. So Control Room derives the same figures from the usage and names them as derived. Checked live against the status line's `prompt_cache` (1-hour cache, Sonnet 5.5): the derived expiry within a second of the engine's, the hit ratio identical (0.62185) once Keep warm's refreshes are left out of it, as the engine leaves them. |
+| Store scope | `$.store` | One store per plugin name and source (`~/.claude/plugins/store/<name>_<source>-<hash>.json`, the hash the first 12 hex digits of the SHA-256 of `<name>@<source>`; the source `inline` for a folder or a directory marketplace loaded in place); every `--plugin-dir` load of `project-sentinel` shares one. |
+| A renamed plugin and its store | the marketplace's `renames` (`{ "control-room": "project-sentinel" }`); `$.fs.read` of the former store's file once | ✅ in an isolated configuration (2.1.293): `claude plugin marketplace update` rewrote `enabledPlugins` to the new name, the next session installed and loaded it, and the carry-over (`app/formerStore.ts`: the configuration folder from the session's transcript path, the candidate files by source) copied the settings, the cache memory, the Quest log and a run, renumbering the new one. The old file is only read. |
+| The cache's lifetime on a plan | `$.session.usage().rateLimits` naming `five_hour` or `seven_day` windows | Read as a claude.ai plan, whose default prompt-cache lifetime is one hour: used below anything learned or reported, never stored, corrected by a miss after five idle minutes. |
+| Prompt cache figures | `turn.step` answer `usage` (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `model`) for each main-thread request | ✅ in the engine harness and live. ⚠ Claude Code keeps its own tracker (expiry, hit ratio, misses and their causes), but hands it only to the **status line** (`prompt_cache` in its input), never to a mod: `$.session.usage()` has context, rate limits and cost only. So Project Sentinel derives the same figures from the usage and names them as derived. Checked live against the status line's `prompt_cache` (1-hour cache, Sonnet 5.5): the derived expiry within a second of the engine's, the hit ratio identical (0.62185) once Keep warm's refreshes are left out of it, as the engine leaves them. |
 | Cache lifetime and a confirmed model switch | `classic.PreModelSwitch` (`prompt_cache_warm`, `cache_ttl`, `context_tokens`, `estimated_cache_write_usd`) answering `permissionDecision: 'ask'` with a reason; `classic.PostModelSwitch` (`from_model`, `to_model`, `cache_ttl`, `source`) | ✅ live on 2.1.293 (143k warm, Sonnet → Opus): Claude Code asks "Switch model?" with the hook's reason and Yes / No; declining keeps the model and the cache. ⚠ The reason is drawn on one line and cut at the terminal's width, so it is kept short. After the switch, the lifetime as Claude Code reports it, and the rebuild named as Claude Code names it (model and effort changed, 143k re-cached). |
 | Keep the cache warm | `$.model.fork({ prompt })` from a `$.clock.after` timer | ✅ live on 2.1.293 (Sonnet 5.5, 1-hour cache): a fork re-sends the main thread's last request plus one user message, never added to the transcript (0 rows), and returns the request's usage. The engine counts a fork that reads the cache as a *touch*, not a request: its own expiry moved 05:38 → 05:44 → 06:34 with each refresh (requests stayed 2). A real prompt 66 minutes after the last one, past the expiry the refreshes replaced, read the cache (0 misses), and Keep warm marked itself verified. Each refresh of an 87k context cost about $0.02. On a 5-minute cache too: the probe learned the lifetime (it found the cache gone, as a probe past five minutes must), refreshes every four minutes read the whole 141k, and a prompt after a replaced expiry hit. ⚠ Claude Code's own tracker touches the expiry only for a fork that *reads* the cache, so after a probe that rebuilt it the status line says cold while the cache is warm (the next refresh read all of it). `nothing-to-fork` before the first response. |
-| A drawing with its own clock | a `Client` element naming a surface module (`module` must be a string literal in `register.tsx`); the module gets `surface.every`, `setState`, `onPointer`, `post`; `ui.message` carries its posts to the hooks module, `ui.fault` reports a module that failed | ✅ terminal, live in a real console (Kit). Desktop draws an SVG instead. |
-| Graphics on Desktop | `Svg` with `source`, `alt`, `width`, `height`; `isInteractive` draws it in a script-less sandboxed frame instead of an image | ⚠ A frame with no `width` takes the browser's default (300 px), and a frame whose color scheme differs from the page's is painted opaque: 1.2.0's animated work track showed as a white bar on Desktop. SMIL animates inside a plain image too (checked in Chromium). So Control Room draws every graphic as an image with an explicit size and never asks for a frame. |
+| A drawing with its own clock | a `Client` element naming a surface module, written `<ui.Client module="./kit.client.tsx" />` with `const ui = $.ui.resolve(e)` (the directory reads a `Client` taken out of the table as one with no fixed path); the module gets `surface.every`, `setState`, `onPointer`, `post`; `ui.message` carries its posts to the hooks module | ✅ terminal, live in a real console (Kit through a demo turn, clicks). Desktop runs the module in its own page (a frame with Claude Code's runtime): pointer events in cells of 1ch × 1lh, its local state kept across redraws under one key; a hand-made `{ type: 'Svg', props }` element is accepted in its tree (at most 2000 nodes, depth 32, scalar props; an `Svg` source up to 131072 characters). Chromium decodes a fresh data-URL image before its first paint (60 of 60), and Desktop replaces the region's DOM per render, so an image per frame does not flicker. No `ui.fault` hook: it is not on the directory's list of events; a module that cannot draw posts `{ fault }` instead. |
+| Graphics on Desktop | `Svg` with `source`, `alt`, `width`, `height`; `isInteractive` draws it in a script-less sandboxed frame instead of an image | ⚠ A frame with no `width` takes the browser's default (300 px), and a frame whose color scheme differs from the page's is painted opaque: 1.2.0's animated work track showed as a white bar on Desktop. So Project Sentinel draws every graphic as an image with an explicit size and never asks for a frame. (SMIL animates inside a plain image too, but an image that animates itself restarts from its own beginning whenever it is replaced: 1.3.0's Kit teleported back at each mood change. Kit is now an image per frame from its surface module.) |
 | How Desktop lays a tree out | the app's own renderer (Claude Desktop 2.26454, read from its bundle) | A `Box` is a flex `div`: `width`, `minWidth`, `columnGap` and horizontal margin and padding in `ch`; `height` and `minHeight` in `lh`; `rowGap` and vertical margin and padding in half lines (`--engine-row-unit`, `.5lh`); a bordered box gets the app's border, radius and padding. A `Text` is a `span` that wraps (`pre-wrap`) unless it truncates. A row box that sets no `alignItems` centers its texts, buttons, images and pickers on the row (so a mark beside two lines sits between them). `Select` is the app's combobox: a button `width: fit-content`, no width prop, so pickers are as wide as their value. An `Svg` without `isInteractive` is an `img` (`display: block`, `max-width: 100%`, its width and height in px). `tools/desktop-preview` renders with these rules. |
 | A trace nobody sees | `$.ui.log(text, { to: 'debug' })` | ✅ lines appear in Claude Code's debug log (`--debug`, `--debug-file`) under the plugin's name, never on screen. Autopilot traces each step and turn there. |
 | What a stopped turn leaves running | `classic.Stop` input `background_tasks` (id, type, description) and `session_crons` (schedule, recurring) | ✅ in the engine harness (2.1.293): the status bar says *Waiting for …* instead of *done* while a job or a wake-up will bring the turn back. |
@@ -64,7 +67,7 @@ Platform constraints discovered and designed around:
   back to `prompt.submit` context automatically when the compose hook is not
   reached (detected, not guessed).
 * A mod may turn an engine `ask` into `allow`, but **must never loosen a
-  `deny`**; `sec-default` enforces this where seated and Control Room
+  `deny`**; `sec-default` enforces this where seated and Project Sentinel
   enforces it everywhere as an invariant.
 
 ## 2. Product surface
@@ -86,10 +89,13 @@ docked Pane is the supported "sidebar-like" mechanism.
 ## 3. Module layout
 
 ```
-plugins/control-room/
-  .claude-plugin/plugin.json      manifest (types → ./types/index.d.ts)
+plugins/project-sentinel/
+  .claude-plugin/plugin.json      manifest (types → ./types/index.d.ts; icon and listing links for the directory)
+  .claude-plugin/icon.png         the directory's icon: Kit, 1024 × 1024
+  README.md, LICENSE              the directory's listing text and disclosure; MIT
   hooks/hooks.json                { "modules": ["./register.tsx"] }
   hooks/register.tsx              Host adapter (hostOf) + every on(...) registration (thin)
+  hooks/kit.client.tsx            Kit's surface module (terminal and Desktop): behaviour model, art, glue
   hooks/host.ts                   Host interface (the only door to the engine)
   hooks/constants.ts              ids, store keys, limits
   hooks/app/
@@ -104,8 +110,9 @@ plugins/control-room/
     monitor.ts                    resource sampler lifecycle (spawn, parse, restart, stop)
     cacheGuardian.ts              Cache Guardian: request telemetry, Keep warm's timer and fork, its
                                   self-check, stable policies, the countdown, the cache's views
+    formerStore.ts                the one-time carry-over from the store kept as Control Room
   hooks/core/
-    settings.ts                   schema, defaults, normalisation (clamps, high-risk allow → ask)
+    settings.ts                   schema, defaults, normalisation (clamps, a saved allow → default)
     profiles.ts                   built-in + custom profiles, labelled diffs
     policy.ts                     effective() snapshot (the priority system) + system-prompt sections
     answers.ts                    answer styles in the panel's words: labels, hints, sample lines, notes
@@ -124,17 +131,19 @@ plugins/control-room/
     cache.ts                      the prompt cache model: observeRequest, miss causes and kinds, the TTL
                                   learned, nextRefresh (Keep warm's schedule), the stored cache.v1
     handoff.ts                    Handoff Health and Continuity: healthOf, continuityOf, the stored record
-    companion.ts                  Kit: moods from the status bar's state, pixel frames, the Desktop SVG
+    companion.ts                  Kit: its mood from the status bar's state, and the props for its module
     git.ts                        `git status --porcelain=v1 --branch` parsed into a line
-    prompts.ts                    every text Control Room gives Claude (answer-style policies included)
+    prompts.ts                    every text Project Sentinel gives Claude (answer-style policies included)
     permissions/                  shell tokenizer, category classifier, decisions + invariants
     resources/                    samplers + parsers (Windows/macOS/Linux), pressure, heavy commands
-  hooks/ui/                       design system (primitives.tsx, theme.ts, kit.ts), status bar (hud.tsx),
-                                  Kit's surface module (companion.client.tsx), Focus view rows,
+  hooks/ui/                       design system (primitives.tsx, theme.ts, kit.ts: the view kit, not
+                                  the companion), status bar (hud.tsx), Focus view rows,
                                   pane/ (frame + overview, context with cache and handoff, behavior,
                                   guardrails, activity, setup)
   types/index.d.ts                settings schema + PluginState contract (render view models)
-  tests/                          claude plugin test suites + fixtures (fake host, engine world)
+
+tests/                            claude plugin test suites + fixtures (fake host, engine world),
+                                  outside the plugin folder; tools/test/mod.mjs runs them on .build/mod
 ```
 
 Data flow: engine event → `register.tsx` hook → `Runtime` method (pure
@@ -194,7 +203,7 @@ The UI's design decisions are recorded in [DESIGN.md](DESIGN.md).
 off ─enable→ armed ─(context ≥ threshold: mid-turn from turn.step usage, or after the turn)→
 pending ─(main turn completes, not aborted)→ requested ─($.prompt.submit handoff prompt)→
 handoff ─(handoff turn completes)→ verifying ─(NEXT_SESSION_PROMPT.md freshly written)→
-clearing ─($.command.run clear; classic.SessionStart{clear}, before or after it resolves, seeds the context)→
+clearing ─($.command.run clear; classic.SessionStart{clear}, before or after it resolves; prompt.context seeds the fresh context)→
 resuming ─(continuation prompt submitted, turn starts)→ armed (new session, same run)
 
 clearing ✗ (refused, or no fresh session in 15 s) → compacting (if allowed) → resuming
@@ -210,7 +219,7 @@ prompt, verify the file, clear, compact, notify), which the Runtime performs.
 
 **Driven by events, never by timers.** Each step moves on when the turn it
 is about starts or ends, never when a prompt was sent or a delay passed. A
-turn is recognised as one of Control Room's own (handoff, retry,
+turn is recognised as one of Project Sentinel's own (handoff, retry,
 continuation) by the text it starts with (`prompts.ownPromptKind`), so a
 prompt the person queued in between is never taken for it, and a reload
 cannot confuse the two. Claude Code starts a plugin's prompt framed ("The
@@ -238,7 +247,7 @@ crossing the threshold again never starts a second handoff.
 * Threshold: exact tokens or % of the live window; clamped below Claude
   Code's own auto-compact threshold (warned in the UI).
 * **Room for a fresh context** (`handoffPoint`, `roomOf`). A context after
-  a handoff or a clear is *orienting* until it starts working: Control Room
+  a handoff or a clear is *orienting* until it starts working: Project Sentinel
   sees it record its milestones or task list, edit a file or start an agent,
   or end a turn (`oriented`, with the context's size then). While orienting
   it hands off only past the threshold plus a room of 20k tokens or a tenth
@@ -252,7 +261,7 @@ crossing the threshold again never starts a second handoff.
   current logical unit; do not begin another large task).
 * The handoff prompt asks Claude to verify state, run minimum validation and
   leave the work in four places, each for what it is for: the run's
-  milestones (the canonical run state, which Control Room hands to the fresh
+  milestones (the canonical run state, which Project Sentinel hands to the fresh
   context), the project's own documentation, CLAUDE.md (durable
   instructions only, never a progress log) and `NEXT_SESSION_PROMPT.md`
   (the prompt Claude would want to receive) — **without prescribing its
@@ -268,10 +277,12 @@ crossing the threshold again never starts a second handoff.
 * Keep warm stands down while a handoff will clear the context (pending,
   under way, waiting for the person, or past the threshold), since `/clear`
   throws the cache away; a handoff that compacts keeps it.
-* After `/clear`: `classic.SessionStart{clear}` injects the continuation
-  context (run/session numbers, active policies, where the handoff file is,
-  and the run plan's open milestones so the fresh context rebuilds its task
-  list and work progress carries on);
+* After `/clear`: `classic.SessionStart{clear}` marks the fresh context
+  (and is passed on unchanged); the plugin invalidates `prompt.context`, and
+  the fresh context's first message carries one block, `contextAutopilot`,
+  once: the run and session numbers, where the handoff file is, and the run
+  plan's milestones and objective, so the fresh context rebuilds its task
+  list and work progress carries on (the policies are in the system prompt);
   the continuation prompt asks Claude to read project docs +
   `NEXT_SESSION_PROMPT.md` and continue; ask the person only for decisions
   the handoff marks as theirs.
@@ -288,8 +299,8 @@ crossing the threshold again never starts a second handoff.
   succeeds (a subagent's list is its own). Claude Code
   2.1.29x offers neither by default, so at session start, when
   `$.tool.list()` shows no task tool and `progress.milestones` is on,
-  Control Room registers `milestones` (`$.tool.register`, offered as
-  `mcp__control-room__milestones`) and adds a short "Run progress" policy
+  Project Sentinel registers `milestones` (`$.tool.register`, offered as
+  `mcp__project-sentinel__milestones`) and adds a short "Run progress" policy
   section; a `tool.call` hook registered before the general one answers it
   (`fromMilestones`, the whole list each time). The plan and the objective
   (the first sentence of the person's latest substantial request) live in
@@ -351,10 +362,12 @@ crossing the threshold again never starts a second handoff.
   person's press via `TaskStop`). No OS-level quotas are claimed.
 * **Permission Policy** — categories (install, network, download, edit,
   outside-project edit, delete, commit, push, destructive git, deploy/publish,
-  catastrophic commands); states Default / Allow / Ask / Deny; deny at
-  `tool.call`, ask/allow at `tool.check`; `allow` only upgrades an engine
-  `ask` (never a `deny`, never in plan mode) and is unavailable for
-  high-risk categories. Shell commands are tokenized and every segment
+  catastrophic commands); states Default / Ask / Deny (Allow removed in
+  1.4.0; a saved Allow reads as Default). Both decided in `tool.call` before
+  `next`: Deny answers `{ deny }`; Ask reads Claude Code's own verdict
+  (`$.tool.check`) and, where Claude Code would not ask, asks in its
+  question dialog (`$.ui.ask`) and passes the call on after a yes. Nothing
+  answers a permission check. Shell commands are tokenized and every segment
   classified; the strictest wins.
 * **Profiles** — Normal, Frontier Max, Low Resource, Release/QA + custom;
   shown as an explicit diff; individual overrides mark the profile modified.
@@ -386,22 +399,37 @@ crossing the threshold again never starts a second handoff.
   `cache.v1` until the person turns Keep warm on again. *Ask before a model
   switch* answers PreModelSwitch with `ask` when a switch the person makes
   would re-send 100k or more warm tokens. *Keep policies stable* holds
-  Control Room's system-prompt section while the cache is warm and sends a
+  Project Sentinel's system-prompt section while the cache is warm and sends a
   setting change as a hidden note instead (and a second note when the
   settings go back). An effort change on a model where one was seen to
   rebuild the cache is announced. The router does not downgrade the main
   conversation while 20k or more tokens are warm.
 * **Kit** — `features/companion.ts` is pure: a mood from the status bar's
-  state and the time (`moodOf`), and its animation (`animationOf`: pixel
-  frames, palette, pace; one frame and no pace under Reduce motion, at most
-  two frames a second on a busy machine). In the terminal, `register.tsx`
-  draws a `Client` naming `ui/companion.client.tsx`, which plays the frames
-  as half blocks on its own clock and posts `{ open: true }` on a click
-  (`ui.message` → toggle the panel); a `ui.fault` leaves Kit out until the
-  plugin reloads. Desktop draws `svgCompanion` as a plain image of a fixed
-  size (360 × 68 px, narrower in a narrow band; `crispEdges`, so no seam
-  shows between sprite rows at a fractional display scale) that animates
-  itself with SMIL, above the headline.
+  state and the time (`moodOf`) and the props for Kit's module
+  (`companionView`: the mood and its caption, the calm switches, whether a
+  turn runs, the local hour, the context's start and whether it is fresh,
+  and four signals the module compares with what it last saw: milestones
+  done, a green finish, failed checks, a Keep warm refresh). In the terminal
+  and on Desktop `register.tsx` draws `<ui.Client key="kit"
+  module="./kit.client.tsx" />` with those props and the surface.
+  `hooks/kit.client.tsx` holds a behaviour model of pure functions
+  (`createKit`, `stepKit`, `touchKit`, `resizeKit`, `drawableOf`): the act
+  under way, a queue planned with transitions (a cursor of posture, facing
+  and place, so stand ⇄ sit ⇄ down and every turn get their frames), a
+  settled mood (1.2 s to settle, 2.5 s to hold, priority moods at once), a
+  seeded generator, the reactions left in this round, the touches. Its
+  renderers: `terminalSprite` + `terminalLane` (20 × 10 letters, five rows
+  of half blocks, glyphs beside Kit on empty cells only) and
+  `desktopSprite` + `desktopLane` + `desktopSvg` (a rig of ellipses and
+  triangles rasterized to 40 × 24 art pixels, shaded from the top left and
+  outlined between layers, props and particles as bitmaps, one path per
+  color). The glue ticks the model on the surface's clock (100 ms on
+  Desktop, 200 ms in the terminal), redraws only when the drawn frame's key
+  changes (at most every 500 ms on a busy processor), remembers per surface
+  where the last Kit stood (a new instance appears there) and which
+  contexts it has walked into (an entrance plays once), and posts
+  `{ fault }` if anything throws (`ui.message` → Kit left out until the
+  plugin reloads). VS Code, which draws no `Client`, shows `kitStillSvg`.
   While Kit is on, a one-minute tick lets its mood move on with time.
 * **Git** — terminal only (Desktop shows Git natively): `$.session.repo()`
   once, then `git status --porcelain=v1 --branch` at session start and after
@@ -413,7 +441,7 @@ crossing the threshold again never starts a second handoff.
 ## 8. Failure handling
 
 Every gating hook has a `.catch` that falls back to the engine's own
-behaviour (never looser than without Control Room). Store corruption →
+behaviour (never looser than without Project Sentinel). Store corruption →
 defaults with a one-time notice. Sampler failure → monitoring "unavailable"
 while the static policy still applies. Clear failure → compact fallback or
 the START FRESH CONTEXT action. Model classification failure → heuristics
@@ -421,25 +449,34 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (240 tests in 21 files, run on 2.1.293, and in CI on the latest
-  Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux):
+* `claude plugin test` (266 tests in 22 files, run on 2.1.293, and in CI on the latest
+  Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux). The
+  tests live in the repository's `tests/`, outside the plugin folder (which
+  Anthropic's directory scans, and which ships only the plugin);
+  `tools/test/mod.mjs` copies the plugin and `tests/` into `.build/mod` and
+  runs `tsc` and `claude plugin test` there. Suites:
   pure-logic suites (settings, profiles, permissions classifier, guard
   heuristics, resource parsers, Autopilot reducer, router, chain, activity,
-  the cache model, handoff health and continuity, Kit's moods, Git's parser),
+  the cache model, handoff health and continuity, the former store's
+  carry-over, Kit's moods, its behaviour model and both renderers, Git's
+  parser),
   Cache Guardian over the in-memory host (`guardian.test.ts`: Keep warm's
   schedule, refresh, self-check and stand-down),
   a Runtime suite over an in-memory host with a manual clock, and
-  engine-driven suites (`$.session.start`, `$.tool.call`, `$.tool.check`,
+  engine-driven suites (`$.session.start`, `$.tool.call` (Ask's question and Deny),
   `$.agent.spawn`, `$.classic.Stop`, `$.prompt.compose`, `$.turn.step`, the
   Autopilot `/clear` in both orderings, and `$.ui.mount` on `terminal`,
   `desktop` and `mobile`, including the rule that a row never repeats its
   card's title) with the world answered beneath the mod. Engine-driven tests
-  start Control Room's own turns with the text framed as Claude Code frames a
+  start Project Sentinel's own turns with the text framed as Claude Code frames a
   plugin's prompt, since the test kit passes the bare text.
 * `tsc` against the engine-written declarations of 2.1.293 (and earlier of
   2.1.292 and 2.1.289).
 * `claude plugin validate --strict` (plugin) and `claude plugin validate .`
-  (marketplace).
+  (marketplace), and `tools/test/source.mjs`: the source rules Anthropic's
+  directory reads (no local `h`/`Fragment`, no `name('!', VALUE)` calls, no
+  accessors, no tests in the plugin folder, every `Client` with a fixed
+  path).
 * Live headless stream-json runs (the Desktop host protocol) of the final
   plugin: the full Autopilot chain on 2.1.292 and 2.1.289; Permission Deny,
   subagent block, Router learning and routing, and the Windows sampler on
@@ -472,7 +509,7 @@ only. Unknown future events/props → passed through untouched.
   engine's expiry; a prompt 66 minutes after the last one hit) and on the
   5-minute cache (the probe learned it; refreshes every four minutes; a
   prompt after a replaced expiry hit), each verified by its own self-check;
-  Control Room's derived figures against the status line's `prompt_cache`;
+  Project Sentinel's derived figures against the status line's `prompt_cache`;
   a model switch confirmed first and declined, then made; policy and effort
   changes while warm. The 1.3.0 status bar and every panel section in a real
   console at 80, 100 and 150 columns during the demo driver's turn.

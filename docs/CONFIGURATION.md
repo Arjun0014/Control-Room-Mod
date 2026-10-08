@@ -1,6 +1,7 @@
 # Configuration
 
-Everything is configured from the Control Room panel (`/cr`) or with `/cr` sub-commands. Settings
+Everything in Project Sentinel is configured from the Control Room panel (`/cr`) or with `/cr`
+sub-commands. Settings
 apply immediately, are saved within a couple of seconds, and are used by every later session.
 Claude is told about material changes mid-session (Frontier Max, Release check, the subagent policy,
 machine load). The updated policy reaches the system prompt from its next request.
@@ -8,11 +9,18 @@ machine load). The updated policy reaches the system prompt from its next reques
 ## Where settings live
 
 Claude Code gives every plugin its own store, a JSON file under `~/.claude/plugins/store/`.
-Control Room keeps `settings.v1` (settings and custom profiles), its run records and what it
-learned about the prompt cache (`cache.v1`) there. The
+Project Sentinel keeps `settings.v1` (settings and custom profiles), its run records and what it
+learned about the prompt cache (`cache.v1`) there, in `project-sentinel_<source>-<id>.json`. The
 store is validated on load: unknown values fall back to defaults, numbers are clamped to the
-ranges below, and a high-risk permission set to `allow` is repaired to `ask`. Hand-editing is
-possible but not needed. `/cr reset confirm` restores the defaults and keeps custom profiles.
+ranges below, and a permission saved as `allow` (a state removed in 1.4.0) reads as `default`.
+Hand-editing is possible but not needed. `/cr reset confirm` restores the defaults and keeps
+custom profiles.
+
+**Coming from Control Room.** Before 1.4.0 the plugin was called Control Room, and Claude Code
+keeps a plugin's store under its name. At the first session start after the rename, Project
+Sentinel reads the store it kept as Control Room (`control-room_<source>-<id>.json`) once and copies
+the settings, the runs, the Quest log and the cache's memory into its own store, never over what
+its own store already holds. The old file is left as it was.
 
 The settings are global to your user account, not per project. Run records note the project
 they ran in.
@@ -110,7 +118,7 @@ In the panel: **Behavior → Run progress**.
 | `milestones` | on / off | on | Where Claude Code offers no task list of its own, give Claude a small `milestones` tool and ask it to record the run's steps, so Activity and the status bar can count them |
 
 Run progress is counted from Claude's task list: TodoWrite or the Task tools where Claude Code
-offers them, else Control Room's `milestones` tool. Where a task list exists, nothing is added
+offers them, else Project Sentinel's `milestones` tool. Where a task list exists, nothing is added
 and Behavior reads *Automatic*. Off, Claude is offered no tool and no progress is shown.
 Switched on mid-session, the tool is offered at once. Switched off mid-session, the policy goes
 and Claude is told; a tool already offered stays until the session ends, and answers that
@@ -131,17 +139,17 @@ In the panel: **Behavior → Answer style**.
 | `brief` | Brief | The bottom line first, then only what you need to act on it. Code, commands, paths and error text stay exact; failures and anything unverified are still said. |
 | `ste` | Plain technical | Simplified Technical English, after the writing rules of ASD-STE100: one instruction per sentence of at most 20 words, descriptions of at most 25, active voice, simple tenses, one word for one meaning. It does not check the STE dictionary. |
 | `mission` | Mission control | A status call first (GO, NO-GO or HOLD, with its reason), a short board of the areas touched, then `NEXT:` with the next action and its owner. GO only for what was verified. |
-| `quest` | Quest log | Short log entries (the step, the obstacle, the outcome) and the next quest step. Control Room keeps the XP, levels and achievements; Claude is told never to state them. |
+| `quest` | Quest log | Short log entries (the step, the obstacle, the outcome) and the next quest step. Project Sentinel keeps the XP, levels and achievements; Claude is told never to state them. |
 
 A style governs Claude's messages only, never code, commands, file contents or commit messages.
 `/cr style` also takes `default`, `short`, `plain` and `game`. The style is part of a profile; the
 built-in profiles use Standard. Changed mid-session, Claude is told at its next request.
 
 When you have chosen one of Claude Code's own output styles (`/config`), that style is in charge:
-Control Room adds no answer-style rules, and Behavior reads *Paused* until you set it back to
+Project Sentinel adds no answer-style rules, and Behavior reads *Paused* until you set it back to
 Default.
 
-**Quest log XP.** Only outcomes Control Room counts itself earn XP: a milestone Claude marked done
+**Quest log XP.** Only outcomes Project Sentinel counts itself earn XP: a milestone Claude marked done
 (50, once per run), a check's first pass in a turn (10), a check passing again after failing (30),
 every milestone of a plan of three or more done (100), and an Autopilot handoff with verified notes
 (40). Level *n* starts at 50·*n*·(*n*−1) XP: 0, 100, 300, 600, 1,000. Achievements: *First green*,
@@ -162,12 +170,16 @@ In the panel: **Context → Cache**. `/cr cache` shows it in words.
 | `stablePolicies` | on / off | on | *Keep policies stable*: while the cache is warm, a setting you change reaches Claude as a note, and the system prompt keeps the policies it was cached with until the cache lapses or the context starts fresh. Off, every change rewrites the system prompt, which rebuilds the whole cache. `/cr cache stable on\|off` |
 
 Claude Code reports how many tokens each request read from the cache and wrote to it. From those
-Control Room derives the rest: a request that read less than half of what the one before it sent
+Project Sentinel derives the rest: a request that read less than half of what the one before it sent
 missed the cache, and the change it saw before it is the cause (a model or effort switch, the
 model router's switch, changed policies, the output style, a new tool, compaction), else idling
 past the cache's lifetime, else *unexplained*. The lifetime is the one Claude Code reports at a
 model switch, or learned: a request that still read the cache after more than five idle minutes
-proves the one-hour cache. It is remembered across sessions.
+proves the one-hour cache, and that is remembered across sessions. Until then, a session on a
+claude.ai plan (Claude Code reports the plan's rate-limit windows) starts at the one-hour cache,
+named as the plan's default; a miss after five idle minutes corrects it to five. While a turn is
+running (a long command, a long answer) the cache counts as warm unless a five-minute lifetime is
+known: Claude Code's own requests keep it warm, so the panel never says it may have lapsed then.
 
 **Keep warm** refreshes only while you are away (no turn running), the context is at least
 `minTokens`, no handoff is about to clear the context, and the idle limit has not passed. It
@@ -231,28 +243,33 @@ see [SECURITY.md](../SECURITY.md#what-it-observes) for how they are measured.
 
 In the panel: **Guardrails**.
 
-Each category is `default` (shown as *Default*: Claude Code decides), `allow`, `ask` or `deny`.
+Each category is `default` (shown as *Default*: Claude Code decides), `ask` or `deny`.
 
-| Category | Examples | Default | Allow offered |
-| --- | --- | --- | --- |
-| `install`: package installs | `npm install zod`, `pip install requests` | ask | yes |
-| `network`: internet and network access | `curl https://…`, `git pull` | Default | yes |
-| `download`: downloading files | `wget https://…/model.bin` | ask | yes |
-| `edit`: project edits | Edit `src/app.ts` | Default | yes |
-| `editOutside`: changes outside the project | Write `~/.bashrc` | ask | no |
-| `delete`: deleting files | `rm -rf dist` | ask | no |
-| `commit`: Git commits | `git commit -m "…"` | Default | yes |
-| `push`: Git push | `git push origin main` | ask | no |
-| `gitDestructive`: force push and resets | `git push --force`, `git reset --hard` | deny | no |
-| `deploy`: deploy and publish | `npm publish`, `terraform apply` | ask | no |
-| `dangerous`: dangerous system commands | `rm -rf ~`, `curl … \| sh` | deny | no |
+| Category | Examples | Default |
+| --- | --- | --- |
+| `install`: package installs | `npm install zod`, `pip install requests` | ask |
+| `network`: internet and network access | `curl https://…`, `git pull` | Default |
+| `download`: downloading files | `wget https://…/model.bin` | ask |
+| `edit`: project edits | Edit `src/app.ts` | Default |
+| `editOutside`: changes outside the project | Write `~/.bashrc` | ask |
+| `delete`: deleting files | `rm -rf dist` | ask |
+| `commit`: Git commits | `git commit -m "…"` | Default |
+| `push`: Git push | `git push origin main` | ask |
+| `gitDestructive`: force push and resets | `git push --force`, `git reset --hard` | deny |
+| `deploy`: deploy and publish | `npm publish`, `terraform apply` | ask |
+| `dangerous`: dangerous system commands | `rm -rf ~`, `curl … \| sh` | deny |
 
 - **Deny** refuses before any dialog, in every permission mode, for Claude and its subagents.
-- **Ask** forces an approval prompt, even where a rule or the mode (including bypass) would allow.
-- **Allow** only answers a prompt Claude Code would otherwise show. It never lifts a deny, never
-  acts in plan mode, and is not offered for the high-risk categories (edits outside the project,
-  deleting files, push, force push and resets, deploy, dangerous commands). A saved Allow for one
-  of them reads as Ask, and the panel says so once.
+- **Ask** always asks you first. Where Claude Code would ask anyway, its own permission prompt
+  does. Where it would not (an allow rule, auto mode, Bypass permissions), Project Sentinel asks in
+  Claude Code's question dialog (*Run it* / *Don't run it*) and passes the call on only after a yes,
+  so your rules and other hooks still apply; the status bar reads *Waiting for you to approve* while
+  it waits. A *Don't run it* refuses the call with a reason Claude can read.
+- **Default** leaves the call to Claude Code and its rules.
+- There is no **Allow** any more (1.4.0): answering prompts for you is Claude Code's job (its allow
+  rules, its permission modes). A saved Allow reads as Default, and the panel says so once. In
+  Bypass permissions mode nothing changes; outside it, calls Allow used to answer are asked again
+  unless your Claude Code allow rules cover them.
 
 ### Display (`ui`)
 
@@ -263,8 +280,8 @@ In the panel: **Setup**.
 | `hud` | `band` / `status` / `both` / `off` | `band` | *Status bar*: above the prompt, in Claude Code's status line, both, or hidden |
 | `toasts` | on / off | on | Brief notices on state changes |
 | `liveLoad` | on / off | on | *Live CPU and memory*: machine-wide readings in the status bar and in Guardrails, sampled every `resources.intervalSec` seconds, even with no machine-load limit. Off stops the sampler unless a limit needs it. It is not sampled while the status bar is hidden. |
-| `companion` | on / off | off | *Companion*: Kit, a small Claude-orange creature on the status bar's top edge, shows what Claude is doing. In the terminal a click on it opens Control Room. `/cr companion on\|off` |
-| `reducedMotion` | on / off | off | *Reduce motion*: still drawings instead of animation (Kit, and the milestone under way on Desktop). `/cr motion off` turns it on. |
+| `companion` | on / off | off | *Companion*: Kit, a small Claude-orange creature in a lane above the status bar, shows what Claude is doing, in the terminal and on Desktop (VS Code shows its pose, still). A click gets a reaction. `/cr companion on\|off` |
+| `reducedMotion` | on / off | off | *Reduce motion*: still drawings instead of animation (Kit holds one pose for its mood, and the milestone under way on Desktop stops pulsing). `/cr motion off` turns it on. |
 | `openOnStart` | on / off | off | Open the Control Room panel when a session starts. In the terminal it seats from 144 columns. |
 
 ## Profiles

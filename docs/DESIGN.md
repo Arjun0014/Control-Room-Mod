@@ -103,79 +103,123 @@ Overview repeats them on its per-section cards, so color tells you where a setti
 | `apart` | a row set a blank line apart from the readings above it, so a switch never sits flush under a meter's figures | no gap (native rows are spaced already) | same as Desktop |
 | `card`, `row`, `pair`, `note`, `textRuns`, `spaced` | layout | layout | layout |
 
-The status bar draws its three graphics from the same theme (`ui/theme.ts`): `meterCells` and
-`svgBar` for Context, `trackStops` and `svgTrack` for Work, `clockGlyph` and `svgClock` for Cache.
+The status bar draws its graphics from the same theme (`ui/theme.ts`): `meterCells` and
+`svgContextMeter` for Context, `scaleTrack`, `STOP_LOOK` and `svgWorkTrack` for Work, `clockGlyph`
+and `svgClock` for Cache, `STATE_MARK` and `svgStateIcon` for the headline's mark.
 
 Every control has a stable `key`. A picker's options are keyed `<picker>:<value>`, a stepper's
 buttons `<stepper>-dec` and `<stepper>-inc`. Tests press those keys on every surface.
 
 ## The status bar
 
+A mission HUD: one line says what is happening, the line under it carries the run's instruments.
+
+In the terminal (150 columns):
+
 ```
-▸ Fixing orbitalSpeed · Milestone 2 of 4                                            Run $4.18   [ ◆ Control Room ]
-  Context ━━━━━──┃── 51%   Work ●─◉─○─○ 1/4   Cache ◕ 40m   Checks ✗ Tests                                RAM 88%
+◎ Linting · step 3 of 4                                                ▲ RAM 83%    ◆ Control Room
+  WORK ●━●━◎─○ 2/4    CONTEXT ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇█▇▇▇▇▇ 47% · hands off 80%    CACHE ● rebuilt 446k      RUN $4.18
 ```
 
-The run at a glance, in two lines: what is happening on top, the run's three lifecycles below.
+On Desktop:
 
-**The top line** says what Claude is doing while a turn runs (`▸ Fixing orbitalSpeed`): in its
-own words when the milestone under way has them, else from the running call (`Running tests`),
-else `Thinking`. A call running past 20 seconds adds its time (`· 4m 51s`), then where the
-milestone sits: `Milestone 2 of 4` when the line already names it, or its name and place when the
-line names a call. Once the turn ends, the line says what it did in counted words
-(`✓ Changed 4 files · Ran tests 3×, passing after a fix`) and how long it took; before the first
-turn of a context it names the run's objective, dim. On its right, always: the **run's** total
-cost, which a fresh context never resets (a session's own cost stays in the panel), and the
-Control Room button, bright while the panel is open.
+```
+(▸) Running tests · step 3 of 10                                         ✗ Lint failing   [ ◆ Control Room ]
+Work                       Context · hands off at 70%          Cache                                  Run
+●━●━◉─○─○─○  2 of 10       ▬▬▬▬▬▬▬▬▬┃▬▬▬  24%                    ◔ 42m left                         $43.00
+```
 
-**The lifecycles line** holds the three things that start over at different times, each a name
-and a graphic of its own shape, so they cannot be confused:
+**The headline** says what the run is doing in words a person would use, with a mark for its
+state (`app/headline.ts`), so it never says one thing while another is true:
 
-- **Context** is a continuous line with the orange handoff tick and a percentage: how much of the
-  reasoning window is used. It starts over after a handoff, and a handoff under way says so
-  beside it (`Handoff soon`, `Writing the handoff`).
-- **Work** is a track of milestones (`●─●─◉─○`) with `done/total`: how much of the run's
-  objective is finished, from Claude's own task list. It carries across handoffs, so it keeps
-  climbing while the context meter saws up and down.
-- **Cache** is a clock face emptying as the prompt cache's lifetime runs out, with the time left
-  (`◕ 40m`). It starts over with every request and is lost at a fresh context. It turns amber
-  near the expiry when no refresh is coming, and for a few minutes after a costly rebuild it
-  says so (`rebuilt 446k`).
+| State | Mark | Says |
+| --- | --- | --- |
+| working | `▸` blue | the milestone under way in Claude's words (`Rewriting the scheduler · step 3 of 8`), else the call running; a call past 20 seconds adds its time |
+| thinking | `◌` dim | `Thinking`: a turn runs and no call does |
+| validating | `◎` blue | a check running (`Running tests`), or a milestone being verified |
+| handoff | `↻` orange | Autopilot's step: writing the notes, starting fresh, resuming |
+| waiting for a result | `◷` blue | a background job, a scheduled wake-up, a milestone marked *waiting*: `Waiting for the test run · 2 more running`, `Waiting to check back · wakes at 06:12` |
+| blocked | `⊘` amber | `Blocked:` what only the person can give |
+| waiting for you | `◆` orange | Claude asked something, or a handoff waits to start fresh |
+| done, complete | `✓` green | what the last turn did in counted words; `All 6 milestones done` |
+| failing | `✗` amber | the same, after a turn that left a check failing; the words stay plain, the mark and a chip carry the color |
+| ready | `○` dim | before the first turn: the run's objective as Claude stated it, else `Ready` |
 
-Then **Checks**, each kind's latest outcome by name (`✓ Tests ✗ Lint`). On the right, states only
-while they matter: calls that need a look (`▲ 2 issues`; a failing check is not counted again,
-Checks shows it), a busy machine (`RAM 92%`, amber near a ceiling and red at it; calm readings
-stay in the panel), running agents, the guard keeping Claude going, and the Quest log's level
-when that style is chosen. Settings (a profile, the threshold) are never shown.
+The milestone under way is the one in progress; one being verified counts only when nothing is in
+progress.
 
-A handoff that needs the person takes a line of its own above, with **Hand off now** and
-**Later**, or **Start fresh**; so does a machine under heavy load while a machine-load limit is
-on.
+**On the right, only what needs a look**, as chips, the most pressing first: a failing check by
+name (`✗ Lint failing`, red; not counted again as an issue), calls that need a look
+(`▲ 2 issues`), the guard keeping Claude going, a busy machine (`▲ RAM 92%`, amber near a ceiling,
+red at it), running agents, the Quest log's level. Then the **Control Room** button: in the
+terminal a filled chip in the theme's quiet gray, brand orange while the panel is open; on
+Desktop the native button, primary while the panel is open.
 
-Width decides the detail: the lifecycles line takes the richest form that shows every reading.
-Names (Context, Work, Cache, Checks, Run) need 100 columns in the terminal and 70 on Desktop, so
-they do not come and go as states appear. Below that the graphics stand alone, then check names
-go, then the meter and the track shorten, and only then do the least important readings drop.
-Docked beside the panel (about 80 columns), the whole line still fits:
-`━━━━─┃── 48%   ●─●─●─◉ 3/4   ● rebuilt 446k   ✓ Tests ✗ Lint`. Desktop draws the meter, the
-track and the clock as SVG, the milestone under way pulsing.
+**The instruments**, each its own shape so they cannot be confused:
+
+- **Work** is a track of milestones with `done/total`: `●` done, `◉` under way, `◎` being
+  verified, `◌` waiting or blocked (amber), `○` to come. It carries across handoffs, so it keeps
+  climbing while Context saws up and down.
+- **Context** is a solid bar: cells filled in its tone (green, amber near the handoff point, red
+  past it) over a track in the theme's quietest gray, and the handoff point as a full-height orange
+  cell that stands a little proud of the bar. Then the percentage, and Autopilot's point or the
+  step under way (`· hands off 80%`, `· Writing the handoff`).
+- **Cache** is a clock face emptying as the prompt cache's lifetime runs out (`◕ 42m left`),
+  shown only while it can matter: when you are away, or for a few minutes after a costly rebuild
+  (`● rebuilt 446k`, amber). While Claude works, its requests keep the cache warm.
+- **Run** is the whole run's cost on the right edge, which a fresh context never resets.
+
+Settings (a profile, the threshold) are never shown. A handoff that needs the person takes a line
+of its own above, with **Hand off now** and **Later**, or **Start fresh**.
+
+**Quiet grays are theme colors, not dim text.** Terminals draw dim text very differently (one
+draws it as plain gray), and a dim block reads as a slab. The empty part of a graphic and the
+HUD's top edge use the theme's `subtle` gray, which every terminal draws as the same quiet color.
+
+**Width decides the detail in the terminal.** The instruments take the richest tier that shows
+every reading: names (`WORK`, `CONTEXT`, `RUN`) from 72 columns, so they do not come and go as
+readings appear, the meter from 24 cells down to 6, the track from 16 stops down to 5 (scaled,
+the count beside it exact), the notes only with room. Only then does the least important reading
+drop. Docked beside the panel (about 80 columns) the whole line still fits.
+
+**On Desktop the surface lays the row out, not counted cells.** Each reading is a cell of an
+equal share of the row: a quiet caption over its graphic and value. The run's cost takes what it
+needs at the right edge. So the row never overflows and nothing drifts, from 500 pixels to a full
+window; below 80 columns the cells turn compact (fewer stops, a shorter meter, `2/10`). Every
+graphic is an image of a fixed size (`Svg` with `width` and `height`), never an interactive
+frame: Desktop sizes a frame on its own (300 pixels without a width) and may paint it opaque,
+which drew 1.2.0's work track as a white bar.
+
+**Git is Claude Desktop's own.** The Git strip on Desktop belongs to the app. The mod API's render
+components (`AskUserQuestion`, `UserMessage`, `AssistantMessage`, `ToolUse`, `ToolResult`,
+`ToolGroup`, `ToolProgress`, `CommandOutput`, `Spinner`, `TurnDuration`, `InfoNotice`,
+`SessionMode`, `PromptHint`, `AbovePrompt`, `Pane`) include nothing for it, so a plugin can
+neither hide nor move it. Control Room draws no Git UI on Desktop; its Git line is terminal-only
+(Overview and `/cr status`).
 
 ## Kit, the companion
 
-Off by default: a status bar is calm first. Turned on (Setup → *Companion*), Kit, a small pixel
-fox in Claude orange, walks a row of its own under the status bar and shows by what it does what
-the status bar says in words: trotting while Claude works, sniffing about while it reads and
-searches, sitting with a spinner while a check runs, celebrating a green finish, sweating over a
-failure, carrying a note through a handoff, waiting for you, tending the cache's clock while
-Keep warm holds it, then dozing and asleep when nothing has happened for a while. It never
-carries information the bar does not; it is company, not a reading.
+Off by default: a status bar is calm first. Turned on (Setup → *Companion*), Kit, a small
+Claude-orange creature (18 × 10 pixels, with ears and expressive eyes), shows by what it does what
+the headline says in words. It never carries information the bar does not; it is company, not a
+reading.
 
-Calm rules: its mood follows what Claude is doing (and, when nothing happens, the time); on a
-busy machine it plays at two frames a second at most; *Reduce motion* holds one frame still. In the terminal it is four pixel
-rows drawn as two rows of half blocks, played by a surface module on its own frame clock (the
-plugin does no work between frames, and a beat that changes nothing draws nothing); a click on it
-opens Control Room. On Desktop it is an SVG that animates itself. If its module ever fails to
-draw, it is left out until the plugin reloads, and the status bar draws without it.
+Fifteen moods: sitting by, glancing now and then (idle); pacing while Claude thinks; busy, a
+spark where its arm lands, while it works; a magnifier while it reads or searches; sitting up
+watching a check, a spinner beside it; hopping at a green finish; startled, a bead of sweat, by a
+failure; a question mark when the run needs you or waits for a result; tired and sweating on a
+busy machine or a nearly full context; tending a small fire while Keep warm holds the cache;
+dozing and fading as the cache nears its expiry; sleepy, then asleep, when nothing happens; and at
+a handoff it carries the notes off and walks back in with the fresh context.
+
+Calm rules: most moods stand or sit still and only blink or glance; walking is slow and pauses. On
+a busy machine it plays at two frames a second at most and stops walking; a machine at its limit
+holds it still; *Reduce motion* holds one frame. In the terminal it is five rows of half blocks
+played by a surface module on its own frame clock (the plugin does no work between frames), and it
+stands on the HUD's top edge, a quiet line; a click on it opens Control Room. On Desktop it is a
+280 × 48 pixel image that animates itself, above the headline, lined up with its left edge. If
+its module ever fails to draw, it is left out until the plugin reloads, and the status bar draws
+without it.
 
 ## Overview
 

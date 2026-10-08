@@ -239,7 +239,8 @@ export class Runtime {
       return 'A handoff is starting a fresh context, so this cache is about to be discarded'
     }
     const tokens = this.usage.tokens ?? 0
-    const isPastThreshold = ap.state === 'armed' && ap.threshold !== null && tokens >= ap.threshold && (ap.snoozeUntil === null || tokens >= ap.snoozeUntil)
+    const point = Autopilot.handoffPoint(ap)
+    const isPastThreshold = ap.state === 'armed' && point !== null && tokens >= point && (ap.snoozeUntil === null || tokens >= ap.snoozeUntil)
     const isComing = ap.state === 'pending' || ap.state === 'requested' || ap.state === 'handoff' || ap.state === 'verifying' || isPastThreshold
     if (!isComing || a.continuation === 'compact') return null
     return isPastThreshold ? 'Past the handoff point: the next turn hands off to a fresh context' : 'A handoff will start a fresh context, so this cache is about to be discarded'
@@ -318,7 +319,7 @@ export class Runtime {
   get effective(): Effective {
     return effective(this.settings, {
       autopilot: this.autopilot.state,
-      autopilotThreshold: this.autopilot.threshold,
+      autopilotThreshold: Autopilot.handoffPoint(this.autopilot),
       pressure: this.monitor.pressure.level,
       permissionMode: this.permissionMode,
     })
@@ -636,6 +637,7 @@ export class Runtime {
         handoffPath: this.handoffPath(),
         policies,
         milestones: this.plan.tasks.map(t => ({ subject: t.subject, status: t.status, detail: t.detail })).slice(-30),
+        objective: this.run?.objectiveBy === 'claude' ? this.run.objective : null,
       }),
     ]
   }
@@ -1272,7 +1274,7 @@ export class Runtime {
     const eff = this.effective
     if (!eff.guard.isActive) return null
     if (this.turn.kind !== 'person' && this.turn.kind !== 'continuation') return null
-    const threshold = this.autopilot.threshold
+    const threshold = Autopilot.handoffPoint(this.autopilot)
     if (this.settings.autopilot.enabled && threshold !== null && (this.usage.tokens ?? 0) >= threshold) return null
     const g = this.settings.guard
     if (this.guard.turnBlocks >= g.maxPerTurn || this.guard.sessionBlocks >= g.maxPerSession) return null

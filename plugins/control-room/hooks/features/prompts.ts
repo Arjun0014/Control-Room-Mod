@@ -107,7 +107,7 @@ export const MILESTONES_TOOL = {
 export function milestonesPolicy(tool: string): string {
   return [
     '## Run progress',
-    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin: the objective in a few words and 3 to 10 milestones, each an outcome worth reporting ("Analyse the E-008 results", "Validate the fix"), never a single read, fetch, search or command. Send the whole list again each time a milestone starts, moves to verifying, waits or is blocked, or finishes. Give the one in progress a short present-tense \`doing\` line. Mark a milestone completed only once it is verified, with its \`evidence\`; while it is being checked it is verifying. Mark it waiting when it waits for a result that will come by itself (a running job, a scheduled run) and blocked when it needs something only the person can give, each with its \`blocker\`. Skip it for quick one-step requests. After a handoff, record the open milestones the handoff names before continuing.`,
+    `The person follows this run's progress in Control Room, counted from your milestones. For work with several steps, record its milestones with the \`${tool}\` tool as you begin: the objective in a few words and 3 to 10 milestones, each an outcome worth reporting ("Analyse the E-008 results", "Validate the fix"), never a single read, fetch, search or command. Send the whole list again each time a milestone starts, moves to verifying, waits or is blocked, or finishes. Give the one in progress a short present-tense \`doing\` line. Mark a milestone completed only once it is verified, with its \`evidence\`; while it is being checked it is verifying. Mark it waiting when it waits for a result that will come by itself (a running job, a scheduled run) and blocked when it needs something only the person can give, each with its \`blocker\`. Skip it for quick one-step requests. After a handoff, send the run's milestones as the handoff lists them, under the same titles and objective, before continuing.`,
   ].join('\n')
 }
 
@@ -223,13 +223,23 @@ const OWN_PROMPT = {
 } as const
 
 /**
+ * How Claude Code frames a prompt a plugin submits, ahead of its text: "The control-room plugin
+ * sent a message:" and a line break (seen live on 2.1.293, in the terminal and on Desktop).
+ */
+const PLUGIN_FRAME = /^The [^\n]{1,120} plugin sent a message:[ \t]*/
+
+/**
  * Which of Control Room's own prompts a turn began with, if any. Read from
  * the text alone, so it holds across a reload of the plugin and is never
- * fooled by a prompt the person queued in between.
+ * fooled by a prompt the person queued in between. The engine's frame around
+ * a plugin's prompt is looked past: the prompt may start any of the first
+ * three lines, so a frame worded otherwise still never stalls a handoff.
  */
 export function ownPromptKind(text: string): keyof typeof OWN_PROMPT | null {
-  const t = text.trimStart()
-  for (const kind of ['handoff', 'retry', 'continuation'] as const) if (t.startsWith(OWN_PROMPT[kind])) return kind
+  for (const line of text.trimStart().split(/\r?\n/, 3)) {
+    const t = line.replace(PLUGIN_FRAME, '').trimStart()
+    for (const kind of ['handoff', 'retry', 'continuation'] as const) if (t.startsWith(OWN_PROMPT[kind])) return kind
+  }
   return null
 }
 
@@ -298,6 +308,8 @@ export function continuationContext(input: {
   policies: string[]
   /** The run's milestones as the previous context left its task list. */
   milestones?: readonly { subject: string; status: string; detail?: string | null }[]
+  /** The run's objective as Claude stated it, kept across contexts. */
+  objective?: string | null
 }): string {
   const run = input.runNumber === null ? '' : ` (Control Room run #${input.runNumber}, session ${input.sessionNumber})`
   const lines = [
@@ -310,16 +322,20 @@ export function continuationContext(input: {
   if (open.length > 0) {
     const done = milestones.length - open.length
     const tag = (m: { status: string; detail?: string | null }) =>
-      m.status === 'in_progress'
-        ? '[in progress] '
-        : m.status === 'verifying'
-          ? '[verifying] '
-          : m.status === 'blocked' || m.status === 'waiting'
-            ? `[${m.status}${m.detail ? `: ${m.detail}` : ''}] `
-            : ''
-    const list = open.map(m => `${tag(m)}${m.subject}`).join('; ')
+      m.status === 'completed'
+        ? '[done] '
+        : m.status === 'in_progress'
+          ? '[in progress] '
+          : m.status === 'verifying'
+            ? '[verifying] '
+            : m.status === 'blocked' || m.status === 'waiting'
+              ? `[${m.status}${m.detail ? `: ${m.detail}` : ''}] `
+              : ''
+    const list = milestones.map(m => `${tag(m)}${m.subject}`).join('; ')
+    const objective = input.objective ? ` toward the run's objective, "${input.objective}"` : ''
     lines.push(
-      `The run's task list (${done} of ${milestones.length} milestones done) left these open: ${list}. Recreate your task list (or your milestones) from them, checked against the handoff notes, so the run's progress carries on.`,
+      `The run's milestones${objective}, ${done} of ${milestones.length} done: ${list}.`,
+      'Carry this list on: send it again with your milestones (or your task list) under the same titles and the same objective, the done ones still done, updating only what changes, checked against the handoff notes. Add a milestone only for an outcome not on it; reading the notes or re-checking finished work is part of the milestone it serves, never one of its own.',
     )
   }
   return lines.join(' ')

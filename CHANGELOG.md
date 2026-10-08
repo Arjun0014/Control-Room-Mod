@@ -10,7 +10,7 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 Work in progress toward the next release (likely 1.3.0): a verification pass against the live API
 and a redesign of the status bar and Kit. Not yet released; the items below are implemented and
-pass the test suite (232 tests) unless marked otherwise.
+pass the test suite (236 tests) unless marked otherwise.
 
 ### Changed
 
@@ -22,7 +22,13 @@ pass the test suite (232 tests) unless marked otherwise.
   in the terminal (brand-colored while the panel is open). Under it the instruments: WORK (a track
   of milestones, each its state), CONTEXT (a solid bar with the handoff point as a notch), CACHE
   (only while it matters: when you are away, or after a costly rebuild) and the run's cost on the
-  right. A rule marks the HUD's top edge in the terminal.
+  right. A rule marks the HUD's top edge in the terminal. The empty part of a graphic and that rule
+  are drawn in the theme's quietest gray rather than dim text, which some terminals draw as a
+  bright gray slab.
+- **On Desktop the status bar is laid out by the app, as a grid.** Each reading is a cell of an
+  equal share of the row, a quiet caption over its graphic and value, with the run's cost at the
+  right edge; nothing overflows from 500 pixels to a full window, and a narrow band takes compact
+  cells. Every graphic is an image of a fixed size.
 - **Kit is redrawn**: larger (18×10 pixels, five terminal rows), a small Claude-orange creature
   with ears and expressive eyes, fifteen moods (idle glances, pacing while Claude thinks, busy
   while it works, a magnifier while it reads, watching a check, hopping at a green finish,
@@ -36,21 +42,42 @@ pass the test suite (232 tests) unless marked otherwise.
   *View all*; Activity's Now tells idle, waiting for you, waiting for a result, blocked and
   complete apart.
 - **Milestones** are asked to be outcomes, never single reads or commands, and may be *waiting*
-  (for a result that will come by itself) as well as *blocked* (on the person).
+  (for a result that will come by itself) as well as *blocked* (on the person). After a handoff the
+  fresh context is given the whole list, finished milestones included, and the run's objective,
+  and is asked to carry them on under the same titles: told only the open ones, a fresh context
+  re-planned under new titles and counted finished work twice (seen live: 4 milestones became 8).
 - `/cr cache` shows the timeline to the second: the last request, the derived expiry, the last
   refresh (hit or miss, tokens read) and the next one.
 
+### Added
+
+- **A fresh context gets room to work.** If a context after a handoff starts close to the handoff
+  point (a large base of system prompt, tools and notes against a low threshold), Autopilot hands
+  off only once it has grown by at least 20k tokens (or a tenth of the threshold), and says so
+  once, instead of handing off after every turn. Seen live with a 64k threshold and a 60k base:
+  five handoffs in a row, one roadmap step each.
+
 ### Fixed
 
-- **Desktop drew a white box behind animated graphics** (Kit's lane, the pulsing milestone): an
-  interactive SVG runs in a sandboxed frame, and a frame whose color scheme differs from the
-  page's is painted opaque. Every SVG now declares `color-scheme: light dark` (checked in
-  Chromium on dark and light pages). Not yet seen in the Desktop app itself.
+- **Desktop drew a white bar in the middle of the status bar** (the work track, Kit's lane): an
+  animated SVG was drawn in a sandboxed frame, which Desktop sized at the browser's default 300
+  pixels (no width was given) and painted opaque. Every graphic is now a plain image with an
+  explicit size (it still animates), and every SVG declares `color-scheme: light dark`.
+- **The status bar named the wrong milestone** ("Milestone 8 of 10" while step 3 was under way):
+  a milestone being verified outranked the one in progress. The one in progress is the work under
+  way; one being verified counts only when nothing is in progress.
+- **Cache figures now count as Claude Code's do.** Keep warm's refreshes were counted as requests
+  of the conversation, which flattered the hit ratio (83% where Claude Code said 62%). Claude Code
+  counts a refresh as a touch that moves the expiry, not a request; so does Control Room now, and
+  the two agree exactly (checked live).
 - **Autopilot races.** The handoff turn is recognised by the prompt it begins with, so a prompt
   you queued is never taken for it; the handoff moves on when its own turn starts and ends, not
   when its prompt was sent; the `/clear` waits for a running turn (one you queued behind the
-  handoff) to end. Every step is traced to Claude Code's debug log (`claude --debug`), never on
-  screen.
+  handoff) to end. Claude Code starts a plugin's prompt framed ("The control-room plugin sent a
+  message:"), and the match looks past that frame: a live run found the handoff waiting forever
+  after its turn ended when it did not (the test kit passes the bare text; engine-driven tests now
+  use the framed text). Every step and every turn's start and end is traced to Claude Code's debug
+  log (`claude --debug-file <path>`), never on screen.
 - **Cache Guardian trusted a remembered lifetime.** A lifetime learned in an earlier session is
   now a hint the current context corrects (an hour remembered, five minutes now), and Keep warm
   no longer blames itself for a refresh timed by the wrong one.

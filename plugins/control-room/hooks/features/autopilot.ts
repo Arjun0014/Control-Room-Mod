@@ -42,6 +42,10 @@ export type Autopilot = {
   retries: number
   /** Do not trigger again until the context passes this many tokens. */
   snoozeUntil: number | null
+  /** Waiting for a fresh context's first reading (after a handoff or a clear), to see where it starts. */
+  isFreshContext: boolean
+  /** Where this fresh context started, once read: it gets room to work before it may hand off. */
+  freshStart: number | null
   /** Handoffs completed in this process (each one a new session in the chain). */
   completed: number
   /** One human-readable line describing what the autopilot is doing. */
@@ -108,11 +112,30 @@ export function initialAutopilot(): Autopilot {
     handoffSince: null,
     retries: 0,
     snoozeUntil: null,
+    isFreshContext: false,
+    freshStart: null,
     completed: 0,
     note: 'Off',
     lastError: null,
   }
 }
+
+/**
+ * The room a fresh context gets to work before it may hand off again: at
+ * least 20k tokens, or a tenth of the threshold. Without it, a context that
+ * starts near the threshold (a large base: system prompt, tools, notes) would
+ * hand off after every turn, each handoff costing a turn and a cache rebuild.
+ */
+export const roomOf = (threshold: number): number => Math.max(20_000, Math.round(threshold * 0.1))
+
+/** Where this context hands off: the threshold, raised for a fresh context that started too close to it. */
+export function handoffPoint(model: Pick<Autopilot, 'threshold' | 'freshStart'>): number | null {
+  if (model.threshold === null) return null
+  return model.freshStart === null ? model.threshold : Math.max(model.threshold, model.freshStart + roomOf(model.threshold))
+}
+
+/** A fresh context began: its first reading will say where it starts. */
+const fresh = { isFreshContext: true, freshStart: null } as const
 
 /**
  * The effective threshold: tokens as set, or a percentage of the live
@@ -250,7 +273,7 @@ export function recover(model: Autopilot, record: AutopilotRecord, ctx: { sessio
       }
     case 'resuming':
       return {
-        model: set(kept, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, note: 'Watching the context' }),
+        model: set(kept, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, ...fresh, note: 'Watching the context' }),
         effects: [{ kind: 'notify', text: 'Control Room reloaded as the fresh context began. If Claude is idle, ask it to continue from the handoff notes.', level: 'info' }],
       }
   }
@@ -274,10 +297,25 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
 
   switch (event.kind) {
     case 'context': {
-      if (model.state !== 'armed' || model.threshold === null) return { model, effects: none }
-      if (model.snoozeUntil !== null && event.tokens < model.snoozeUntil) return { model, effects: none }
-      if (event.tokens < model.threshold) return { model, effects: none }
-      const triggered = set(model, {
+      // A fresh context's first reading: where it starts. Too close to the threshold, it gets room first.
+      let seen = model
+      const raised: AutopilotEffect[] = []
+      if (model.isFreshContext) {
+        seen = set(model, { isFreshContext: false, freshStart: event.tokens })
+        const point = handoffPoint(seen)
+        if (model.threshold !== null && point !== null && point > model.threshold) {
+          raised.push({
+            kind: 'notify',
+            text: `This fresh context starts at ${kTokens(event.tokens)}, close to the ${kTokens(model.threshold)} handoff point, so it hands off at ${kTokens(point)} instead of after every turn. Raise the handoff point in Context to give each context more room.`,
+            level: 'warn',
+          })
+        }
+      }
+      const point = handoffPoint(seen)
+      if (seen.state !== 'armed' || point === null) return { model: seen, effects: raised }
+      if (seen.snoozeUntil !== null && event.tokens < seen.snoozeUntil) return { model: seen, effects: raised }
+      if (event.tokens < point) return { model: seen, effects: raised }
+      const triggered = set(seen, {
         triggeredTokens: event.tokens,
         triggeredAt: event.now,
         retries: 0,
@@ -288,7 +326,8 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         return {
           model: set(triggered, { state: 'pending', note: 'Finishing the current step, then handing off' }),
           effects: [
-            { kind: 'appendPending', tokens: event.tokens, threshold: model.threshold, window: event.window },
+            ...raised,
+            { kind: 'appendPending', tokens: event.tokens, threshold: point, window: event.window },
             { kind: 'notify', text: 'Context reached the handoff point. Claude finishes the current step, then hands off.', level: 'warn' },
           ],
         }
@@ -296,6 +335,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       return {
         model: set(triggered, { state: 'requested', note: 'Threshold reached. Starting the handoff' }),
         effects: [
+          ...raised,
           { kind: 'submitHandoff' },
           { kind: 'notify', text: 'Context reached the handoff point. Claude is writing the handoff notes.', level: 'warn' },
         ],
@@ -330,7 +370,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
     case 'personTookOver':
       if (model.state !== 'resuming') return { model, effects: none }
       return {
-        model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, note: 'Watching the context' }),
+        model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, ...fresh, note: 'Watching the context' }),
         effects: none,
       }
 
@@ -357,11 +397,11 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (model.state !== 'clearing') return { model, effects: none }
       if (!cfg.autoContinue) {
         return {
-          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Fresh context ready. Continue when you are' }),
+          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, ...fresh, note: 'Fresh context ready. Continue when you are' }),
           effects: [{ kind: 'notify', text: 'Fresh context ready. Carry on by itself is off, so Claude waits for you.', level: 'info' }],
         }
       }
-      return { model: set(model, { state: 'resuming', note: 'Continuing in the fresh context' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
+      return { model: set(model, { state: 'resuming', ...fresh, note: 'Continuing in the fresh context' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
 
     case 'clearFailed':
       if (model.state !== 'clearing') return { model, effects: none }
@@ -380,11 +420,11 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (model.state !== 'compacting') return { model, effects: none }
       if (!cfg.autoContinue) {
         return {
-          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, note: 'Context compacted. Continue when you are' }),
+          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, ...fresh, note: 'Context compacted. Continue when you are' }),
           effects: none,
         }
       }
-      return { model: set(model, { state: 'resuming', note: 'Context compacted. Continuing the work' }), effects: [{ kind: 'submitContinuation', via: 'compact' }] }
+      return { model: set(model, { state: 'resuming', ...fresh, note: 'Context compacted. Continuing the work' }), effects: [{ kind: 'submitContinuation', via: 'compact' }] }
 
     case 'compactFailed':
       if (model.state !== 'compacting') return { model, effects: none }
@@ -449,9 +489,12 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           handoffSince: null,
           snoozeUntil: null,
           retries: 0,
+          ...fresh,
           note: 'Watching the context',
         }),
         effects: none,
       }
   }
 }
+
+const kTokens = (n: number): string => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M` : `${Math.round(n / 1000)}k`)

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { type Autopilot, type AutopilotConfig, type AutopilotEvent, type TurnKind, initialAutopilot, isHandoffActive, recordOf, recover, resolveThreshold, step } from '../hooks/features/autopilot'
+import { continuationPrompt, handoffPrompt, ownPromptKind } from '../hooks/features/prompts'
+import { type Autopilot, type AutopilotConfig, type AutopilotEvent, type TurnKind, handoffPoint, initialAutopilot, isHandoffActive, recordOf, recover, resolveThreshold, roomOf, step } from '../hooks/features/autopilot'
 
 const CFG: AutopilotConfig = { continuation: 'clear', fallbackToCompact: true, autoContinue: true }
 
@@ -19,6 +20,24 @@ const ARM: AutopilotEvent = { kind: 'configure', enabled: true, threshold: 700_0
 
 /** A turn ending: by default the person's own, answered. */
 const ended = (now: number, turn: TurnKind = 'person', reason: 'answer' | 'aborted' = 'answer'): AutopilotEvent => ({ kind: 'turnComplete', reason, turn, now })
+
+describe("Control Room's own turns", () => {
+  test("a turn is recognised by its prompt, framed as Claude Code frames a plugin's message or not", () => {
+    const handoff = handoffPrompt({ tokens: 77_000, window: 1_000_000, handoffFile: 'NEXT_SESSION_PROMPT.md', runNumber: 1, sessionNumber: 1, planTool: 'mcp__control-room__milestones' })
+    // Seen live on 2.1.293: the turn's text is the engine's frame, then the prompt.
+    expect(ownPromptKind(`The cr-test plugin sent a message:\n${handoff}`)).toBe('handoff')
+    expect(ownPromptKind(`The control-room plugin sent a message:\r\n${handoff}`)).toBe('handoff')
+    expect(ownPromptKind(handoff)).toBe('handoff')
+    const continuation = continuationPrompt({ sessionNumber: 2, handoffPath: 'C:\\Web UI\\x\\NEXT_SESSION_PROMPT.md' })
+    expect(ownPromptKind(`The control-room plugin sent a message:\n${continuation}`)).toBe('continuation')
+    // A frame worded otherwise, or on the prompt's own line, still never stalls a handoff.
+    expect(ownPromptKind(`[from plugin control-room]\n\n${handoff}`)).toBe('handoff')
+    expect(ownPromptKind(`The control-room plugin sent a message: ${handoff}`)).toBe('handoff')
+    // The person's own words are the person's, even when they quote the frame.
+    expect(ownPromptKind('The control-room plugin sent a message: what does it mean?')).toBeNull()
+    expect(ownPromptKind('Please write the final handoff for this context window')).toBeNull()
+  })
+})
 
 describe('threshold', () => {
   test('tokens and percentages resolve against the live window', () => {
@@ -54,6 +73,41 @@ describe('state machine', () => {
     expect(r.effects).toEqual(['appendPending', 'submitHandoff', 'verifyHandoff', 'clear', 'submitContinuation'])
     expect(r.model.state).toBe('armed')
     expect(r.model.completed).toBe(1)
+  })
+
+  test('a fresh context that starts near the threshold gets room to work instead of handing off after every turn', () => {
+    // Seen live: a 64k handoff point and a 60k base; session 2 handed off after its first turn.
+    const arm: AutopilotEvent = { kind: 'configure', enabled: true, threshold: 64_000, isClamped: false }
+    const handoff: AutopilotEvent[] = [
+      { kind: 'context', tokens: 66_000, window: 1_000_000, isInTurn: true, now: 1 },
+      ended(2),
+      { kind: 'handoffStarted', now: 3 }, ended(4, 'handoff'),
+      { kind: 'handoffVerified', isOk: true, now: 5 },
+      { kind: 'clearDone', now: 6 },
+      { kind: 'continuationStarted', now: 7 },
+    ]
+    const after = run([arm, ...handoff])
+    expect(after.model.isFreshContext).toBe(true)
+    // The fresh context's first reading: 62k, within 20k of 64k. It hands off at 82k instead, and says so once.
+    const first = step(after.model, { kind: 'context', tokens: 62_000, window: 1_000_000, isInTurn: true, now: 8 }, CFG)
+    expect(first.model.state).toBe('armed')
+    expect(handoffPoint(first.model)).toBe(82_000)
+    expect(first.effects.map(e => e.kind)).toEqual(['notify'])
+    expect(JSON.stringify(first.effects)).toContain('hands off at 82k')
+    const working = run([{ kind: 'context', tokens: 75_000, window: 1_000_000, isInTurn: true, now: 9 }, ended(10)], CFG, first.model)
+    expect(working.model.state).toBe('armed')
+    expect(working.effects).toEqual([])
+    const due = run([{ kind: 'context', tokens: 83_000, window: 1_000_000, isInTurn: true, now: 11 }], CFG, working.model)
+    expect(due.model.state).toBe('pending')
+    // A fresh context with room to spare keeps the threshold as set, silently.
+    const roomy = step(after.model, { kind: 'context', tokens: 30_000, window: 1_000_000, isInTurn: true, now: 8 }, CFG)
+    expect(handoffPoint(roomy.model)).toBe(64_000)
+    expect(roomy.effects).toEqual([])
+    // The room grows with the threshold: a tenth of it, at least 20k.
+    expect(roomOf(64_000)).toBe(20_000)
+    expect(roomOf(800_000)).toBe(80_000)
+    // The first context of a session is not held back (a reload mid-context must not move a due handoff).
+    expect(run([arm, { kind: 'context', tokens: 66_000, window: 1_000_000, isInTurn: true, now: 1 }]).model.state).toBe('pending')
   })
 
   test('below the threshold nothing happens', () => {

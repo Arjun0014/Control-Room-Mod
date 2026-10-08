@@ -5,8 +5,8 @@ what the platform verifiably supports, how Control Room is built on it, and
 why each decision was made. Written before implementation, kept current.
 
 Target platform: Claude Code function-hooks plugins ("mods"), verified on
-**2.1.289** (the engine bundled with Claude Desktop on this machine) and
-**2.1.292** (terminal CLI). The mods API is early access; the generated
+**2.1.289**, **2.1.292** and **2.1.293** (the engine Claude Desktop and the
+CLI run on this machine now). The mods API is early access; the generated
 declarations (`.claude-plugin/types/claude-code/index.d.ts`) are the authority.
 
 ---
@@ -32,10 +32,13 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 | Host CPU/RAM | `$.process.spawn` of one long-lived sampler | ✅ Windows P/Invoke sampler: ~0.5 s CPU / 30 s incl. start-up, ~80 MB; one-shot probes cost ~2.4 s each (rejected). Verified live through the final plugin on 2.1.289 and 2.1.292. |
 | Model per request | `turn.step` → `next({ ...e, model })` | ⚠ **full ids only**: a bare alias (`haiku`) fails the turn on 2.1.292 (`unrecognized_model` → `model_fallback` → an error answer). Ids reported in `usage.model` (main and subagent steps) work. Subagent spawns *do* resolve aliases. |
 | Store scope | `$.store` | One store per plugin name and source (`~/.claude/plugins/store/<name>_<source>-<hash>.json`); every `--plugin-dir` load of `control-room` shares one. |
-| Prompt cache figures | `turn.step` answer `usage` (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `model`) for each main-thread request | ✅ in the engine harness and in a real console during the demo driver's turn. ⚠ No expiry, hit ratio or miss cause exists anywhere: Control Room derives them, and says so. |
+| Prompt cache figures | `turn.step` answer `usage` (`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `model`) for each main-thread request | ✅ in the engine harness and live. ⚠ Claude Code keeps its own tracker (expiry, hit ratio, misses and their causes), but hands it only to the **status line** (`prompt_cache` in its input), never to a mod: `$.session.usage()` has context, rate limits and cost only. So Control Room derives the same figures from the usage and names them as derived. Checked live against the status line's `prompt_cache` (1-hour cache, Sonnet 5.5): the derived expiry within a second of the engine's, the hit ratio identical (0.62185) once Keep warm's refreshes are left out of it, as the engine leaves them. |
 | Cache lifetime and a confirmed model switch | `classic.PreModelSwitch` (`prompt_cache_warm`, `cache_ttl`, `context_tokens`, `estimated_cache_write_usd`) answering `permissionDecision: 'ask'` with a reason; `classic.PostModelSwitch` (`from_model`, `to_model`, `cache_ttl`, `source`) | ✅ through the engine in tests (`ask` with the reason; the TTL learned). Not yet watched in a live `/model` switch. |
-| Keep the cache warm | `$.model.fork({ prompt })` from a `$.clock.after` timer | ⚠ From the declarations and engine tests: it re-sends the main thread's last request plus one user message, never added to the transcript, and returns the request's usage; `nothing-to-fork` before the first response. Not yet run against the live API (the CLI here is logged out), so Keep warm verifies itself in use (§7). |
+| Keep the cache warm | `$.model.fork({ prompt })` from a `$.clock.after` timer | ✅ live on 2.1.293 (Sonnet 5.5, 1-hour cache): a fork re-sends the main thread's last request plus one user message, never added to the transcript (0 rows), and returns the request's usage. The engine counts a fork that reads the cache as a *touch*, not a request: its own expiry moved 05:38 → 05:44 → 06:34 with each refresh (requests stayed 2). A real prompt 66 minutes after the last one, past the expiry the refreshes replaced, read the cache (0 misses), and Keep warm marked itself verified. Each refresh of an 87k context cost about $0.02. `nothing-to-fork` before the first response. |
 | A drawing with its own clock | a `Client` element naming a surface module (`module` must be a string literal in `register.tsx`); the module gets `surface.every`, `setState`, `onPointer`, `post`; `ui.message` carries its posts to the hooks module, `ui.fault` reports a module that failed | ✅ terminal, live in a real console (Kit). Desktop draws an SVG instead. |
+| Graphics on Desktop | `Svg` with `source`, `alt`, `width`, `height`; `isInteractive` draws it in a script-less sandboxed frame instead of an image | ⚠ A frame with no `width` takes the browser's default (300 px), and a frame whose color scheme differs from the page's is painted opaque: 1.2.0's animated work track showed as a white bar on Desktop. SMIL animates inside a plain image too (checked in Chromium). So Control Room draws every graphic as an image with an explicit size and never asks for a frame. |
+| A trace nobody sees | `$.ui.log(text, { to: 'debug' })` | ✅ lines appear in Claude Code's debug log (`--debug`, `--debug-file`) under the plugin's name, never on screen. Autopilot traces each step and turn there. |
+| What a stopped turn leaves running | `classic.Stop` input `background_tasks` (id, type, description) and `session_crons` (schedule, recurring) | ✅ in the engine harness (2.1.293): the status bar says *Waiting for …* instead of *done* while a job or a wake-up will bring the turn back. |
 | The project's Git state | `$.session.repo()` (the repository root, or null) and `$.process.run(['git', 'status', '--porcelain=v1', '--branch', ...], { timeoutMs: 10_000 })` | ✅ live in a real console: `master · clean`, then `master · 4 uncommitted` after a turn that changed four files. |
 
 Platform constraints discovered and designed around:
@@ -92,6 +95,8 @@ plugins/control-room/
     runtime.ts                    composition root: wires features, owns the live model, performs effects
     views.ts                      projections (HUD, pane, resources, chain, activity, permissions, focus, spinner)
                                   and the plain-language status every surface shares
+    headline.ts                   the status bar's headline (what the run is doing or waiting for, in words,
+                                  with its state) and its chips (what needs a look)
     publisher.ts                  coalesced, diffed writes of those projections to $.state (+ status line)
     commands.ts / actions.ts      /cr sub-commands; the panel's actions
     persist.ts                    store reads/writes (settings, runs, index), debouncing, pruning
@@ -201,6 +206,22 @@ aborted by the person                 → stays pending (no auto action) + HUD a
 The reducer (`features/autopilot.ts`) is pure: `step(model, event, cfg)`
 returns the next model and a list of effects (append a notice, submit a
 prompt, verify the file, clear, compact, notify), which the Runtime performs.
+
+**Driven by events, never by timers.** Each step moves on when the turn it
+is about starts or ends, never when a prompt was sent or a delay passed. A
+turn is recognised as one of Control Room's own (handoff, retry,
+continuation) by the text it starts with (`prompts.ownPromptKind`), so a
+prompt the person queued in between is never taken for it, and a reload
+cannot confuse the two. Claude Code starts a plugin's prompt framed ("The
+control-room plugin sent a message:" and a line break); the match looks
+past that frame and accepts the prompt at the start of any of the first
+three lines. (A live run found this: matching only at the very start left
+the handoff waiting forever after its turn ended. Engine-driven tests now
+start those turns with the framed text.) The `/clear` waits while any turn
+runs, so a prompt the person queued behind the handoff finishes first. Every
+step and every turn's start and end is written to Claude Code's debug log
+(`$.ui.log` with `to: 'debug'`; `claude --debug-file <path>`), never on
+screen.
 
 **A reload mid-handoff.** A hot reload or `/reload-plugins` starts a fresh
 Runtime, whose module memory is empty. Every step of the machine is
@@ -365,8 +386,9 @@ crossing the threshold again never starts a second handoff.
   draws a `Client` naming `ui/companion.client.tsx`, which plays the frames
   as half blocks on its own clock and posts `{ open: true }` on a click
   (`ui.message` → toggle the panel); a `ui.fault` leaves Kit out until the
-  plugin reloads. Desktop draws `svgCompanion`, which animates itself with
-  SMIL. While Kit is on, a one-minute tick lets its mood move on with time.
+  plugin reloads. Desktop draws `svgCompanion` as a plain image of a fixed
+  size (280 × 48 px) that animates itself with SMIL, above the headline.
+  While Kit is on, a one-minute tick lets its mood move on with time.
 * **Git** — terminal only (Desktop shows Git natively): `$.session.repo()`
   once, then `git status --porcelain=v1 --branch` at session start and after
   each turn, at most every 15 s, read-only, with a 10 s timeout;

@@ -82,21 +82,26 @@ describe('run plan', () => {
 })
 
 describe('the fresh context after a handoff', () => {
-  test('is told the open milestones, so it rebuilds its task list and progress carries on', () => {
+  test('is told the whole list and the objective, to carry them on under the same titles', () => {
     const text = continuationContext({
       runNumber: 3,
       sessionNumber: 2,
       handoffPath: '/work/NEXT_SESSION_PROMPT.md',
       policies: [],
+      objective: 'Speed up the renderer',
       milestones: [
         { subject: 'Profile the renderer', status: 'completed' },
         { subject: 'Rewrite the hot loop', status: 'in_progress' },
         { subject: 'Run the regression suite', status: 'pending' },
       ],
     })
-    expect(text).toContain('1 of 3 milestones done')
-    expect(text).toContain('[in progress] Rewrite the hot loop; Run the regression suite')
-    expect(text).not.toContain('Profile the renderer')
+    // Seen live: told only the open ones, each fresh context re-planned under new titles and counted finished work twice.
+    expect(text).toContain(`toward the run's objective, "Speed up the renderer", 1 of 3 done`)
+    expect(text).toContain('[done] Profile the renderer; [in progress] Rewrite the hot loop; Run the regression suite')
+    expect(text).toContain('under the same titles and the same objective')
+    expect(text).toContain('never one of its own')
     expect(continuationContext({ runNumber: 3, sessionNumber: 2, handoffPath: 'x', policies: [] })).not.toContain('task list')
+    // A finished run needs no list carried on.
+    expect(continuationContext({ runNumber: 3, sessionNumber: 2, handoffPath: 'x', policies: [], milestones: [{ subject: 'A', status: 'completed' }] })).not.toContain('Carry this list on')
   })
 })

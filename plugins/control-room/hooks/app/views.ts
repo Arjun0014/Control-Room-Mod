@@ -34,7 +34,7 @@ import { relativeTo, shortPath } from '../core/text'
 import { readingTone } from '../ui/theme'
 import { versionAtLeast } from '../core/version'
 import type { ActivityItem, FileChange } from '../features/activity'
-import { isHandoffActive } from '../features/autopilot'
+import { handoffPoint, isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
 import { GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
 import { animationOf, moodOf } from '../features/companion'
@@ -48,7 +48,7 @@ import type { Runtime } from './runtime'
 function contextTone(rt: Runtime): Tone {
   const tokens = rt.usage.tokens
   if (tokens === undefined) return 'muted'
-  const threshold = rt.settings.autopilot.enabled ? rt.autopilot.threshold : null
+  const threshold = rt.settings.autopilot.enabled ? handoffPoint(rt.autopilot) : null
   const window = rt.usage.window
   const ref = threshold ?? (window === undefined ? null : window * 0.9)
   if (ref === null) return 'normal'
@@ -249,7 +249,7 @@ export function hudOf(rt: Runtime): HudModel {
     headline: headlineOf(rt, now, summary),
     chips: chipsOf({ failing, attention, guard, load, agents, quest }),
     isPaneOpen: rt.ui.isPaneOpen,
-    ctx: { tokens, window, pct, threshold: s.autopilot.enabled ? rt.autopilot.threshold : null, tone: contextTone(rt) },
+    ctx: { tokens, window, pct, threshold: s.autopilot.enabled ? handoffPoint(rt.autopilot) : null, tone: contextTone(rt) },
     cost: { usd: rt.usage.costUsd ?? null, runUsd: totals?.costUsd ?? null, isRunPartial: totals?.isCostPartial ?? false },
     profile: profileOf(rt),
     frontier: { isOn: s.frontier.enabled, effort: s.frontier.enabled ? (EFFORT_NAME[s.frontier.effort] ?? null) : null },
@@ -281,7 +281,7 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   const turn = rt.activity.turn
   const thisTurn = rt.activity.validationRuns().filter(r => r.turn === turn.index)
   const p = rt.progress
-  const threshold = s.autopilot.enabled ? rt.autopilot.threshold : null
+  const threshold = s.autopilot.enabled ? handoffPoint(rt.autopilot) : null
   const window = rt.usage.window ?? null
   const ref = threshold ?? (window === null ? null : window * 0.9)
   const load = liveLoadOf(rt)
@@ -411,7 +411,7 @@ export function paneOf(rt: Runtime): PaneModel {
     autopilot: {
       state: a.state,
       note: a.note,
-      threshold: a.threshold,
+      threshold: handoffPoint(a),
       isClamped: a.isClamped,
       autoCompactAt: rt.autoCompactAt ?? null,
       tokens: rt.usage.tokens ?? null,

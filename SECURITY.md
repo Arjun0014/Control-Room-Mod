@@ -33,6 +33,7 @@ re-sends the conversation's last request so the prompt cache stays warm. Run
 | From the tool calls above: which documentation files the handoff turn changed and the fresh context read, whether the notes and CLAUDE.md were written, which checks ran | Handoff Health and Continuity (Context → *Last handoff*) | In the run record (`lastHandoff`): at most two file names per item (more as a count) and the subject of the milestone under way, as the run's plan already holds it |
 | File *metadata* only (`stat`): the handoff file's modification time; the real path of a file Claude is about to edit | Verifying that the handoff was written; detecting edits outside the project, including through links | Nothing |
 | The running subagents list (type, status, description) | Subagent counts and limits | Memory only |
+| When a turn stops (`classic.Stop`): the background jobs still running (their description, else their command, cut to 80 characters) and the scheduled wake-ups (their schedule and whether they recur), and whether Claude's final message ends with a question | The status bar's headline between turns: *Waiting for the test run*, *Waiting to check back · wakes at 06:12*, *Waiting for your answer* | Memory only, until the next turn (at most 8 of each) |
 | The names of registered slash commands | Only so as not to take `/cr` if something else uses it | Nothing |
 | Whether managed (organisation) policy settings exist (only whether any key is set) | Choosing how to deliver policies (system prompt, or prompt context where a managed guard skips user plugins' prompt sections) | Nothing |
 | Machine-wide CPU busy % and memory used % (while *Live CPU and memory* or a machine-load limit is on) | Pressure levels, meters, notices | Memory only (a short sliding window) |
@@ -67,6 +68,7 @@ It reads totals only: no per-process data, no process names, nothing about other
 | Continue a turn that stopped early, with a short message | No-Lazy-Exit Guard (capped per turn and per session) |
 | Stop a background job that Claude started | Only when you press Stop in Guardrails → Machine load |
 | Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts; scroll its own pane back to the top (`$.ui.scroll`) | Always (Focus view and the status bar can be turned off). The scroll happens when you change section or press *↑ Sections* |
+| Write a line to Claude Code's debug log (`$.ui.log` with `to: 'debug'`): each turn's start and end and whose turn it is (yours, the handoff, the continuation), each Autopilot step, and where the handoff notes stand. Never on screen: the log exists only when you start Claude Code with `--debug` or `--debug-file` | At those moments. A line holds no prompt or answer text: only turn ids, step names, the handoff file's path, its size and age |
 | Keep the Autopilot step under way in `$.state` (`autopilot`) | While a handoff is under way or waiting, so a reload of the plugin carries it on instead of starting a second one |
 | Write its own store | Settings changes, run records |
 

@@ -16,6 +16,8 @@ const spawnInput = (prompt: string) => ({
   background: true,
   fork: false,
 })
+/** A plugin's prompt as Claude Code starts the turn with it: framed by the engine (seen live on 2.1.293). */
+const framed = (text: string | undefined) => `The control-room plugin sent a message:\n${text ?? ''}`
 const COMPOSE = { model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal' as const], tools: [], outputStyle: null, traits: [] }
 
 const withSettings = (patch: (s: Settings) => void): Settings => {
@@ -204,7 +206,7 @@ describe('register', () => {
     expect(handoff).toContain('NEXT_SESSION_PROMPT.md')
     expect(handoff).not.toContain('must contain')
 
-    await $.turn.start({ text: handoff ?? '', turnId: 't2' })
+    await $.turn.start({ text: framed(handoff), turnId: 't2' })
     await $.turn.complete({ answer: 'Handoff written.', durationMs: 10, isAborted: false, turnId: 't2', reason: 'answer' })
     await w.clock.advance(2000)
     expect(fresh?.additionalContext?.join(' ')).toContain('fresh context')
@@ -235,7 +237,7 @@ describe('register', () => {
     await $.command.run(cmd('cr', 'handoff'))
     await w.clock.advance(400)
     // The handoff turn is recognised by the prompt it begins with.
-    await $.turn.start({ text: w.kept.submitted.find(t => t.includes('final handoff'))!, turnId: 'h1' })
+    await $.turn.start({ text: framed(w.kept.submitted.find(t => t.includes('final handoff'))), turnId: 'h1' })
     await $.turn.complete({ answer: 'Handoff written.', durationMs: 1, isAborted: false, turnId: 'h1', reason: 'answer' })
     await w.clock.advance(3000)
     expect(finishReset).not.toBeNull()
@@ -258,10 +260,10 @@ describe('register', () => {
     await $.session.start(SESSION)
     await $.command.run(cmd('cr', 'handoff'))
     await w.clock.advance(400)
-    await $.turn.start({ text: w.kept.submitted.find(t => t.includes('final handoff'))!, turnId: 'h1' })
+    await $.turn.start({ text: framed(w.kept.submitted.find(t => t.includes('final handoff'))), turnId: 'h1' })
     await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'h1', reason: 'answer' })
     await w.clock.advance(400)
-    await $.turn.start({ text: w.kept.submitted.find(t => t.includes('could not find an updated'))!, turnId: 'h2' })
+    await $.turn.start({ text: framed(w.kept.submitted.find(t => t.includes('could not find an updated'))), turnId: 'h2' })
     await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'h2', reason: 'answer' })
     await w.clock.advance(3000)
     expect(w.kept.submitted.some(t => t.includes('could not find an updated'))).toBe(true)
@@ -275,7 +277,7 @@ describe('register', () => {
     await $.session.start(SESSION)
     await $.command.run(cmd('cr', 'handoff'))
     await w.clock.advance(400)
-    await $.turn.start({ text: w.kept.submitted.find(t => t.includes('final handoff'))!, turnId: 'h1' })
+    await $.turn.start({ text: framed(w.kept.submitted.find(t => t.includes('final handoff'))), turnId: 'h1' })
     await $.turn.complete({ answer: 'Handoff written.', durationMs: 1, isAborted: false, turnId: 'h1', reason: 'answer' })
     // The queued prompt starts the moment the handoff turn ends, before the clear would run.
     await $.turn.start({ text: 'Also rename the helper.', turnId: 'p1' })

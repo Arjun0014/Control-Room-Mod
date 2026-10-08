@@ -263,8 +263,8 @@ In the panel: **Setup**.
 | `hud` | `band` / `status` / `both` / `off` | `band` | *Status bar*: above the prompt, in Claude Code's status line, both, or hidden |
 | `toasts` | on / off | on | Brief notices on state changes |
 | `liveLoad` | on / off | on | *Live CPU and memory*: machine-wide readings in the status bar and in Guardrails, sampled every `resources.intervalSec` seconds, even with no machine-load limit. Off stops the sampler unless a limit needs it. It is not sampled while the status bar is hidden. |
-| `companion` | on / off | off | *Companion*: Kit, a small pixel fox on a row of its own under the status bar, shows what Claude is doing. In the terminal a click on it opens Control Room. `/cr companion on\|off` |
-| `reducedMotion` | on / off | off | *Reduce motion*: still drawings instead of animation (Kit, and the pulse of the milestone under way on Desktop). `/cr motion off` turns it on. |
+| `companion` | on / off | off | *Companion*: Kit, a small Claude-orange creature on the status bar's top edge, shows what Claude is doing. In the terminal a click on it opens Control Room. `/cr companion on\|off` |
+| `reducedMotion` | on / off | off | *Reduce motion*: still drawings instead of animation (Kit, and the milestone under way on Desktop). `/cr motion off` turns it on. |
 | `openOnStart` | on / off | off | Open the Control Room panel when a session starts. In the terminal it seats from 144 columns. |
 
 ## Profiles

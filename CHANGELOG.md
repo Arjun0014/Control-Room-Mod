@@ -51,11 +51,14 @@ pass the test suite (236 tests) unless marked otherwise.
 
 ### Added
 
-- **A fresh context gets room to work.** If a context after a handoff starts close to the handoff
-  point (a large base of system prompt, tools and notes against a low threshold), Autopilot hands
-  off only once it has grown by at least 20k tokens (or a tenth of the threshold), and says so
-  once, instead of handing off after every turn. Seen live with a 64k threshold and a 60k base:
-  five handoffs in a row, one roadmap step each.
+- **A fresh context gets room to work.** A context after a handoff first reads itself in (the
+  notes, the docs, the code). Until it starts working (it records its milestones or task list,
+  edits a file or hands work to an agent, or ends a turn), it hands off only past the threshold
+  plus some room; from where it started working it gets at least that room (20k tokens, or a
+  tenth of the threshold), and says so once if that moves its handoff point. A context that fills
+  past all that before any work began waits for you instead of handing off again. Seen live with a
+  64k threshold: a fresh context started at 44k and read 20k in, and five handoffs in a row did
+  one roadmap step each.
 
 ### Fixed
 

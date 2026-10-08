@@ -14,9 +14,9 @@ did. For the terminal CLI and for local sessions in Claude Desktop's Code tab.
 
 One plugin gives you:
 
-- a quiet two-line **status bar** above the prompt: what Claude is doing now on top, with the
-  run's cost; below, the three lifecycles of a long run (context, work and the prompt cache), each
-  its own shape, and the checks
+- a calm **status bar** above the prompt, a mission HUD: what the run is doing or waiting for,
+  in words, and only what needs a look; below it the run's instruments (work, context, the prompt
+  cache, cost), each its own shape
 - the **Control Room** panel, docked beside the conversation
 - **Autopilot** (Context Autopilot): Claude writes handoff notes, the context is cleared, and Claude
   carries on in a fresh one, before this one fills up; then Control Room checks what the handoff
@@ -30,7 +30,7 @@ One plugin gives you:
   log with XP for verified progress
 - policies for effort, finishing the job, models, subagents, machine load and risky actions, with
   **profiles** that set everything at once
-- **Kit**, if you like: a small pixel fox under the status bar that shows what Claude is doing
+- **Kit**, if you like: a small Claude-orange creature on the status bar that shows what Claude is doing
 
 > **Status: 1.2.0.** Control Room is built on Claude Code's function-hooks plugin API ("mods"),
 > which is still early access and may change between Claude Code releases. It is verified on
@@ -130,9 +130,9 @@ photographed on Desktop yet.</sub>
 
 | System | What it does | Default |
 | --- | --- | --- |
-| **Status bar** | Two lines above the prompt. On top, what Claude is doing right now and where the milestone under way sits ("Milestone 2 of 4"); after a turn, what it did in counted words; on the right, the run's cost and the Control Room button. Below, the three lifecycles, each its own shape: Context (a line with Autopilot's handoff tick), Work (a track of milestones) and Cache (a clock face emptying as the prompt cache's lifetime runs out), then the checks by name. States show only while they matter: calls that need a look, a busy machine, running agents. A handoff that needs you takes a line of its own above, with its buttons. | On |
+| **Status bar** | A mission HUD above the prompt. The headline says what the run is doing in words, with a mark for its state: working, thinking, running a check, waiting for you, waiting for a result that comes by itself (a background job, a scheduled wake-up), blocked, handing off, done. On its right, only what needs a look (a failing check, issues, a busy machine, agents), then the Control Room button. Below, the instruments, each its own shape: Work (a track of milestones), Context (a bar with Autopilot's handoff notch), Cache (a clock face, only while it matters) and the run's cost. A handoff that needs you takes a line of its own above, with its buttons. On Desktop the readings sit in a grid of equal cells. | On |
 | **Control Room panel** | Six sections: Overview, Context, Behavior, Guardrails, Activity, Setup. In the terminal: switches, segmented choices, choices that open in place, and − / + steppers. Every control works with a click or with Tab and Enter, and there are no popups to get stuck in. On Desktop: native buttons and popups, plus graphical meters. | `/cr` opens it |
-| **Autopilot** (Context Autopilot) | At a threshold (a % of the window, or tokens), Claude finishes the step it is on. Then it runs a handoff: it records the run's milestones, updates the project's docs, keeps CLAUDE.md for durable instructions only, runs a minimal validation and writes `NEXT_SESSION_PROMPT.md` in its own words. Control Room then runs `/clear`, seeds the fresh context, and Claude continues on its own. Compaction is only a fallback for when clearing is refused. A reload of the plugin mid-handoff carries the handoff on; it never starts a second one. | Off |
+| **Autopilot** (Context Autopilot) | At a threshold (a % of the window, or tokens), Claude finishes the step it is on. Then it runs a handoff: it records the run's milestones, updates the project's docs, keeps CLAUDE.md for durable instructions only, runs a minimal validation and writes `NEXT_SESSION_PROMPT.md` in its own words. Control Room then runs `/clear`, seeds the fresh context with the run's milestones and objective, and Claude continues on its own. Every step moves on when its turn starts or ends, never on a timer. A fresh context that starts close to the threshold gets room to work before it may hand off again. Compaction is only a fallback for when clearing is refused. A reload of the plugin mid-handoff carries the handoff on; it never starts a second one. | Off |
 | **Handoff Health and Continuity** | After each handoff, Context → *Last handoff* shows what it left for the fresh context (run state saved, the milestone under way, the notes, docs updated, validation recorded) and, once the fresh context's first turn ends, what it picked up (notes read, run state restored, milestone picked up, docs read, work resumed). Counted from tool calls, never from what Claude says. | With Autopilot |
 | **Run progress** | The run's objective and milestones, done of total, counted from Claude's own task list and carried across handoffs, so the work meter keeps climbing while the context meter starts over. A milestone may also be *verifying* (with its evidence) or *blocked* (with what it waits for). Where Claude Code offers no task list (its task tools are off by default in 2.1.29x), Control Room gives Claude a small `milestones` tool to keep one. | On |
 | **Cache Guardian** | The main conversation's prompt cache, from the token counts Claude Code reports for each request: how much is cached, how long it stays warm (the cache's lifetime is learned), the share read from the cache, and why each rebuild happened (a model or effort switch, the model router, changed policies, a new tool, compaction, idling past the lifetime), with what would avoid the next. A model switch that would re-send 100k+ warm tokens is confirmed first; the model router no longer downgrades a conversation whose cache is warm (from 20k tokens); while it is warm, setting changes reach Claude as notes instead of rewriting the cached system prompt. | On |
@@ -150,8 +150,8 @@ photographed on Desktop yet.</sub>
 | **Machine load** (Resource Governor) | Advisory CPU and memory ceilings (Low, Medium, High or Custom), from a lightweight machine-wide sampler. Claude is told about pressure mid-task, extra heavy jobs can be held back, and only Claude-started background jobs can be stopped. It is not an OS quota. | Off |
 | **Permissions** (Permission Policy) | Default, Allow, Ask or Deny per category: package installs, network, downloads, project edits, edits outside the project, deleting files, commits, push, force push and resets, deploy and publish, and dangerous commands. High-risk categories, deleting files among them, can ask or refuse but never answer for you. It never loosens a deny, plan mode or your organisation's settings. | Safe defaults |
 | **Profiles** | Normal, Frontier Max, Low Resource, Release / QA and your own. Setup shows exactly what changed since you applied one. | Normal |
-| **Kit** (the companion) | A small pixel fox in Claude orange on a row of its own under the status bar, showing what Claude is doing: trotting while it works, sniffing about while it reads, sitting with a spinner while a check runs, celebrating a green finish, worried about a failure, carrying the notes through a handoff, tending the cache while Keep warm holds it, asleep when nothing happens. *Reduce motion* holds it still. In the terminal, a click on it opens Control Room. | Off |
-| **Git** (terminal) | The branch, how far it is ahead of or behind its upstream, and the uncommitted files, in Overview and `/cr status`, from one read-only `git status` after a turn. Desktop shows Git itself beside the session. | In a repository |
+| **Kit** (the companion) | A small Claude-orange creature on the status bar's top edge that shows what Claude is doing, in fifteen moods: pacing while it thinks, busy while it works, a magnifier while it reads, watching a check, hopping at a green finish, startled by a failure, a question mark when the run needs you, tending a small fire while Keep warm holds the cache, dozing as the cache nears its expiry, carrying the notes off at a handoff and walking back in, asleep when nothing happens. Calm by design; *Reduce motion* holds it still. In the terminal, a click on it opens Control Room. | Off |
+| **Git** (terminal) | The branch, how far it is ahead of or behind its upstream, and the uncommitted files, in Overview and `/cr status`, from one read-only `git status` after a turn. Desktop's Git strip is the app's own; plugins cannot draw, hide or move it. | In a repository |
 
 Cost is shown only as Claude Code reports it, and "—" means it was not reported. Progress is
 milestones done of the total Claude listed. The cache's expiry, hit ratio and causes are derived
@@ -235,35 +235,46 @@ Use `/cr reset confirm` first if you also want the settings cleared.
 
 ### The status bar
 
-The run at a glance, in two lines: what is happening on top, the three lifecycles of the run
-below. Settings live in the panel.
+A mission HUD above the prompt: what is happening on top, the run's instruments below. Settings
+live in the panel.
 
 ```
-▸ Fixing orbitalSpeed · Milestone 2 of 4                                            Run $4.18   [ ◆ Control Room ]
-  Context ━━━━━──┃── 51%   Work ●─◉─○─○ 1/4   Cache ◕ 40m   Checks ✗ Tests                                RAM 88%
+◎ Linting · step 3 of 4                                                ▲ RAM 83%    ◆ Control Room
+  WORK ●━●━◎─○ 2/4    CONTEXT ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇█▇▇▇▇▇ 47% · hands off 80%    CACHE ● rebuilt 446k      RUN $4.18
 ```
 
 | Item | Meaning |
 | --- | --- |
-| `▸ Fixing orbitalSpeed` | What Claude is doing right now: in its own words when the milestone under way has them, else from the running call (`Running tests`), else `Thinking`. A call running past 20 seconds adds its time. Then where the milestone sits (`Milestone 2 of 4`), or its name and place when the line names a call. |
-| `✓ Changed 4 files · Ran tests 3×, passing after a fix` | After a turn: what it did, in counted words, and how long it took. Before the first turn of a context, the line names the run's objective, or reads `Ready`. |
-| `Run $4.18` | The whole run's cost as Claude Code reports it, across handoffs. `+` means some session's cost was not reported. This session's own cost is in the panel. |
-| `[ ◆ Control Room ]` | Opens or closes the panel, and stays bright while it is open (`◆ Open` or `◆ Close` when the bar is narrow). |
-| `Context ━━━━━──┃── 51%` | How much of the context window is in use: a line, with Autopilot's handoff point as an orange tick. Amber from 85% of the way to the handoff, red at it (with Autopilot off, measured against 90% of the window). It starts over after a handoff, and a handoff under way says so beside it (`Handoff soon`, `Writing the handoff`, `Starting fresh`, `Resuming`, `Waiting for you`). |
-| `Work ●─◉─○─○ 1/4` | The run's milestones, done of total, from Claude's own task list: a track with one stop each, `●` done, `◉` under way, `○` to come. It carries across handoffs, and is shown once Claude has listed milestones. |
-| `Cache ◕ 40m` | The prompt cache: a clock face emptying as its lifetime runs out (`●` `◕` `◑` `◔` `○`), and the time left. `warm` while its lifetime is not known yet, `cold` once it lapsed (`lapsed?` when it may have). Amber near the expiry with no refresh coming, and for a few minutes after a costly rebuild it reads `rebuilt 446k`. Shown once Claude has answered in this context; it starts over with each fresh context. |
-| `Checks ✗ Tests` | Each kind of check's latest outcome, by name: `✓` passed, `✗` failed, `▸` running. |
-| States | On the right, only while they matter: `▲ 2 issues` (calls that need a look; a failing check is shown under Checks instead); `CPU 91%` or `RAM 92%` near or over a ceiling (calm readings stay in the panel); `2 agents`; `Kept going ×1` when the lazy-exit guard continued the turn; `★ Lv 4` with the Quest log style. |
+| `◎ Linting · step 3 of 4` | **The headline**: what the run is doing, with a mark for its state. While a turn runs: the milestone under way in Claude's words, else the running call, else `Thinking`; a check running or a milestone being verified is `◎`; a call past 20 seconds adds its time. Between turns, what the run waits for comes first: `◷ Waiting for the test run` (a background job), `◷ Waiting to check back · wakes at 06:12` (a scheduled wake-up), `⊘ Blocked: …` (something only you can give), `◆ Waiting for your answer` (Claude asked you something). Otherwise what the last turn did in counted words (`✓ Changed 4 files · Ran tests 3×, passing after a fix`), `✓ All 6 milestones done`, or before the first turn the run's objective (`○ Ready` without one). A handoff under way reads `↻ Writing the handoff notes`. |
+| `▲ RAM 83%` | **Chips**: only what needs a look, the most pressing first. `✗ Lint failing` (a check failing, by name), `▲ 2 issues` (calls that need a look), `Kept going ×1` (the lazy-exit guard continued the turn), `▲ CPU 91%` or `▲ RAM 92%` near or over a ceiling, `2 agents`, `★ Lv 4` with the Quest log style. |
+| `◆ Control Room` | Opens or closes the panel: a filled button, in Claude orange while the panel is open (`◆ Open` or `◆ Close` when the bar is narrow). |
+| `WORK ●━●━◎─○ 2/4` | The run's milestones, done of total, from Claude's own task list: `●` done, `◉` under way, `◎` being verified, `◌` waiting or blocked (amber), `○` to come. It carries across handoffs, so it keeps climbing while Context starts over. |
+| `CONTEXT ▇▇▇▇█▇▇ 47% · hands off 80%` | How much of the context window is in use: a solid bar, green, amber near the handoff point and red past it (with Autopilot off, against 90% of the window), and the handoff point as an orange notch. It starts over after a handoff, and a handoff under way says so beside it (`Handoff soon`, `Writing the handoff`, `Starting fresh`, `Resuming`, `Waiting for you`). |
+| `CACHE ● rebuilt 446k` | The prompt cache, only while it can matter: when you are away, a clock face emptying as its lifetime runs out and the time left (`◕ 42m left`; `lapsed?` when it may have lapsed), amber near the expiry with no refresh coming; and for a few minutes after a costly rebuild, `rebuilt 446k`. While Claude works its requests keep the cache warm, so it is not shown. |
+| `RUN $4.18` | The whole run's cost as Claude Code reports it, across handoffs (`+` when some session's cost was not reported). This session's own cost is in the panel. |
 
-Width decides the detail: the lifecycles line takes the richest form that shows every reading.
-Names (Context, Work, Cache, Checks, Run) show from 100 columns (70 on Desktop). Below that the
-graphics stand alone, then check names go, then the meter and the track shorten, and only then
-do the least important readings drop; docked beside the panel, `✓ Tests ✗ Lint` still fits.
-Desktop draws the meter, the track and the clock as graphics, the milestone under way pulsing.
+Width decides the detail. The names (`WORK`, `CONTEXT`, `RUN`) show from 72 columns, docked
+beside the panel included; the meter and the track shorten before the least important reading
+drops. The empty part of the meter and the HUD's top edge are drawn in the theme's quietest gray,
+the same in every terminal.
+
+On Desktop the same readings sit in a grid: each a cell of an equal share of the row, a quiet
+caption over its graphic and value, the run's cost at the right edge, the button native. The
+graphics (the state's mark, the track, the meter, the clock) are drawn as images.
+
+```
+(▸) Running tests · step 3 of 10                                         ✗ Lint failing   [ ◆ Control Room ]
+Work                       Context · hands off at 70%          Cache                                  Run
+●━●━◉─○─○─○  2 of 10       ▬▬▬▬▬▬▬▬▬┃▬▬▬  24%                    ◔ 42m left                         $43.00
+```
 
 When a handoff is about to happen, a line above offers **Hand off now** and **Later**; if a
 handoff ever waits for you, it offers **Start fresh**. With the companion on (Setup →
-*Companion*, `/cr companion on`), Kit walks a row of its own underneath.
+*Companion*, `/cr companion on`), Kit lives on the status bar's top edge.
+
+Claude Desktop's Git strip is the app's own: plugins can neither draw, hide nor move it, so
+Control Room shows no Git UI on Desktop. In the terminal, Overview and `/cr status` carry the
+branch and the uncommitted files.
 
 ### The Control Room panel
 

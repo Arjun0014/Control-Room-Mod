@@ -54,6 +54,8 @@ export type HealthFacts = {
   /** The milestone under way when the notes were checked, else null; and whether every milestone is done or blocked. */
   current: { key: string; subject: string } | null
   isPlanSettled: boolean
+  /** The first milestone still to come: a handoff between milestones, with the list just sent again, stopped cleanly. */
+  next?: { subject: string } | null
   isNotesWritten: boolean
   handoffFile: string
   /** Documentation files changed in the handoff turn (README, docs, changelog). */
@@ -62,6 +64,9 @@ export type HealthFacts = {
   checks: readonly { label: string; status: string }[]
   isClaudeMdEdited: boolean
 }
+
+/** A handoff at a clean boundary: the last milestone finished, the next not begun, and the list sent again to say so. */
+const isBetween = (f: HealthFacts): boolean => f.isPlanUpdated && f.current === null && f.next !== undefined && f.next !== null
 
 export function healthOf(f: HealthFacts): Check[] {
   const latest = f.checks[0]
@@ -75,8 +80,17 @@ export function healthOf(f: HealthFacts): Check[] {
     {
       id: 'milestone',
       label: 'Milestone under way captured',
-      state: !f.hasPlan ? 'none' : f.current !== null || f.isPlanSettled ? 'ok' : 'missing',
-      detail: f.current !== null ? short(f.current.subject) : f.isPlanSettled ? 'Every milestone settled' : f.hasPlan ? 'None marked in progress' : '—',
+      state: !f.hasPlan ? 'none' : f.current !== null || f.isPlanSettled || isBetween(f) ? 'ok' : 'missing',
+      detail:
+        f.current !== null
+          ? short(f.current.subject)
+          : f.isPlanSettled
+            ? 'Every milestone settled'
+            : isBetween(f)
+              ? `Next: ${short(f.next?.subject ?? '')}`
+              : f.hasPlan
+                ? 'None marked in progress'
+                : '—',
     },
     {
       id: 'notes',

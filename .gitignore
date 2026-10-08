@@ -7,3 +7,6 @@ plugins/control-room/tsconfig.json
 Thumbs.db
 # Local development handoff notes (Context Autopilot writes them in whatever project it runs in).
 /NEXT_SESSION_PROMPT.md
+
+# Desktop preview output (tools/desktop-preview).
+tools/desktop-preview/out/

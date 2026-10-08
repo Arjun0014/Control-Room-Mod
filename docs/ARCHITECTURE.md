@@ -236,6 +236,17 @@ crossing the threshold again never starts a second handoff.
 
 * Threshold: exact tokens or % of the live window; clamped below Claude
   Code's own auto-compact threshold (warned in the UI).
+* **Room for a fresh context** (`handoffPoint`, `roomOf`). A context after
+  a handoff or a clear is *orienting* until it starts working: Control Room
+  sees it record its milestones or task list, edit a file or start an agent,
+  or end a turn (`oriented`, with the context's size then). While orienting
+  it hands off only past the threshold plus a room of 20k tokens or a tenth
+  of the threshold; from where it started working it gets at least that
+  room, with one notice when that moves the point. A context that fills past
+  the point before any work began goes to `awaiting` instead of handing off
+  again: a low threshold can never loop. Live, with a 64k threshold, a fresh
+  context's first request was 44k and reading in took another 20k; without
+  this, five contexts in a row did one roadmap step each.
 * Pending notice is injected mid-turn with `$.session.append` (finish the
   current logical unit; do not begin another large task).
 * The handoff prompt asks Claude to verify state, run minimum validation and

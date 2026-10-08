@@ -88,21 +88,37 @@ describe('state machine', () => {
     ]
     const after = run([arm, ...handoff])
     expect(after.model.isFreshContext).toBe(true)
-    // The fresh context's first reading: 62k, within 20k of 64k. It hands off at 82k instead, and says so once.
-    const first = step(after.model, { kind: 'context', tokens: 62_000, window: 1_000_000, isInTurn: true, now: 8 }, CFG)
-    expect(first.model.state).toBe('armed')
-    expect(handoffPoint(first.model)).toBe(82_000)
-    expect(first.effects.map(e => e.kind)).toEqual(['notify'])
-    expect(JSON.stringify(first.effects)).toContain('hands off at 82k')
-    const working = run([{ kind: 'context', tokens: 75_000, window: 1_000_000, isInTurn: true, now: 9 }, ended(10)], CFG, first.model)
-    expect(working.model.state).toBe('armed')
-    expect(working.effects).toEqual([])
-    const due = run([{ kind: 'context', tokens: 83_000, window: 1_000_000, isInTurn: true, now: 11 }], CFG, working.model)
+    // Reading itself in (44k at the first request, then the notes, docs and code): no handoff yet.
+    const reading = run(
+      [
+        { kind: 'context', tokens: 44_000, window: 1_000_000, isInTurn: true, now: 8 },
+        { kind: 'context', tokens: 66_000, window: 1_000_000, isInTurn: true, now: 9 },
+      ],
+      CFG,
+      after.model,
+    )
+    expect(reading.model.state).toBe('armed')
+    expect(handoffPoint(reading.model)).toBe(84_000)
+    // It starts working at 66k: room from there, said once.
+    const working = step(reading.model, { kind: 'oriented', tokens: 66_000 }, CFG)
+    expect(handoffPoint(working.model)).toBe(86_000)
+    expect(working.effects.map(e => e.kind)).toEqual(['notify'])
+    expect(JSON.stringify(working.effects)).toContain('hands off at 86k')
+    expect(step(working.model, { kind: 'oriented', tokens: 70_000 }, CFG).model).toBe(working.model)
+    const busy = run([{ kind: 'context', tokens: 80_000, window: 1_000_000, isInTurn: true, now: 10 }, ended(11)], CFG, working.model)
+    expect(busy.model.state).toBe('armed')
+    expect(busy.effects).toEqual([])
+    const due = run([{ kind: 'context', tokens: 87_000, window: 1_000_000, isInTurn: true, now: 12 }], CFG, busy.model)
     expect(due.model.state).toBe('pending')
-    // A fresh context with room to spare keeps the threshold as set, silently.
-    const roomy = step(after.model, { kind: 'context', tokens: 30_000, window: 1_000_000, isInTurn: true, now: 8 }, CFG)
+    // A fresh context that starts working with room to spare keeps the threshold as set, silently.
+    const roomy = step(after.model, { kind: 'oriented', tokens: 30_000 }, CFG)
     expect(handoffPoint(roomy.model)).toBe(64_000)
     expect(roomy.effects).toEqual([])
+    // One that fills past the threshold and its room before any work began waits for the person: no loop.
+    const stuck = step(after.model, { kind: 'context', tokens: 85_000, window: 1_000_000, isInTurn: true, now: 8 }, CFG)
+    expect(stuck.model.state).toBe('awaiting')
+    expect(stuck.effects.map(e => e.kind)).toEqual(['notify'])
+    expect(JSON.stringify(stuck.effects)).toContain('Raise the handoff point')
     // The room grows with the threshold: a tenth of it, at least 20k.
     expect(roomOf(64_000)).toBe(20_000)
     expect(roomOf(800_000)).toBe(80_000)

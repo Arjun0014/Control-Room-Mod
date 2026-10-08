@@ -329,6 +329,54 @@ describe('runtime', () => {
     expect(withTasks.policies().map(s => s.name)).not.toContain('Run progress')
   })
 
+  test('a fresh context that starts near the handoff point gets room to work: the live loop, replayed', async () => {
+    // Live on 2.1.293: hands off at 64k, a base of about 60k; every fresh context handed off after its first turn.
+    const { rt, kept, live, advance } = await started(s => {
+      s.autopilot.enabled = true
+      s.autopilot.thresholdMode = 'tokens'
+      s.autopilot.thresholdTokens = 64_000
+    })
+    const at = (turnId: string, index: number, tokens: number, stop: 'tool_use' | 'end_turn') => rt.stepResponse({ turnId, index, model: 'claude-opus-5-5', messageCount: 3 }, {}, { ...step(tokens, stop), turnId, index })
+    rt.onTurnStart({ turnId: 't1', text: 'Work through the roadmap.' })
+    at('t1', 0, 66_000, 'tool_use')
+    await flush()
+    expect(rt.autopilot.state).toBe('pending')
+    live.usage = { ...live.usage, context: { tokens: 69_000, window: 1_000_000, percent: 7 } }
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'step 1 done' })
+    await advance(300)
+    const handoff = kept.submitted.at(-1) ?? ''
+    await rt.onTurnStart({ turnId: 'h1', text: `The control-room plugin sent a message:\n${handoff}` })
+    expect(rt.autopilot.state).toBe('handoff')
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'handoff written' })
+    await advance(2000)
+    expect(kept.commands).toContain('clear')
+    live.sessionId = 'S2'
+    await rt.onClassicSessionStart({ source: 'clear', sessionId: 'S2' })
+    await advance(1000)
+    const continuation = kept.submitted.at(-1) ?? ''
+    expect(continuation).toContain('Context Autopilot continuation')
+    await rt.onTurnStart({ turnId: 'c1', text: `The control-room plugin sent a message:\n${continuation}` })
+    expect(rt.autopilot.state).toBe('armed')
+    // Reading itself in, as seen live: 44k at the first request, 66k after the notes, the docs and the code.
+    at('c1', 0, 44_000, 'tool_use')
+    at('c1', 1, 66_000, 'tool_use')
+    await flush()
+    expect(rt.autopilot.state).toBe('armed')
+    // It starts working by sending its milestones: room from 66k, so it hands off at 86k, said once.
+    rt.recordMilestones({ milestones: [{ title: 'Temperature module', status: 'completed' }, { title: 'Pressure module', status: 'in_progress', doing: 'Writing the pressure module' }] }, undefined)
+    await flush()
+    expect(Views.hudOf(rt).ctx.threshold).toBe(86_000)
+    expect(kept.toasts.some(t => t.includes('hands off at 86k'))).toBe(true)
+    at('c1', 2, 74_000, 'tool_use')
+    await flush()
+    expect(rt.autopilot.state).toBe('armed')
+    live.usage = { ...live.usage, context: { tokens: 78_000, window: 1_000_000, percent: 8 } }
+    await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'steps 2 and 3 done' })
+    await advance(300)
+    expect(rt.autopilot.state).toBe('armed')
+    expect(kept.submitted.filter(t => t.includes('final handoff')).length).toBe(1)
+  })
+
   test('views are published for every render site', async () => {
     const { kept } = await started(() => undefined)
     for (const key of ['hud', 'pane', 'resources', 'chain', 'activity', 'permissions', 'focus', 'spinner']) {

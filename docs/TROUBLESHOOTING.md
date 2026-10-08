@@ -46,18 +46,27 @@ anything the engine refused, and why.
 - **No Work meter:** progress comes from Claude's own task list (TodoWrite or the Task tools).
   Until Claude keeps one for the run, there is nothing to count, so nothing is shown. Asking for a
   task list ("plan this as a checklist first") gives it one.
-- **The total changed after a handoff:** the fresh context rebuilds its task list from the notes
-  (Control Room names the open milestones for it). Its list replaces the earlier context's open
-  work; finished milestones always stay counted.
+- **The total changed after a handoff:** the fresh context is handed the run's whole list and its
+  objective and asked to carry them on under the same titles. If it still lists its open work
+  differently, its list replaces the earlier context's open work; finished milestones always stay
+  counted.
+- **The headline names a milestone being verified:** only when none is in progress. The one in
+  progress is the work under way.
 - **CPU and RAM left the status bar:** calm readings stay in the panel (Overview, Guardrails).
   The status bar names them only near a ceiling.
 - **The cost in the status bar is higher than this session's:** it is the whole run's total, which a
   handoff never resets. Each session's own cost is in Context → Run.
-- **The names went from the readings:** below 100 columns (70 on Desktop) the meters stand alone;
-  when a state appears and room runs short, check names go before anything is dropped. Widen the
-  terminal, or close the docked panel, to see them again.
-- **The top line reads `Ready`, or the objective, dim:** no turn has run in this context yet. It
+- **The names went from the readings:** below 72 columns the instruments stand alone, and the
+  meter and the track shorten before a reading is dropped. Widen the terminal, or close the docked
+  panel, to see them again. On Desktop each reading keeps its caption at every width.
+- **The headline reads `Ready`, or the objective, dim:** no turn has run in this context yet. It
   says what Claude is doing once a turn starts.
+- **The headline reads `Waiting for …` after the turn ended:** Claude left a background job
+  running or scheduled a wake-up, so the run will come back by itself; or a milestone is marked
+  waiting. `Waiting for your answer` means Claude's last message asked you something.
+- **A white bar in the middle of the status bar on Desktop:** that was 1.2.0, whose animated work
+  track Desktop drew in a frame of its own default size. 1.3.0 draws every graphic as an image.
+  Update (`claude plugin update control-room@control-room`) and start a new session.
 - **No Cache reading:** it appears once Claude has answered in this context, and only for a prompt
   of 4,096 tokens or more.
 - **Kit is missing:** see [Kit](#kit-the-companion).
@@ -118,7 +127,7 @@ Claude Code reports how many tokens each request read from the cache and wrote t
 ## Kit, the companion
 
 - **Kit doesn't appear**: it is off by default (Setup → *Companion*, or `/cr companion on`). It
-  walks under the status bar above the prompt, so not with `/cr hud status`, and not on mobile.
+  lives on the status bar above the prompt, so not with `/cr hud status`, and not on mobile.
 - **Kit appeared, then went away**: its drawing failed on this surface, so Control Room left it out
   and the status bar draws without it. `/reload-plugins` tries again; `claude --debug` names the
   reason.
@@ -142,6 +151,9 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 | Waiting for you | `/clear` was refused and compaction was not allowed or also failed, or the continuation is `manual`. Press **Start fresh context** (or `/cr fresh`). |
 | The threshold is lower than I set | It is kept below Claude Code's own auto-compact point, so the handoff runs first. The Context section shows the clamp. |
 | The fresh context didn't continue by itself | *Auto-continue* is off, or the session was waiting on an approval. Ask Claude to continue from `NEXT_SESSION_PROMPT.md`. Your policies and profile are already active. |
+| "This fresh context started working at 66k, close to the 64k handoff point, so it hands off at 86k" | A context after a handoff starts with the system prompt and tools, then reads the notes, the docs and the code before it works. With a threshold close to that, every context would hand off after a step or less. So it gets room to work from where it started working (20k, or a tenth of the threshold). Raise the handoff point (Context → *Hands off at*) so each context has room. |
+| "The fresh context filled up before work began" (waiting for you) | It passed the handoff point and its room while still reading itself in: handing off again would only repeat that. Raise the handoff point, then **Start fresh** or carry on. |
+| The handoff seems stuck at "Handing off" | Every step moves on when its turn starts or ends. `claude --debug-file <path>` traces each step (`autopilot: … → …`, `turn … started (handoff)`) to see where it stopped. A turn you queued runs first; the `/clear` waits for it. |
 | *Last handoff* shows items missing | It counts what it saw in tool calls: *Project docs updated* needs a documentation file edited in the handoff turn, *Validation recorded* a check run in that context, and *Project docs read* a documentation file opened by the fresh context. `○` marks an item that was not needed (no milestones to save, CLAUDE.md left alone). The handoff itself went ahead; the list says what the fresh context may lack. |
 | "Control Room reloaded in the middle of a handoff" | The plugin was reloaded (`/reload-plugins`, an update) while a handoff was under way. Autopilot picks up where it was; only when it cannot tell whether a step already happened (the handoff prompt was about to go out, or a compaction) does it wait for you, so nothing runs twice. Press **Hand off now** or **Start fresh**. |
 

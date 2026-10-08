@@ -418,6 +418,7 @@ export class Runtime {
       this.publisher.mark('activity', 'hud')
     }
     this.setPlan(Plan.fromMilestones(this.plan, input, session, Date.now()))
+    this.noteWorkStarted()
     const p = this.progress
     return `Recorded: ${p.done} of ${p.total} milestones done${p.current === null ? '' : `, now: ${p.current.subject}`}.`
   }
@@ -713,6 +714,12 @@ export class Runtime {
     this.stepAutopilot({ kind: 'configure', enabled: a.enabled, threshold, isClamped })
   }
 
+  /** A fresh context started working (or ended a turn read in): Autopilot gives it room from its size now. */
+  noteWorkStarted(): void {
+    if (!this.autopilot.isFreshContext || this.usage.tokens === undefined) return
+    this.stepAutopilot({ kind: 'oriented', tokens: this.usage.tokens })
+  }
+
   stepAutopilot(event: Autopilot.AutopilotEvent): void {
     const a = this.settings.autopilot
     const before = this.autopilot.state
@@ -721,9 +728,10 @@ export class Runtime {
       fallbackToCompact: a.fallbackToCompact,
       autoContinue: a.autoContinue,
     })
-    if (result.model.state !== before || result.effects.length > 0) {
+    if (result.model.state !== before || result.effects.length > 0 || event.kind === 'oriented') {
       const effects = result.effects.filter(e => e.kind !== 'notify').map(e => e.kind)
-      this.trace(`autopilot: ${event.kind} · ${before} → ${result.model.state}${effects.length === 0 ? '' : ` · ${effects.join(', ')}`}`)
+      const at = event.kind === 'oriented' ? ` at ${Math.round(event.tokens / 1000)}k, hands off at ${Math.round((Autopilot.handoffPoint(result.model) ?? 0) / 1000)}k` : ''
+      this.trace(`autopilot: ${event.kind}${at} · ${before} → ${result.model.state}${effects.length === 0 ? '' : ` · ${effects.join(', ')}`}`)
     }
     this.applyAutopilot(result)
   }
@@ -878,6 +886,7 @@ export class Runtime {
         isPlanUpdated: this.handoffTurn.isPlanUpdated,
         current: p.current === null ? null : { key: p.current.key, subject: p.current.subject },
         isPlanSettled: p.total > 0 && this.plan.tasks.every(t => t.status === 'completed' || Plan.isHeld(t.status)),
+        next: p.next === null ? null : { subject: p.next.subject },
         isNotesWritten,
         handoffFile: this.settings.autopilot.handoffFile,
         docsEdited: changed.filter(f => groupOf(f.path, ctx) === 'docs' && !isClaudeMd(f.path)).map(f => f.path),
@@ -1200,6 +1209,8 @@ export class Runtime {
     // A turn whose start this runtime never saw began before a reload of the plugin.
     const turnKind: TurnKind = this.turn.id === null ? 'unknown' : this.turn.kind
     this.trace(`turn ${this.turn.id ?? '?'} completed (${turnKind}, ${input.reason})`)
+    // A fresh context's turn that ended without starting work: it is read in now, room counts from here.
+    this.noteWorkStarted()
     this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, turn: turnKind, now })
     // A clear held back while this turn ran (one the person queued behind the handoff) is carried out now.
     if (this.isClearOwed && this.autopilot.state === 'clearing') {
@@ -1423,6 +1434,8 @@ export class Runtime {
       const session = Chain.currentSession(this.run)?.index ?? 1
       this.setPlan(Plan.applyTool(this.plan, { tool, input, result: result?.result, session, now }))
     }
+    // A fresh context starts working when it records its plan, edits a file or hands work to an agent.
+    if (status === 'ok' && agentId === undefined && (Plan.isPlanTool(tool) || isEditTool(tool) || tool === 'Agent' || tool === 'Task')) this.noteWorkStarted()
     if (agentId === undefined) this.questForCheck(id)
     if (tool === 'Read' && status === 'ok' && agentId === undefined && typeof input.file_path === 'string') this.reads = [...this.reads, input.file_path].slice(-200)
     if (tool === 'TaskStop' && status === 'ok') {

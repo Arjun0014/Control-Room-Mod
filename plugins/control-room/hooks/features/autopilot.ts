@@ -42,9 +42,12 @@ export type Autopilot = {
   retries: number
   /** Do not trigger again until the context passes this many tokens. */
   snoozeUntil: number | null
-  /** Waiting for a fresh context's first reading (after a handoff or a clear), to see where it starts. */
+  /**
+   * A fresh context (after a handoff or a clear) still reading itself in: the notes, the docs,
+   * the code. It has started no work yet, so it must not hand off yet.
+   */
   isFreshContext: boolean
-  /** Where this fresh context started, once read: it gets room to work before it may hand off. */
+  /** The context's size when the fresh context started working: it gets room to work from there. */
   freshStart: number | null
   /** Handoffs completed in this process (each one a new session in the chain). */
   completed: number
@@ -84,6 +87,8 @@ export type AutopilotEvent =
   | { kind: 'compactFailed'; error: string }
   | { kind: 'submitFailed'; error: string }
   | { kind: 'continuationStarted'; now: number }
+  /** A fresh context started working (its first milestones, edit or agent), or ended a turn without: its size then. */
+  | { kind: 'oriented'; tokens: number }
   | { kind: 'engineCompacted' }
   | { kind: 'manualHandoff'; now: number }
   | { kind: 'manualFresh'; now: number }
@@ -123,15 +128,24 @@ export function initialAutopilot(): Autopilot {
 /**
  * The room a fresh context gets to work before it may hand off again: at
  * least 20k tokens, or a tenth of the threshold. Without it, a context that
- * starts near the threshold (a large base: system prompt, tools, notes) would
- * hand off after every turn, each handoff costing a turn and a cache rebuild.
+ * fills most of the way to the threshold just reading itself in (system
+ * prompt, tools, the notes, the docs, the code) would hand off after a step
+ * or less, each handoff costing a turn and a cache rebuild; with a threshold
+ * set low enough, it would hand off before doing any work at all, forever.
  */
 export const roomOf = (threshold: number): number => Math.max(20_000, Math.round(threshold * 0.1))
 
-/** Where this context hands off: the threshold, raised for a fresh context that started too close to it. */
-export function handoffPoint(model: Pick<Autopilot, 'threshold' | 'freshStart'>): number | null {
+/**
+ * Where this context hands off: the threshold, or for a fresh context the
+ * point that leaves it room to work. While it is still reading itself in, the
+ * threshold plus that room; once it starts working, at least room past where
+ * it started.
+ */
+export function handoffPoint(model: Pick<Autopilot, 'threshold' | 'freshStart' | 'isFreshContext'>): number | null {
   if (model.threshold === null) return null
-  return model.freshStart === null ? model.threshold : Math.max(model.threshold, model.freshStart + roomOf(model.threshold))
+  const room = roomOf(model.threshold)
+  if (model.isFreshContext) return model.threshold + room
+  return model.freshStart === null ? model.threshold : Math.max(model.threshold, model.freshStart + room)
 }
 
 /** A fresh context began: its first reading will say where it starts. */
@@ -297,25 +311,24 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
 
   switch (event.kind) {
     case 'context': {
-      // A fresh context's first reading: where it starts. Too close to the threshold, it gets room first.
-      let seen = model
-      const raised: AutopilotEffect[] = []
+      const point = handoffPoint(model)
+      if (model.state !== 'armed' || point === null) return { model, effects: none }
+      if (model.snoozeUntil !== null && event.tokens < model.snoozeUntil) return { model, effects: none }
+      if (event.tokens < point) return { model, effects: none }
       if (model.isFreshContext) {
-        seen = set(model, { isFreshContext: false, freshStart: event.tokens })
-        const point = handoffPoint(seen)
-        if (model.threshold !== null && point !== null && point > model.threshold) {
-          raised.push({
-            kind: 'notify',
-            text: `This fresh context starts at ${kTokens(event.tokens)}, close to the ${kTokens(model.threshold)} handoff point, so it hands off at ${kTokens(point)} instead of after every turn. Raise the handoff point in Context to give each context more room.`,
-            level: 'warn',
-          })
+        // Past the handoff point and its room before any work began: handing off again would loop.
+        return {
+          model: set(model, { state: 'awaiting', isFreshContext: false, freshStart: event.tokens, lastError: 'handoff point too low', note: 'The fresh context filled up before work began' }),
+          effects: [
+            {
+              kind: 'notify',
+              text: `This fresh context reached ${kTokens(event.tokens)} still reading itself in, past its ${kTokens(point)} handoff point, so Autopilot waits for you instead of handing off again. Raise the handoff point in Context.`,
+              level: 'error',
+            },
+          ],
         }
       }
-      const point = handoffPoint(seen)
-      if (seen.state !== 'armed' || point === null) return { model: seen, effects: raised }
-      if (seen.snoozeUntil !== null && event.tokens < seen.snoozeUntil) return { model: seen, effects: raised }
-      if (event.tokens < point) return { model: seen, effects: raised }
-      const triggered = set(seen, {
+      const triggered = set(model, {
         triggeredTokens: event.tokens,
         triggeredAt: event.now,
         retries: 0,
@@ -326,7 +339,6 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         return {
           model: set(triggered, { state: 'pending', note: 'Finishing the current step, then handing off' }),
           effects: [
-            ...raised,
             { kind: 'appendPending', tokens: event.tokens, threshold: point, window: event.window },
             { kind: 'notify', text: 'Context reached the handoff point. Claude finishes the current step, then hands off.', level: 'warn' },
           ],
@@ -335,7 +347,6 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       return {
         model: set(triggered, { state: 'requested', note: 'Threshold reached. Starting the handoff' }),
         effects: [
-          ...raised,
           { kind: 'submitHandoff' },
           { kind: 'notify', text: 'Context reached the handoff point. Claude is writing the handoff notes.', level: 'warn' },
         ],
@@ -360,6 +371,23 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         return { model: set(model, { state: 'verifying', note: 'Checking the handoff notes' }), effects: [{ kind: 'verifyHandoff' }] }
       }
       return { model, effects: none }
+    }
+
+    case 'oriented': {
+      if (!model.isFreshContext) return { model, effects: none }
+      const next = set(model, { isFreshContext: false, freshStart: event.tokens })
+      const point = handoffPoint(next)
+      if (model.threshold === null || point === null || point <= model.threshold) return { model: next, effects: none }
+      return {
+        model: set(next, { note: `Fresh context: hands off at ${kTokens(point)}` }),
+        effects: [
+          {
+            kind: 'notify',
+            text: `This fresh context started working at ${kTokens(event.tokens)}, close to the ${kTokens(model.threshold)} handoff point, so it hands off at ${kTokens(point)} to leave room for work. Raise the handoff point in Context to give each context more room.`,
+            level: 'warn',
+          },
+        ],
+      }
     }
 
     case 'handoffStarted':

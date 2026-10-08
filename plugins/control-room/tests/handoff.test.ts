@@ -117,6 +117,11 @@ describe('handoff health', () => {
     expect(scoreOf(thin)).toMatchObject({ ok: 0, of: 4 })
     // A run with no milestones at all is not marked down for them.
     expect(healthOf({ ...facts, hasPlan: false }).slice(0, 2).map(c => c.state)).toEqual(['none', 'none'])
+    // Seen live: the handoff came between milestones (one done, the next not begun) with the list just sent: a clean stop.
+    const between = healthOf({ ...facts, current: null, next: { subject: 'Pressure module' } }).find(c => c.id === 'milestone')
+    expect(between).toMatchObject({ state: 'ok', detail: 'Next: Pressure module' })
+    // Without the list sent again, nothing says where the work stands.
+    expect(healthOf({ ...facts, isPlanUpdated: false, current: null, next: { subject: 'Pressure module' } }).find(c => c.id === 'milestone')?.state).toBe('missing')
   })
 
   test('continuity: the notes and docs read, the run state restored, the milestone picked up, the work resumed', () => {

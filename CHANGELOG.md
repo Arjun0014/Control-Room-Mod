@@ -8,6 +8,12 @@ match. `claude plugin tag plugins/project-sentinel` checks this when tagging a r
 
 ## [Unreleased]
 
+### Development
+
+- Windows CI runs the tests again: the test runner starts `claude` through `cmd.exe` where npm
+  installed it as a `.cmd` shim (a bare spawn failed with `ENOENT`, the one red step of 1.4.0's
+  release commit). The plugin is unchanged.
+
 ## [1.4.0] - 2026-10-08
 
 Control Room is now **Project Sentinel**, ready for Anthropic's plugin directory: the plugin folder

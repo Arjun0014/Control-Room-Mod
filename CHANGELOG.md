@@ -1,12 +1,59 @@
 # Changelog
 
-All notable changes to Control Room are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+All notable changes to Project Sentinel (called Control Room until 1.4.0) are recorded here. The
+format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version in
-`plugins/control-room/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
-match. `claude plugin tag plugins/control-room` checks this when tagging a release.
+`plugins/project-sentinel/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
+match. `claude plugin tag plugins/project-sentinel` checks this when tagging a release.
 
 ## [Unreleased]
+
+Work toward 1.4.0 (in progress: Kit's rebuild, the listing README, the plugin folder's licence and
+icon, and the docs are still to come; these notes become the 1.4.0 entry).
+
+### Changed
+
+- **Renamed to Project Sentinel** (`project-sentinel`): Anthropic's directory held `control-room`
+  as confusable with another listing. The panel is still Control Room, and `/control-room` and
+  `/cr` still open it. The marketplace keeps its name and maps the old name to the new one
+  (`renames`), so an existing `control-room@control-room` install moves to
+  `project-sentinel@control-room` by itself (checked in an isolated configuration: the marketplace
+  update rewrote `enabledPlugins`, and the next session installed and loaded the renamed plugin).
+- **Settings and history come along.** Claude Code keeps a plugin's store under its name, so once,
+  at the first session start, Project Sentinel reads the store it kept as Control Room and copies
+  the settings, the runs, the Quest log and the cache memory over, never over what its own store
+  holds. The old file is only read, never changed.
+- **The Allow permission state is removed.** Default, Ask and Deny remain. A saved Allow reads as
+  Default (Claude Code's own rules decide), never Ask; the panel says so once. In Bypass
+  permissions mode nothing changes; outside it, prompts Allow answered come back unless Claude
+  Code's own allow rules cover them.
+- **Ask asks in Claude Code's own question dialog.** Where Claude Code would run a call set to Ask
+  without asking (its own verdict, from a check that runs nothing), Control Room asks first and
+  passes the call on after a yes, so settings rules and PreToolUse hooks still apply after it.
+  Control Room no longer answers permission checks itself.
+- **The status bar on Desktop has a Machine cell** between Cache and Run: CPU and memory as slim
+  level bars with their percentages, amber near a ceiling and red at it. The columns are weighted
+  by what they hold (Work and Context wider), the track and the meter fill their column from the
+  band's width, and the machine chip leaves the headline on Desktop. The cache cell says what it
+  holds where there is room (`warm · 345k`).
+- A fresh context's notes after a handoff ride its first message (one more context block) instead
+  of changing the session's start.
+- The CPU and memory sampler and `/clear` are written in full where they run; the Windows sampler
+  no longer passes `-ExecutionPolicy` (a `-Command` script is not governed by it).
+
+### Fixed
+
+- **The cache read "lapsed?" while Claude was working** (a nine-minute command inside a turn, the
+  lifetime not yet known). While a turn runs the cache is warm unless a five-minute lifetime is
+  known. A session that reports a claude.ai plan's rate-limit windows starts at the one-hour cache,
+  named as the plan's default; a miss after five idle minutes corrects it to five. Overview's Cache
+  card says its state once.
+
+### Development
+
+- Tests moved to the repository's `tests/`: the plugin folder ships only the plugin. `npm test` and
+  the type-check assemble `.build/mod` (plugin plus tests); `tools/test/source.mjs` checks the
+  source rules Anthropic's directory reads.
 
 ## [1.3.0] - 2026-10-08
 

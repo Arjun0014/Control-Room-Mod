@@ -178,6 +178,11 @@ describe('the store kept under the former name', () => {
     expect(await rt.checkStandby()).toBe(true)
     expect(rt.isStandby).toBe(true)
     expect(f.kept.toasts).toEqual(['Project Sentinel is installed. Control Room keeps this session until it restarts.'])
+    // A reload (an install, an update) builds a new runtime: it stands by again without a second note.
+    const reloaded = new Runtime()
+    reloaded.bind(f.host)
+    expect(await reloaded.checkStandby()).toBe(true)
+    expect(f.kept.toasts.length).toBe(1)
     const alone = fakeHost()
     const own = new Runtime()
     own.bind(alone.host)

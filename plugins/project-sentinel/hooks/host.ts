@@ -110,6 +110,9 @@ export type Host = {
   configEnv(): Promise<ConfigEnv>
   /** The status bar Control Room (the former name) last published in this session's `$.state`, or undefined. */
   formerHud(): Promise<unknown>
+  /** Whether the standby note was shown in this session (`$.state`: kept across reloads, gone at a restart). */
+  isStandbyNoted(): Promise<boolean>
+  noteStandby(): Promise<void>
 
   /** Starts the machine-wide CPU and memory sampler for the platform: a fixed command, one line every SAMPLER_EVERY_SEC. */
   spawnSampler(platform: 'windows' | 'macos'): SpawnStream

@@ -38,6 +38,8 @@ const SPINNER = { plugin: 'project-sentinel', key: 'spinner' } as const
 const AUTOPILOT = { plugin: 'project-sentinel', key: 'autopilot' } as const
 /** Control Room's status bar (the former name), read only: while it runs in this session, Project Sentinel stands by. */
 const FORMER_HUD = { plugin: 'control-room', key: 'hud' } as const
+/** Whether the standby note was shown in this session: kept across reloads, so it shows once. */
+const STANDBY = { plugin: 'project-sentinel', key: 'standby' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -110,6 +112,8 @@ function hostOf($: EngineInterface): Host {
       home: await $.env.get('HOME'),
     }),
     formerHud: () => $.state.get(FORMER_HUD).then(read => read.value),
+    isStandbyNoted: () => $.state.get(STANDBY).then(read => read.value?.isNoted === true),
+    noteStandby: () => $.state.set(STANDBY, { isNoted: true }).then(() => undefined),
     // The CPU and memory sampler, written out in full (machine-wide totals only, nothing else read).
     spawnSampler: platform =>
       platform === 'windows'

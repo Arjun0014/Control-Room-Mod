@@ -86,6 +86,7 @@ It reads totals only: no per-process data, no process names, nothing about other
 | Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts; scroll its own pane back to the top (`$.ui.scroll`) | Always (Focus view and the status bar can be turned off). The scroll happens when you change section or press *↑ Sections* |
 | Write a line to Claude Code's debug log (`$.ui.log` with `to: 'debug'`): each turn's start and end and whose turn it is (yours, the handoff, the continuation), each Autopilot step, and where the handoff notes stand. Never on screen: the log exists only when you start Claude Code with `--debug` or `--debug-file` | At those moments. A line holds no prompt or answer text: only turn ids, step names, the handoff file's path, its size and age |
 | Keep the Autopilot step under way in `$.state` (`autopilot`) | While a handoff is under way or waiting, so a reload of the plugin carries it on instead of starting a second one |
+| Keep in `$.state` (`standby`) whether it told you it stands by | In a session that still runs Control Room, so the note shows once per session, not at every reload |
 | Write its own store | Settings changes, run records; once, what it carried over from the store it kept as Control Room (never over what its own store holds), with a marker, `migrated.v1` |
 
 **Permission rules that always hold:**

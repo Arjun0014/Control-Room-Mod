@@ -606,6 +606,7 @@ declare module 'claude-code' {
       focus: FocusModel
       spinner: SpinnerModel
       autopilot: { record: AutopilotRecord | null }
+      standby: { isNoted: boolean }
     }
     /** The plugin's former name: its status bar is only read, to tell whether Control Room still runs in the session. */
     'control-room': {

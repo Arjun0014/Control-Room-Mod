@@ -754,7 +754,11 @@ export class Runtime {
     if (!isFormerHud(hud)) return false
     this.isStandby = true
     this.trace('Control Room still runs in this session: Project Sentinel stands by until the session restarts')
-    host.toast('Project Sentinel is installed. Control Room keeps this session until it restarts.', 6000)
+    // Once per session: a later reload (an install, an update) stands by without saying it again.
+    if (!(await host.isStandbyNoted().catch(() => false))) {
+      await host.noteStandby().catch(() => undefined)
+      host.toast('Project Sentinel is installed. Control Room keeps this session until it restarts.', 6000)
+    }
     return true
   }
 

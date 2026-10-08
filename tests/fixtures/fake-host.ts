@@ -50,6 +50,8 @@ export function fakeHost(
     gitRuns: 0,
     /** `$.state`'s autopilot record: kept across a new Runtime (a reload), as the engine keeps it. */
     autopilotRecord: null as import('../../types').AutopilotRecord | null,
+    /** `$.state`'s standby note: kept across a new Runtime (a reload), as the engine keeps it. */
+    isStandbyNoted: false,
   }
   const live = {
     usage: { startedAt: 0, context: { tokens: 10_000, window: 1_000_000, percent: 1 }, rateLimits: [], cost: { usd: 0.5 } } as SessionUsage,
@@ -137,6 +139,8 @@ export function fakeHost(
     settings: async () => ({}),
     configEnv: async () => options.configEnv ?? { claudeConfigDir: undefined, userProfile: undefined, home: undefined },
     formerHud: async () => options.formerHud,
+    isStandbyNoted: async () => kept.isStandbyNoted,
+    noteStandby: async () => void (kept.isStandbyNoted = true),
     spawnSampler: platform => {
       kept.spawned.push([platform])
       const lines = options.samplerLines ?? []

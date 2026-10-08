@@ -8,9 +8,13 @@ match. `claude plugin tag plugins/control-room` checks this when tagging a relea
 
 ## [Unreleased]
 
-Work in progress toward the next release (likely 1.3.0): a verification pass against the live API
-and a redesign of the status bar and Kit. Not yet released; the items below are implemented and
-pass the test suite (240 tests) unless marked otherwise.
+## [1.3.0] - 2026-10-08
+
+Verified against the live API, and redrawn to be read at a glance. The status bar is a mission
+HUD: a headline says in words what the run is doing (or waits for), under it the run's
+instruments, each its own shape, and on Desktop a grid that keeps all four readings in place. Kit
+is redrawn, Autopilot gives a fresh context room to work and carries the run's milestones across
+handoffs, and Cache Guardian's figures now agree with Claude Code's own (checked live).
 
 ### Changed
 
@@ -113,6 +117,30 @@ pass the test suite (240 tests) unless marked otherwise.
   must relay what `next(e)` stored; the test world answered the row on its own, so eight
   engine-driven tests failed there. The world now relays it (and still answers on older engines).
   The plugin itself is unchanged: the 217 tests pass on 2.1.289, 2.1.292 and 2.1.293.
+
+### Security
+
+- New reads and writes, each listed in [SECURITY.md](SECURITY.md): when a turn stops, the
+  background jobs still running and the scheduled wake-ups (`classic.Stop`), so the headline can
+  say what the run waits for (memory only, until the next turn); and a line in Claude Code's debug
+  log at each turn's start and end and each Autopilot step (`$.ui.log` to `debug`: never on
+  screen, no prompt or answer text, only with `--debug` or `--debug-file`).
+
+### Verified
+
+- `tsc`, `claude plugin validate --strict` (plugin and marketplace) and 240 tests in
+  `claude plugin test` on Claude Code 2.1.293 (the engine Claude Desktop and the CLI run here).
+- Live with real models (Sonnet 5.5, Opus 5.5) in a real Windows console: Autopilot end to end in
+  four runs, traced step by step (two bugs found and fixed); Keep warm on the 1-hour and the
+  5-minute cache, each verified by its own self-check, its figures identical to Claude Code's own;
+  a model switch confirmed first and declined, then made; the status bar with Kit and every panel
+  section at 80, 100 and 150 columns during the demo driver's turn.
+- In Claude Desktop (2.26454): the person's review of a release candidate (rc.5), then rc.6
+  installed and loaded by a fresh session, captured read-only from the app's window: the status
+  bar's four cells while Claude works and after the turn, Kit at its new size, Overview's cache dot
+  and Now's mark. Guardrails' cards and Activity's legend through `tools/desktop-preview`, which
+  lays a tree out with the app's own rules, and in a real terminal console.
+- Not yet: the answer styles with a real model, and live machine-load sampling on macOS and Linux.
 
 ## [1.2.0] - 2026-10-08
 

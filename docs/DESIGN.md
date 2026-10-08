@@ -202,7 +202,7 @@ drop. Docked beside the panel (about 80 columns) the whole line still fits.
 equal share of the row: a quiet caption over its graphic and value. The run's cost takes what it
 needs at the right edge. The four readings always keep their cells, a dim word standing in for
 one with nothing yet (`No milestones yet`, `—`): a row that dropped them collapsed to two readings
-with a wide empty middle (1.3.0-rc.5, seen in the app). So the row never overflows, nothing
+with a wide empty middle (a release candidate of 1.3.0, seen in the app). So the row never overflows, nothing
 drifts and its rhythm holds, from 500 pixels to a full window; below 80 columns the cells turn
 compact (fewer stops, a shorter meter, `2/10`, `None`). Every
 graphic is an image of a fixed size (`Svg` with `width` and `height`), never an interactive

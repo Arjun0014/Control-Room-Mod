@@ -109,10 +109,11 @@ in that tool's place.
 ### Subagents
 
 Its hook on starting a subagent does one of three things. With subagent limits on (off by default)
-it refuses a new subagent past your limit, or one you declined in the **Ask** dialog. With the model
-router's subagent routing on (the router is off by default) it changes the **model** of the
-subagent being started, and nothing else. Otherwise it passes the start on unchanged. It never
-changes a subagent's permission mode, tools, prompt or description, and never starts one itself.
+it refuses a new subagent while subagents are turned off, past your limit, or when you decline it
+in the **Ask** dialog. With the model router's subagent routing on (the router is off by default)
+it changes the **model** of the subagent being started, and nothing else. Otherwise it passes the
+start on unchanged. It never changes a subagent's permission mode, tools, prompt or description,
+and never starts one itself.
 
 ### Programs it runs
 
@@ -159,7 +160,7 @@ your session uses:
 - the prompts and notes above;
 - **Keep warm** (off by default; it spends usage): shortly before the prompt cache would lapse
   while you are away, one request of the conversation so far plus a *keep-alive* line asking for a
-  one-word reply, so Anthropic's prompt cache stays warm; it stops after two idle hours;
+  one-word reply, so Anthropic's prompt cache stays warm; it stops after two idle hours (by default);
 - the **lazy-exit guard** (off by default): when Claude stops with work plainly unfinished it asks
   Claude to continue, at most twice a turn; with its model check on, it first asks Claude Code's
   small model whether the stop was premature, sending your request and the end of Claude's answer.

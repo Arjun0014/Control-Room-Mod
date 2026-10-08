@@ -43,6 +43,7 @@ import type {
   ResourcesView,
   SpinnerModel,
 } from '../types'
+import type { ConfigEnv } from './app/formerStore'
 
 export type SpawnStream = AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> & { readonly result: Promise<ProcessSpawnResult> }
 
@@ -105,6 +106,10 @@ export type Host = {
   storeDelete(key: string): Promise<void>
 
   settings(source?: 'policy' | 'user' | 'project' | 'local'): Promise<EngineSettings>
+  /** `CLAUDE_CONFIG_DIR`, `USERPROFILE` and `HOME`: only to find the store kept under the former name. */
+  configEnv(): Promise<ConfigEnv>
+  /** The status bar Control Room (the former name) last published in this session's `$.state`, or undefined. */
+  formerHud(): Promise<unknown>
 
   /** Starts the machine-wide CPU and memory sampler for the platform: a fixed command, one line every SAMPLER_EVERY_SEC. */
   spawnSampler(platform: 'windows' | 'macos'): SpawnStream

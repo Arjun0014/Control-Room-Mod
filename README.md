@@ -203,9 +203,11 @@ claude plugin marketplace update control-room
 
 The marketplace maps the old name to the new one, so the update moves your install to
 `project-sentinel@control-room` (your `enabledPlugins` entry included), and the next session
-loads Project Sentinel. At its first start it reads the store it kept as Control Room once and
-copies your settings, runs, Quest log and what it learned about the prompt cache into its own
-store; the old file is left as it was. Two things changed in behaviour: the *Allow* permission
+loads Project Sentinel. When it first loads it reads the store it kept as Control Room once (the
+one written last, where Claude Code kept more than one) and copies your settings, runs, Quest log
+and what it learned about the prompt cache into its own store; the old file is left as it was.
+Sessions that were open during the update keep Control Room until they restart; Project Sentinel
+stands by in them, so the two never act at once. Two things changed in behaviour: the *Allow* permission
 state is gone (a saved Allow reads as *Default*: in Bypass permissions mode nothing changes,
 otherwise prompts it answered come back unless your Claude Code allow rules cover them), and a
 click on Kit no longer opens the panel (the status bar's button does).
@@ -397,7 +399,7 @@ sends **no telemetry**, and nothing leaves your machine through it. It observes 
 memory totals (while the status bar shows them or a machine-load limit is on). In the terminal it
 runs one read-only `git status` after a turn and keeps only the branch and counts. It writes only
 its own plugin store, and once, after the rename, reads the store it kept as Control Room to
-carry your settings over. Claude, not the plugin, writes the handoff file. Where Claude Code has
+carry your settings over (it reads `CLAUDE_CONFIG_DIR`, `USERPROFILE` and `HOME` only to find it). Claude, not the plugin, writes the handoff file. Where Claude Code has
 no task list of its own, Project Sentinel offers Claude one small tool, `milestones`, whose answer
 only records the list for run progress. It never answers a permission prompt for you.
 

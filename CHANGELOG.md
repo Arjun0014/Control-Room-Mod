@@ -25,9 +25,19 @@ cell, and the cache no longer reads "lapsed?" while Claude works.
   configuration: the update rewrote `enabledPlugins`, and the next session installed and loaded
   the renamed plugin).
 - **Settings and history come along.** Claude Code keeps a plugin's store under its name, so once,
-  at the first session start, Project Sentinel reads the store it kept as Control Room and copies
-  the settings, the runs, the Quest log and the cache memory over, never over what its own store
-  holds. The old file is only read, never changed.
+  when it first loads and before it reads a setting, Project Sentinel reads the store it kept as
+  Control Room and copies the settings, the runs, the Quest log and the cache memory over, never
+  over what its own store holds. Where Claude Code kept more than one (an installed copy's, an
+  in-place load's), it reads the one written last. It finds Claude Code's configuration folder
+  from `CLAUDE_CONFIG_DIR` or the home folder (`USERPROFILE`, `HOME`), else from the session's
+  transcript path when the session starts. The old file is only read, never changed.
+- **Beside a Control Room that still runs, it stands by.** Claude Desktop hands a session its
+  plugins when the session's process starts, and the update reloads open sessions, so they gain
+  Project Sentinel next to the Control Room they already run (seen live with the release
+  candidate: both status bars, Project Sentinel on its defaults). Where Control Room has published
+  its status bar in the session, Project Sentinel passes every event on and draws, registers and
+  records nothing, with one note, until the session restarts: never two handoffs, two answers to
+  one permission check or two milestone tools.
 - **Kit, rebuilt.** One surface module (`hooks/kit.client.tsx`) now draws Kit in the terminal and
   on Desktop, on the surface's own clock, with a small behaviour model:
   - **No jump, ever.** Kit moves only by walking, turns only through a frame that faces you, and
@@ -104,7 +114,7 @@ cell, and the cache no longer reads "lapsed?" while Claude works.
   the type-check assemble `.build/mod` (plugin plus tests); `tools/test/source.mjs` (`npm run
   source`, also in CI) checks the source rules Anthropic's directory reads;
   `tools/test/snapshot.mjs` (`npm run snapshot`) makes a frozen `cr-test` copy for live tests that
-  never carries a former store over. 266 tests, among them a randomized walk through every mood
+  never carries a former store over. 273 tests, among them a randomized walk through every mood
   with touches that checks Kit never jumps (also fuzzed over thousands of runs).
 - The Desktop preview draws Kit's surface module inside its region and shows Kit through a turn.
 

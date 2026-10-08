@@ -36,6 +36,8 @@ const PERMISSIONS = { plugin: 'project-sentinel', key: 'permissions' } as const
 const FOCUS = { plugin: 'project-sentinel', key: 'focus' } as const
 const SPINNER = { plugin: 'project-sentinel', key: 'spinner' } as const
 const AUTOPILOT = { plugin: 'project-sentinel', key: 'autopilot' } as const
+/** Control Room's status bar (the former name), read only: while it runs in this session, Project Sentinel stands by. */
+const FORMER_HUD = { plugin: 'control-room', key: 'hud' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -102,6 +104,12 @@ function hostOf($: EngineInterface): Host {
     storeDelete: key => $.store.delete(key),
 
     settings: source => $.settings.read(source === undefined ? undefined : { source }),
+    configEnv: async () => ({
+      claudeConfigDir: await $.env.get('CLAUDE_CONFIG_DIR'),
+      userProfile: await $.env.get('USERPROFILE'),
+      home: await $.env.get('HOME'),
+    }),
+    formerHud: () => $.state.get(FORMER_HUD).then(read => read.value),
     // The CPU and memory sampler, written out in full (machine-wide totals only, nothing else read).
     spawnSampler: platform =>
       platform === 'windows'
@@ -183,11 +191,14 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     if (rt.host === null) rt.bind(hostOf($))
     const started = await next(e)
+    // Control Room still runs in this session (an update loaded both): stand by until it restarts.
+    if (await rt.checkStandby()) return started
     await rt.onSessionStart(e)
     return started
   })
 
   on('session.end', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     await rt.onSessionEnd(e).catch(() => undefined)
     return next(e)
@@ -196,6 +207,7 @@ export const register: Register = on => {
   // A session begins, or a fresh context after /clear: noted, and passed on unchanged (the fresh
   // context's notes ride its first prompt instead, so the session's start is Claude Code's own).
   on('classic.SessionStart', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     if (e.permission_mode !== undefined) rt.permissionMode = e.permission_mode
     await rt.onClassicSessionStart({ source: e.source, sessionId: e.session_id, model: e.model, transcriptPath: e.transcript_path })
@@ -203,11 +215,13 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('classic.UserPromptSubmit', ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (e.permission_mode !== undefined) rt.permissionMode = e.permission_mode
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('session.attach', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     if (!rt.surfaces.includes(e.surface)) rt.surfaces = [...rt.surfaces, e.surface]
     rt.publisher.mark('pane')
@@ -215,11 +229,13 @@ export const register: Register = on => {
   })
 
   on('session.measure', ($, e, next) => {
+    if (rt.isStandby) return next(e)
     rt.onMeasure(e)
     return next(e)
   })
 
   on('session.compact', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     if (e.agentId === undefined) rt.onCompacted(e.trigger, answer)
     return answer
@@ -229,6 +245,7 @@ export const register: Register = on => {
   // Prompts and the system prompt
 
   on('prompt.submit', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     await rt.ensureLoaded()
     const extra = rt.onPromptSubmit(e.text, e.origin)
@@ -238,11 +255,13 @@ export const register: Register = on => {
   // The fresh context after Control Room's own handoff: its first message carries the notes as one
   // more context block, once (the run, the notes file's path, the milestones, the objective).
   on('prompt.context', ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const notes = rt.takeFreshContext()
     return next(notes === null ? e : { ...e, blocks: [...e.blocks, { name: 'contextAutopilot', text: notes }] })
   }).catch(($, e, next) => next(e))
 
   on('prompt.compose', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     const section = rt.composeSection(e.outputStyle)
     if (section === null) return answer
@@ -253,11 +272,13 @@ export const register: Register = on => {
   // Turns
 
   on('turn.start', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     await rt.onTurnStart({ turnId: e.turnId, text: e.text })
     return next(e)
   })
 
   on('turn.step', async function* ($, e, next) {
+    if (rt.isStandby) return yield* next(e)
     const want = rt.stepRequest(e)
     const request = want.model === undefined && want.effort === undefined ? e : { ...e, ...want }
     const answer = yield* next(request)
@@ -266,6 +287,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     await rt.onTurnComplete({ agentId: e.agentId, reason: e.reason, answer: e.answer })
     return answer
@@ -274,6 +296,7 @@ export const register: Register = on => {
   // Model switches: the engine reports the cache's state and lifetime. With a large
   // warm cache, a switch the person makes is confirmed first (Cache Guardian).
   on('classic.PreModelSwitch', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     if (answer.permissionDecision === 'deny' || answer.permissionDecision === 'ask') return answer
     const reason = rt.onPreModelSwitch(e)
@@ -281,11 +304,13 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('classic.PostModelSwitch', ($, e, next) => {
+    if (rt.isStandby) return next(e)
     rt.onPostModelSwitch(e)
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('classic.Stop', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     if (answer.block !== undefined || answer.preventContinuation === true) return answer
     const block = await rt.onStop({
@@ -303,13 +328,15 @@ export const register: Register = on => {
 
   // Control Room's own milestones tool, offered only where Claude Code has no task list.
   // Registered before the general hook, so it answers the call itself.
-  on('tool.call', { tool: /^mcp__project-sentinel__milestones$/ }, async ($, e) => {
+  on('tool.call', { tool: /^mcp__project-sentinel__milestones$/ }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     await rt.ensureLoaded()
     return { result: rt.recordMilestones(isRecord(e) ? { ...e } : {}, e.agentId) }
   })
 
   on('tool.call', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     const tool = String(e.tool)
     const input: Record<string, unknown> = isRecord(e) ? { ...e } : {}
@@ -336,12 +363,14 @@ export const register: Register = on => {
   // Subagents
 
   on('agent.offer', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     await rt.ensureLoaded()
     return rt.isAgentOffered(e) ? next(e) : { isOffered: false }
   }).catch(($, e, next) => (rt.settings.subagents.mode === 'block' ? { isOffered: false } : next(e)))
 
   on('agent.spawn', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     const decision = await rt.onAgentSpawn(e)
     if (decision.deny !== undefined) return { deny: decision.deny }
@@ -354,6 +383,7 @@ export const register: Register = on => {
   // Commands
 
   on('command.run', { command: ['control-room', 'cr'] }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     if (!rt.isOwnCommand(e.command)) return next(e)
     await rt.ensureLoaded()
@@ -364,6 +394,7 @@ export const register: Register = on => {
 
   // Kit's module reports that it could not draw: leave it out from now on, so the status bar draws without it.
   on('ui.message', async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     if (e.element === 'kit' && isRecord(e.data) && typeof e.data.fault === 'string') {
       rt.companionFault = e.data.fault.slice(0, 160)
@@ -373,6 +404,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const answer = await next(e)
     if (answer.deny === undefined) {
       rt.ui.isPaneOpen = false
@@ -385,6 +417,7 @@ export const register: Register = on => {
   // Drawing
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     if (e.props.hasSurvey || e.surface === 'mobile') return next(e)
     const hud = await read($, hudAtom)
     if (!hud.isVisible) return next(e)
@@ -413,7 +446,8 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const pane = await read($, paneAtom)
     const hud = await read($, hudAtom)
     const needs = TAB_NEEDS[pane.tab]
@@ -429,6 +463,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const focus = await read($, focusAtom)
     if (!focus.isOn) return next(e)
     const kit = kitOf($.ui.resolve(e), e.viewport?.columns ?? 100, e.surface)
@@ -446,6 +481,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const focus = await read($, focusAtom)
     if (!focus.isOn || focus.expanded.includes(e.props.tool_use_id)) return next(e)
     const isDiff = isEditTool(e.props.tool)
@@ -455,18 +491,21 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const focus = await read($, focusAtom)
     if (!focus.isOn || focus.tools !== 'hidden' || e.props.isExpanded) return next(e)
     return hiddenRow(kitOf($.ui.resolve(e), 40, e.surface))
   })
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const spinner = await read($, spinnerAtom)
     if (spinner.line === null) return next(e)
     return next({ ...e, props: { ...e.props, message: spinner.line } })
   })
 
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
     const hud = await read($, hudAtom)
     const label = hud.frontier.isOn && hud.profile.id !== 'frontier' ? 'Frontier Max' : hud.profile.id === 'normal' ? null : hud.profile.name
     if (label === null) return next(e)

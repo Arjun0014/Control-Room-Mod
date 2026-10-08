@@ -16,6 +16,10 @@ anything the engine refused, and why.
   `claude plugin marketplace update control-room`. The marketplace maps the old name to the new
   one, so the update moves your install over (your `enabledPlugins` entry included), and the next
   session loads Project Sentinel and copies your settings and run history over once.
+- **An open session still shows Control Room after the update:** Claude Desktop hands a session
+  its plugins when the session starts, so a session open during the update keeps Control Room.
+  Project Sentinel stands by in it (one note: *Project Sentinel is installed. Control Room keeps
+  this session until it restarts.*) and takes over in the next session.
 - **Desktop:** the Code tab's local sessions load installed plugins and folders named in
   `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. Start a new session
   after changing either.
@@ -24,10 +28,12 @@ anything the engine refused, and why.
   Run `claude plugin update project-sentinel@control-room`, then start a new session.
 - **Organisation policy:** managed settings can disable plugins. Project Sentinel cannot and does
   not work around that.
-- **Settings or runs missing after the rename:** they are carried over once, at the first session
-  start that can see Claude Code's configuration folder, and only into an empty store. The old file
-  (`~/.claude/plugins/store/control-room_<source>-<id>.json`) is never changed, so nothing is lost;
-  `claude --debug` names what was carried (`carried … keys over from control-room_…`).
+- **Settings or runs missing after the rename:** they are carried over once, when Project Sentinel
+  first loads outside a session that still runs Control Room, from the store written last in
+  Claude Code's configuration folder (`CLAUDE_CONFIG_DIR`, else `.claude` in your home folder), and
+  only into an empty store. The old file (`~/.claude/plugins/store/control-room_<source>-<id>.json`)
+  is never changed, so nothing is lost; `claude --debug` names what was carried
+  (`carried … keys over from control-room_…`).
 
 ## `/cr` does nothing, or goes to Claude
 

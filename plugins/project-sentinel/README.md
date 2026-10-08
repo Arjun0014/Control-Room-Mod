@@ -103,7 +103,10 @@ in the panel. It never hides instructions.
 memory, to show activity and progress; file status (never contents) of the handoff notes and of
 paths Claude edits, to place them inside or outside the project; Claude Code's managed policy
 settings, to know whether its policy section can be added; and once, after the rename, its own
-settings file from when it was called Control Room, which it copies and never changes.
+settings file from when it was called Control Room, which it copies and never changes (the
+environment variables `CLAUDE_CONFIG_DIR`, `USERPROFILE` and `HOME` are read only to find it).
+In a session that still runs Control Room it reads Control Room's status bar, and stands by
+until the session restarts.
 
 **What it stores:** in Claude Code's own plugin store on your machine: your settings, run records
 (the objective, in Claude's words or your latest request's, milestone titles and states, session

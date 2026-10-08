@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CARRIED_KEY, carriedWrites, configDirOf, formerStorePaths, sourceOf, storeFileName } from '../hooks/app/formerStore'
+import { CARRIED_KEY, carriedWrites, configDirFromEnv, configDirOf, formerStorePaths, isFormerHud, newestFirst, sourceOf, storeFileName } from '../hooks/app/formerStore'
 import { Runtime } from '../hooks/app/runtime'
 import { defaultSettings } from '../hooks/core/settings'
 import type { Settings } from '../hooks/core/settings'
@@ -22,6 +22,14 @@ describe('the store kept under the former name', () => {
     expect(configDirOf(undefined)).toBeNull()
   })
 
+  test('the configuration folder from the environment, as Claude Code finds it', () => {
+    expect(configDirFromEnv({ claudeConfigDir: '/cfg', userProfile: 'C:\\Users\\a', home: '/home/a' })).toBe('/cfg')
+    expect(configDirFromEnv({ claudeConfigDir: ' ', userProfile: 'C:\\Users\\a', home: undefined })).toBe('C:\\Users\\a\\.claude')
+    expect(configDirFromEnv({ claudeConfigDir: undefined, userProfile: 'C:\\Users\\a\\', home: '/c/Users/a' })).toBe('C:\\Users\\a\\.claude')
+    expect(configDirFromEnv({ claudeConfigDir: undefined, userProfile: undefined, home: '/home/a/' })).toBe('/home/a/.claude')
+    expect(configDirFromEnv({ claudeConfigDir: undefined, userProfile: '', home: undefined })).toBeNull()
+  })
+
   test('an installed copy keeps its store under the marketplace, a plugin loaded in place under inline', () => {
     expect(sourceOf('C:\\Users\\a\\.claude\\plugins\\cache\\control-room\\project-sentinel\\1.4.0')).toBe('control-room')
     expect(sourceOf('/home/a/.claude/plugins/cache/mine/project-sentinel/1.4.0')).toBe('mine')
@@ -35,6 +43,18 @@ describe('the store kept under the former name', () => {
       '/home/a/.claude/plugins/store/control-room_inline-7b750613ef16.json',
     ])
     expect((await formerStorePaths('C:\\Users\\a\\.claude', 'inline'))[0]).toBe('C:\\Users\\a\\.claude\\plugins\\store\\control-room_inline-7b750613ef16.json')
+  })
+
+  test('of the stores kept under the former name, the one written last comes first; equal times keep their order', () => {
+    expect(newestFirst([{ path: 'a', mtimeMs: 5 }, { path: 'b', mtimeMs: 9 }, { path: 'c', mtimeMs: 5 }])).toEqual(['b', 'a', 'c'])
+    expect(newestFirst([])).toEqual([])
+  })
+
+  test('Control Room is known by its status bar, not by the name alone', () => {
+    expect(isFormerHud({ isVisible: true, profile: { id: 'normal' }, autopilot: { isOn: true }, ctx: { tokens: 1 } })).toBe(true)
+    expect(isFormerHud({ isVisible: true, profile: 'normal' })).toBe(false)
+    expect(isFormerHud(undefined)).toBe(false)
+    expect(isFormerHud('hud')).toBe(false)
   })
 
   test('what comes along: never over what the new store holds; runs merged, the counter never going back', () => {
@@ -97,6 +117,72 @@ describe('the store kept under the former name', () => {
     await next.onClassicSessionStart({ source: 'startup', sessionId: 'session-2', transcriptPath: '/home/a/.claude/projects/-work/session-2.jsonl' })
     expect(next.settings.autopilot.thresholdPercent).toBe(60)
     expect(next.notes.join(' ')).not.toContain('Project Sentinel is Control Room renamed')
+  })
+
+  test('loaded into a running session (an update), it carries over at the load, from the store written last, before a setting is read', async () => {
+    const stale = defaultSettings()
+    stale.autopilot.enabled = false
+    const live = defaultSettings()
+    live.autopilot.enabled = true
+    live.autopilot.thresholdPercent = 80
+    live.permissions.delete = 'default'
+    live.permissions.push = 'default'
+    live.permissions.gitDestructive = 'default'
+    const dir = 'C:\\Users\\a\\.claude\\plugins\\store'
+    const installed = `${dir}\\control-room_control-room-8bbff897507c.json`
+    const inline = `${dir}\\control-room_inline-7b750613ef16.json`
+    const f = fakeHost({
+      files: {
+        [installed]: JSON.stringify({ 'settings.v1': stale, 'runs.counter.v1': 5 }),
+        [inline]: JSON.stringify({ 'settings.v1': live, 'runs.counter.v1': 32 }),
+      },
+      // The installed copy's store is looked for first (the same source), but the in-place one was written last.
+      fileTimes: { [installed]: 1_000, [inline]: 9_000 },
+      pluginRoot: 'C:\\Users\\a\\.claude\\plugins\\cache\\control-room\\project-sentinel\\1.4.0',
+      configEnv: { claudeConfigDir: undefined, userProfile: 'C:\\Users\\a', home: undefined },
+      dirs: [dir],
+    })
+    const rt = new Runtime()
+    rt.bind(f.host)
+    // A reload starts the plugin with no session start after it.
+    await rt.onSessionStart({ cwd: '/work', surface: 'desktop', isInteractive: false })
+    expect(rt.settings.autopilot.enabled).toBe(true)
+    expect(rt.settings.autopilot.thresholdPercent).toBe(80)
+    expect(rt.settings.permissions.delete).toBe('default')
+    expect(rt.settings.permissions.gitDestructive).toBe('default')
+    expect(rt.run?.number).toBe(33)
+    expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
+    expect(rt.notes.join(' ')).toContain('Project Sentinel is Control Room renamed')
+  })
+
+  test('an environment that names a folder without plugin stores is not trusted at the load: the session start looks by its transcript', async () => {
+    const old = defaultSettings()
+    old.autopilot.enabled = true
+    const file = '/home/a/.claude/plugins/store/control-room_inline-7b750613ef16.json'
+    const f = fakeHost({ files: { [file]: JSON.stringify({ 'settings.v1': old }) }, configEnv: { claudeConfigDir: undefined, userProfile: undefined, home: '/elsewhere' }, dirs: [] })
+    const rt = new Runtime()
+    rt.bind(f.host)
+    await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    expect(f.kept.store[CARRIED_KEY]).toBeUndefined()
+    expect(rt.settings.autopilot.enabled).toBe(false)
+    await rt.onClassicSessionStart({ source: 'startup', sessionId: 'session-1', transcriptPath: '/home/a/.claude/projects/-work/session-1.jsonl' })
+    expect(rt.settings.autopilot.enabled).toBe(true)
+    expect(f.kept.store[CARRIED_KEY]).toMatchObject({ from: 'control-room_inline-7b750613ef16.json' })
+  })
+
+  test('beside a Control Room that still runs in the session, it stands by and says so once', async () => {
+    const f = fakeHost({ formerHud: { isVisible: true, profile: { id: 'normal' }, autopilot: { isOn: true }, ctx: {} } })
+    const rt = new Runtime()
+    rt.bind(f.host)
+    expect(await rt.checkStandby()).toBe(true)
+    expect(await rt.checkStandby()).toBe(true)
+    expect(rt.isStandby).toBe(true)
+    expect(f.kept.toasts).toEqual(['Project Sentinel is installed. Control Room keeps this session until it restarts.'])
+    const alone = fakeHost()
+    const own = new Runtime()
+    own.bind(alone.host)
+    expect(await own.checkStandby()).toBe(false)
+    expect(alone.kept.toasts).toEqual([])
   })
 
   test('with no former store, nothing changes and it is not looked for again', async () => {

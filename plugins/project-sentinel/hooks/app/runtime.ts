@@ -53,7 +53,7 @@ import { activeAgents, decideSpawn, isOffered } from '../features/subagents'
 import type { Host } from '../host'
 import { ResourceMonitor } from './monitor'
 import { Debounced, findRunBySession, loadHistory, loadIndex, loadSettings, nextRunNumber, saveRun } from './persist'
-import { CARRIED_KEY, type CarriedMarker, carriedWrites, configDirOf, readFormerStore } from './formerStore'
+import { CARRIED_KEY, type CarriedMarker, carriedWrites, configDirFromEnv, configDirOf, isFormerHud, readFormerStore } from './formerStore'
 import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
 import { Publisher } from './publisher'
@@ -297,6 +297,7 @@ export class Runtime {
       this.loading = (async () => {
         const host = this.host
         if (host === null) return
+        await this.carryAtLoad()
         const loaded = await loadSettings(host)
         this.settings = loaded.settings
         this.quest = Quest.questOf(await host.storeGet(STORE_KEYS.quest).catch(() => undefined))
@@ -605,7 +606,7 @@ export class Runtime {
   /** classic.SessionStart: a session begins (startup, resume, compact) or a fresh context after /clear. */
   async onClassicSessionStart(input: { source: string; sessionId: string; model?: string; transcriptPath?: string }): Promise<void> {
     await this.ensureLoaded()
-    await this.carryFormerStore(input.transcriptPath)
+    await this.carryAtSessionStart(input.transcriptPath)
     if (input.source !== 'clear') {
       this.startSource = { source: input.source, sessionId: input.sessionId }
       if (input.source === 'compact') this.publisher.mark('chain', 'hud')
@@ -670,20 +671,19 @@ export class Runtime {
   /**
    * Once per install: the settings, runs, Quest log and cache memory the plugin kept as Control Room
    * come along to Project Sentinel (app/formerStore.ts). The old store is only read, never changed.
+   * Returns the keys that came along: none when it was done before or nothing was found.
    */
-  private async carryFormerStore(transcriptPath: string | undefined): Promise<void> {
+  private async carryFormerStore(configDir: string | null): Promise<string[]> {
     const host = this.host
-    if (host === null || this.isCarryChecked) return
-    const configDir = configDirOf(transcriptPath)
-    if (configDir === null) return
+    if (host === null || this.isCarryChecked || configDir === null) return []
     this.isCarryChecked = true
-    if ((await host.storeGet(CARRIED_KEY).catch(() => undefined)) !== undefined) return
+    if ((await host.storeGet(CARRIED_KEY).catch(() => undefined)) !== undefined) return []
     const now = Date.now()
     const former = await readFormerStore(host, configDir)
     if (former === null) {
       const marker: CarriedMarker = { from: null, at: now, keys: 0 }
       await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
-      return
+      return []
     }
     const has = async (key: string) => (await host.storeGet(key).catch(() => undefined)) !== undefined
     const counter = await host.storeGet(STORE_KEYS.runCounter).catch(() => undefined)
@@ -699,7 +699,31 @@ export class Runtime {
     const marker: CarriedMarker = { from: former.file, at: now, keys: keys.length }
     await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
     this.trace(`carried ${keys.length} keys over from ${former.file}`)
-    if (keys.length === 0) return
+    if (keys.length > 0) this.note('Project Sentinel is Control Room renamed: your settings, runs, Quest log and cache memory came along.')
+    return keys
+  }
+
+  /**
+   * At the first load, before the settings are read, so they are the person's from the first hook
+   * on: an update can load the plugin into a running session, where no session start follows.
+   */
+  private async carryAtLoad(): Promise<void> {
+    const host = this.host
+    if (host === null || this.isCarryChecked) return
+    const env = await host.configEnv().catch(() => null)
+    const configDir = env === null ? null : configDirFromEnv(env)
+    if (configDir === null) return
+    // A folder without plugin stores is not Claude Code's: the session's start looks again, by its transcript.
+    const sep = configDir.includes('\\') && !configDir.includes('/') ? '\\' : '/'
+    if (!(await host.exists([configDir, 'plugins', 'store'].join(sep)).catch(() => false))) return
+    await this.carryFormerStore(configDir)
+  }
+
+  /** At a session's start, when the environment did not say where the configuration is: the transcript's folder. */
+  private async carryAtSessionStart(transcriptPath: string | undefined): Promise<void> {
+    const host = this.host
+    const keys = await this.carryFormerStore(configDirOf(transcriptPath))
+    if (host === null || keys.length === 0) return
     // What came along takes effect now: the settings, the Quest log, the cache's memory, the run numbers.
     this.isLoaded = false
     await this.ensureLoaded()
@@ -710,8 +734,28 @@ export class Runtime {
     }
     this.reconfigure({})
     void this.refreshHistory()
-    this.note('Project Sentinel is Control Room renamed: your settings, runs, Quest log and cache memory came along.')
     this.publisher.markAll()
+  }
+
+  /**
+   * True while Control Room, this plugin under its former name, runs in the session too. Claude
+   * Desktop hands a session its plugins when the session's process starts, so an update loads
+   * Project Sentinel beside the Control Room that process already runs. Project Sentinel then stands
+   * by: every hook passes its event on, and nothing is drawn, registered, recorded or carried over,
+   * until the session restarts without Control Room.
+   */
+  isStandby = false
+
+  /** At the load: whether Control Room has published its status bar in this session (it stays standing by if so). */
+  async checkStandby(): Promise<boolean> {
+    const host = this.host
+    if (host === null || this.isStandby) return this.isStandby
+    const hud = await host.formerHud().catch(() => undefined)
+    if (!isFormerHud(hud)) return false
+    this.isStandby = true
+    this.trace('Control Room still runs in this session: Project Sentinel stands by until the session restarts')
+    host.toast('Project Sentinel is installed. Control Room keeps this session until it restarts.', 6000)
+    return true
   }
 
   async onSessionEnd(e: SessionEndInput): Promise<void> {

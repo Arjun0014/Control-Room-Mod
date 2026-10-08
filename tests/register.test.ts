@@ -37,6 +37,39 @@ describe('register', () => {
     expect(text).toContain('Run 1')
   })
 
+  test('beside a Control Room that still runs in the session (an update loaded both), every hook passes its event on', async ($, on) => {
+    const w = world(on)
+    // Control Room's status bar in this session's `$.state`, as 1.3.0 publishes it.
+    const former = { isVisible: true, headline: {}, chips: [], ctx: { tokens: 1 }, profile: { id: 'normal', name: 'Normal', isModified: false }, autopilot: { isOn: true, state: 'idle', text: '', tone: 'ok' } }
+    on('state.get', ($, e, next) => (e.plugin === 'control-room' ? { value: { value: former, version: 7 } } : next(e)))
+    on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude Code.', scope: 'shared' as const }] }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    const checked: string[] = []
+    on('tool.check', ($, e) => {
+      checked.push(String((e.input as { command?: string }).command))
+      return { decision: 'allow' as const }
+    })
+    await $.session.start(SESSION)
+    expect(w.kept.toasts).toEqual(['Project Sentinel is installed. Control Room keeps this session until it restarts.'])
+    // Control Room keeps /control-room, /cr and its milestones tool: nothing of Project Sentinel's is registered.
+    expect(w.kept.registered).toEqual([])
+    await $.command.run(cmd('cr', 'status'))
+    expect(w.kept.commandsRun).toEqual([{ command: 'cr', args: 'status' }])
+    // Its defaults would ask before a push and refuse a force push: here Control Room's own settings decide.
+    expect((await $.tool.call({ tool: 'Bash', command: 'git push origin main' })).deny).toBeUndefined()
+    expect((await $.tool.call({ tool: 'Bash', command: 'git push --force origin main' })).deny).toBeUndefined()
+    expect(w.kept.asked).toEqual([])
+    expect(checked).toEqual([])
+    // No policy section, no status bar, no run recorded, nothing carried over.
+    const composed = await $.prompt.compose(COMPOSE)
+    expect(composed.sections.map(s => s.id)).toEqual(['intro'])
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 120, scroll: { offset: 0, bodyRows: 6 }, view: {} } })
+    expect(await band.find({ text: /Context|Work|Cache/ })).toBeUndefined()
+    await band.unmount()
+    await w.clock.advance(5000)
+    expect(Object.keys(w.store)).toEqual([])
+  })
+
   test('/cr sub-commands change settings and persist them', async ($, on) => {
     const w = world(on)
     await $.session.start(SESSION)

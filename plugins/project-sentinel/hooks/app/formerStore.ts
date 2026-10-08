@@ -9,11 +9,16 @@
  * plugin starts with an empty store, and the person's settings, runs, Quest
  * log and cache memory stay behind under the old name.
  *
- * Once, at the first session start that can see the configuration folder (the
- * session's transcript lives under it), the old store's file is read and what
- * Project Sentinel knows is copied over: never what this store already holds,
- * and never anything else. The old file is only read: never written, moved or
- * deleted. A marker in the new store (`migrated.v1`) makes it happen once.
+ * Once, when the plugin first loads, before its settings are read, the old
+ * store's file is read and what Project Sentinel knows is copied over: never
+ * what this store already holds, and never anything else. The configuration
+ * folder comes from the environment (`CLAUDE_CONFIG_DIR`, else `.claude` in the
+ * home folder), or from the session's transcript path at its start. An update
+ * can load the plugin into a session that is already running, where no
+ * session start follows, so the load is the moment that counts. Of the old
+ * stores (one per source), the one written last holds the person's settings.
+ * The old file is only read: never written, moved or deleted. A marker in the
+ * new store (`migrated.v1`) makes it happen once.
  *
  * Pure except `readFormerStore`, which reads through the Host.
  */
@@ -36,6 +41,23 @@ export function configDirOf(transcriptPath: string | undefined): string | null {
   if (at < 1 || at !== parts.length - 3) return null
   const sep = transcriptPath.includes('\\') && !transcriptPath.includes('/') ? '\\' : '/'
   return parts.slice(0, at).join(sep)
+}
+
+/** What the environment says about where Claude Code keeps its configuration. */
+export type ConfigEnv = { claudeConfigDir: string | undefined; userProfile: string | undefined; home: string | undefined }
+
+/**
+ * The configuration folder from the environment, as Claude Code finds it:
+ * `CLAUDE_CONFIG_DIR` when set, else `.claude` in the home folder (Windows'
+ * `USERPROFILE` first, which is what Claude Code reads there; `HOME` elsewhere).
+ */
+export function configDirFromEnv(env: ConfigEnv): string | null {
+  const own = env.claudeConfigDir?.trim()
+  if (own !== undefined && own !== '') return own
+  const home = [env.userProfile, env.home].map(v => v?.trim()).find((v): v is string => v !== undefined && v !== '')
+  if (home === undefined) return null
+  const sep = home.includes('\\') && !home.includes('/') ? '\\' : '/'
+  return `${home.replace(/[\\/]+$/, '')}${sep}.claude`
 }
 
 /** The source Claude Code keys this load's store by: an installed copy's marketplace, else `inline`. */
@@ -62,6 +84,18 @@ export async function formerStorePaths(configDir: string, source: string): Promi
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * Whether the status bar published under the former name in this session is
+ * Control Room's. Claude Desktop hands a session its plugins once, when the
+ * session's process starts, so an update loads Project Sentinel beside the
+ * Control Room that process already runs; the two must never act at once (two
+ * handoffs, two answers to one permission check). Read by its shape, so another
+ * plugin that happens to be called `control-room` is not taken for it.
+ */
+export function isFormerHud(value: unknown): boolean {
+  return isRecord(value) && typeof value.isVisible === 'boolean' && isRecord(value.profile) && isRecord(value.autopilot) && isRecord(value.ctx)
+}
 
 /** The keys this store already holds that a carry-over must not overwrite (and the run index, to merge). */
 export type CurrentStore = {
@@ -94,14 +128,33 @@ export function carriedWrites(former: unknown, current: CurrentStore): Record<st
   return out
 }
 
-/** The old store, read from the first place it is found; null when there is none. */
+/**
+ * Which old store to carry over: the one written last, since the sessions the
+ * person used most recently wrote it (Claude Code keeps one per source, and an
+ * old installed copy's can be days older than an in-place load's). Equal times
+ * keep the order of `paths`.
+ */
+export function newestFirst(found: readonly { path: string; mtimeMs: number }[]): string[] {
+  return found
+    .map((f, i) => ({ ...f, i }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.i - b.i)
+    .map(f => f.path)
+}
+
+/** The old store written last that reads as JSON; null when there is none. */
 export async function readFormerStore(host: Host, configDir: string): Promise<{ file: string; store: unknown } | null> {
-  for (const path of await formerStorePaths(configDir, sourceOf(host.pluginRoot))) {
+  const paths = await formerStorePaths(configDir, sourceOf(host.pluginRoot))
+  const found: { path: string; mtimeMs: number }[] = []
+  for (const path of paths) {
+    const stat = await host.stat(path, false).catch(() => null)
+    if (stat !== null && stat.kind === 'file') found.push({ path, mtimeMs: stat.mtimeMs })
+  }
+  for (const path of newestFirst(found)) {
     try {
       const text = await host.readText(path)
       return { file: path.split(/[\\/]/).at(-1) ?? path, store: JSON.parse(text) as unknown }
     } catch {
-      // Not there (or not readable): try the next place.
+      // Not readable, or not JSON: try the next one.
     }
   }
   return null

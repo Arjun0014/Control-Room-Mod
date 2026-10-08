@@ -17,10 +17,12 @@ Hand-editing is possible but not needed. `/cr reset confirm` restores the defaul
 custom profiles.
 
 **Coming from Control Room.** Before 1.4.0 the plugin was called Control Room, and Claude Code
-keeps a plugin's store under its name. At the first session start after the rename, Project
-Sentinel reads the store it kept as Control Room (`control-room_<source>-<id>.json`) once and copies
-the settings, the runs, the Quest log and the cache's memory into its own store, never over what
-its own store already holds. The old file is left as it was.
+keeps a plugin's store under its name. When Project Sentinel first loads after the rename, before
+it reads a setting, it reads the store it kept as Control Room (`control-room_<source>-<id>.json`;
+where Claude Code kept more than one, the one written last) once and copies the settings, the runs,
+the Quest log and the cache's memory into its own store, never over what its own store already
+holds. The old file is left as it was. A session that was open during the update keeps Control
+Room until it restarts: Project Sentinel stands by in it.
 
 The settings are global to your user account, not per project. Run records note the project
 they ran in.

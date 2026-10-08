@@ -1,5 +1,6 @@
 import type { ProcessSpawnChunk, ProcessSpawnResult, SessionUsage } from 'claude-code'
 
+import type { ConfigEnv } from '../../hooks/app/formerStore'
 import type { Host, SpawnStream } from '../../hooks/host'
 
 /** Lets every pending promise chain run (the test environment has no timers). */
@@ -11,7 +12,23 @@ export async function flush(rounds = 60): Promise<void> {
  * The engine as the Runtime sees it, in memory: a manual clock and a record
  * of every effect, so Runtime behaviour is tested without an engine at all.
  */
-export function fakeHost(options: { cwd?: string; samplerLines?: string[]; handoffMtime?: () => number | null; files?: Record<string, string>; pluginRoot?: string } = {}) {
+export function fakeHost(
+  options: {
+    cwd?: string
+    samplerLines?: string[]
+    handoffMtime?: () => number | null
+    files?: Record<string, string>
+    /** When each of `files` was last written (1 when not given). */
+    fileTimes?: Record<string, number>
+    pluginRoot?: string
+    /** The environment's configuration hints; none by default, so nothing is carried over at the load. */
+    configEnv?: ConfigEnv
+    /** Folders that exist (a configuration folder's `plugins/store`). */
+    dirs?: string[]
+    /** What Control Room, the former name, published as its status bar in this session. */
+    formerHud?: unknown
+  } = {},
+) {
   let time = 1_000_000
   let seq = 0
   const timers: { id: number; at: number; every: number | null; fn: () => void; isCancelled: boolean }[] = []
@@ -110,13 +127,16 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
         if (m === null) throw new Error('ENOENT')
         return { kind: 'file', size: 100, mtimeMs: m, isLink: false }
       }
+      if (options.files?.[path] !== undefined) return { kind: 'file', size: options.files[path]!.length, mtimeMs: options.fileTimes?.[path] ?? 1, isLink: false }
       return { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: path }
     },
-    exists: async () => false,
+    exists: async path => options.dirs?.includes(path) ?? false,
     storeGet: async key => kept.store[key],
     storeSet: async (key, value) => void (kept.store[key] = JSON.parse(JSON.stringify(value))),
     storeDelete: async key => void delete kept.store[key],
     settings: async () => ({}),
+    configEnv: async () => options.configEnv ?? { claudeConfigDir: undefined, userProfile: undefined, home: undefined },
+    formerHud: async () => options.formerHud,
     spawnSampler: platform => {
       kept.spawned.push([platform])
       const lines = options.samplerLines ?? []

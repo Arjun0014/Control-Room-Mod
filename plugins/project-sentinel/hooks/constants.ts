@@ -3,7 +3,7 @@
  */
 
 /** The plugin's manifest name; `$.state` contracts are keyed by it. */
-export const PLUGIN = 'control-room'
+export const PLUGIN = 'project-sentinel'
 
 /** The Control Centre pane's id (also its `ui.render` requestId). */
 export const PANE_ID = 'control-room'

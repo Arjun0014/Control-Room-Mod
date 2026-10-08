@@ -23,18 +23,18 @@ const ended = (now: number, turn: TurnKind = 'person', reason: 'answer' | 'abort
 
 describe("Control Room's own turns", () => {
   test("a turn is recognised by its prompt, framed as Claude Code frames a plugin's message or not", () => {
-    const handoff = handoffPrompt({ tokens: 77_000, window: 1_000_000, handoffFile: 'NEXT_SESSION_PROMPT.md', runNumber: 1, sessionNumber: 1, planTool: 'mcp__control-room__milestones' })
+    const handoff = handoffPrompt({ tokens: 77_000, window: 1_000_000, handoffFile: 'NEXT_SESSION_PROMPT.md', runNumber: 1, sessionNumber: 1, planTool: 'mcp__project-sentinel__milestones' })
     // Seen live on 2.1.293: the turn's text is the engine's frame, then the prompt.
     expect(ownPromptKind(`The cr-test plugin sent a message:\n${handoff}`)).toBe('handoff')
-    expect(ownPromptKind(`The control-room plugin sent a message:\r\n${handoff}`)).toBe('handoff')
+    expect(ownPromptKind(`The project-sentinel plugin sent a message:\r\n${handoff}`)).toBe('handoff')
     expect(ownPromptKind(handoff)).toBe('handoff')
     const continuation = continuationPrompt({ sessionNumber: 2, handoffPath: 'C:\\Web UI\\x\\NEXT_SESSION_PROMPT.md' })
-    expect(ownPromptKind(`The control-room plugin sent a message:\n${continuation}`)).toBe('continuation')
+    expect(ownPromptKind(`The project-sentinel plugin sent a message:\n${continuation}`)).toBe('continuation')
     // A frame worded otherwise, or on the prompt's own line, still never stalls a handoff.
-    expect(ownPromptKind(`[from plugin control-room]\n\n${handoff}`)).toBe('handoff')
-    expect(ownPromptKind(`The control-room plugin sent a message: ${handoff}`)).toBe('handoff')
+    expect(ownPromptKind(`[from plugin project-sentinel]\n\n${handoff}`)).toBe('handoff')
+    expect(ownPromptKind(`The project-sentinel plugin sent a message: ${handoff}`)).toBe('handoff')
     // The person's own words are the person's, even when they quote the frame.
-    expect(ownPromptKind('The control-room plugin sent a message: what does it mean?')).toBeNull()
+    expect(ownPromptKind('The project-sentinel plugin sent a message: what does it mean?')).toBeNull()
     expect(ownPromptKind('Please write the final handoff for this context window')).toBeNull()
   })
 })

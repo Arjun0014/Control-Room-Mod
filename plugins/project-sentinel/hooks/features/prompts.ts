@@ -223,7 +223,7 @@ const OWN_PROMPT = {
 } as const
 
 /**
- * How Claude Code frames a prompt a plugin submits, ahead of its text: "The control-room plugin
+ * How Claude Code frames a prompt a plugin submits, ahead of its text: "The project-sentinel plugin
  * sent a message:" and a line break (seen live on 2.1.293, in the terminal and on Desktop).
  */
 const PLUGIN_FRAME = /^The [^\n]{1,120} plugin sent a message:[ \t]*/

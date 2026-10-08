@@ -361,7 +361,7 @@ describe('runtime', () => {
     await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'step 1 done' })
     await advance(300)
     const handoff = kept.submitted.at(-1) ?? ''
-    await rt.onTurnStart({ turnId: 'h1', text: `The control-room plugin sent a message:\n${handoff}` })
+    await rt.onTurnStart({ turnId: 'h1', text: `The project-sentinel plugin sent a message:\n${handoff}` })
     expect(rt.autopilot.state).toBe('handoff')
     await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'handoff written' })
     await advance(2000)
@@ -371,7 +371,7 @@ describe('runtime', () => {
     await advance(1000)
     const continuation = kept.submitted.at(-1) ?? ''
     expect(continuation).toContain('Context Autopilot continuation')
-    await rt.onTurnStart({ turnId: 'c1', text: `The control-room plugin sent a message:\n${continuation}` })
+    await rt.onTurnStart({ turnId: 'c1', text: `The project-sentinel plugin sent a message:\n${continuation}` })
     expect(rt.autopilot.state).toBe('armed')
     // Reading itself in, as seen live: 44k at the first request, 66k after the notes, the docs and the code.
     at('c1', 0, 44_000, 'tool_use')

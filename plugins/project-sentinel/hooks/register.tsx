@@ -27,15 +27,15 @@ import { collapseBar, compactToolRow, hiddenRow } from './ui/rows'
 // ---------------------------------------------------------------------------
 // `$.state` atoms: literal references, as the validator requires.
 
-const HUD = { plugin: 'control-room', key: 'hud' } as const
-const PANE = { plugin: 'control-room', key: 'pane' } as const
-const RESOURCES = { plugin: 'control-room', key: 'resources' } as const
-const CHAIN = { plugin: 'control-room', key: 'chain' } as const
-const ACTIVITY = { plugin: 'control-room', key: 'activity' } as const
-const PERMISSIONS = { plugin: 'control-room', key: 'permissions' } as const
-const FOCUS = { plugin: 'control-room', key: 'focus' } as const
-const SPINNER = { plugin: 'control-room', key: 'spinner' } as const
-const AUTOPILOT = { plugin: 'control-room', key: 'autopilot' } as const
+const HUD = { plugin: 'project-sentinel', key: 'hud' } as const
+const PANE = { plugin: 'project-sentinel', key: 'pane' } as const
+const RESOURCES = { plugin: 'project-sentinel', key: 'resources' } as const
+const CHAIN = { plugin: 'project-sentinel', key: 'chain' } as const
+const ACTIVITY = { plugin: 'project-sentinel', key: 'activity' } as const
+const PERMISSIONS = { plugin: 'project-sentinel', key: 'permissions' } as const
+const FOCUS = { plugin: 'project-sentinel', key: 'focus' } as const
+const SPINNER = { plugin: 'project-sentinel', key: 'spinner' } as const
+const AUTOPILOT = { plugin: 'project-sentinel', key: 'autopilot' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -198,7 +198,7 @@ export const register: Register = on => {
   on('classic.SessionStart', async ($, e, next) => {
     if (rt.host === null) rt.bind(hostOf($))
     if (e.permission_mode !== undefined) rt.permissionMode = e.permission_mode
-    await rt.onClassicSessionStart({ source: e.source, sessionId: e.session_id, model: e.model })
+    await rt.onClassicSessionStart({ source: e.source, sessionId: e.session_id, model: e.model, transcriptPath: e.transcript_path })
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -303,7 +303,7 @@ export const register: Register = on => {
 
   // Control Room's own milestones tool, offered only where Claude Code has no task list.
   // Registered before the general hook, so it answers the call itself.
-  on('tool.call', { tool: /^mcp__control-room__milestones$/ }, async ($, e) => {
+  on('tool.call', { tool: /^mcp__project-sentinel__milestones$/ }, async ($, e) => {
     if (rt.host === null) rt.bind(hostOf($))
     await rt.ensureLoaded()
     return { result: rt.recordMilestones(isRecord(e) ? { ...e } : {}, e.agentId) }

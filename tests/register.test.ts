@@ -17,7 +17,7 @@ const spawnInput = (prompt: string) => ({
   fork: false,
 })
 /** A plugin's prompt as Claude Code starts the turn with it: framed by the engine (seen live on 2.1.293). */
-const framed = (text: string | undefined) => `The control-room plugin sent a message:\n${text ?? ''}`
+const framed = (text: string | undefined) => `The project-sentinel plugin sent a message:\n${text ?? ''}`
 const COMPOSE = { model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal' as const], tools: [], outputStyle: null, traits: [] }
 
 const withSettings = (patch: (s: Settings) => void): Settings => {
@@ -177,7 +177,7 @@ describe('register', () => {
     })
     await $.session.start(SESSION)
     const composed = await $.prompt.compose(COMPOSE)
-    const policy = composed.sections.find(s => s.id === 'control-room:policies')
+    const policy = composed.sections.find(s => s.id === 'project-sentinel:policies')
     expect(policy?.scope).toBe('session')
     expect(policy?.text).toContain('frontier-level autonomous capability')
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 2 })) void _

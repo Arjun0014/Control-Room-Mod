@@ -1,7 +1,7 @@
 node_modules/
 # Written by Claude Code each time it loads the mod; regenerated per build.
-plugins/control-room/.claude-plugin/types/
-plugins/control-room/tsconfig.json
+plugins/project-sentinel/.claude-plugin/types/
+plugins/project-sentinel/tsconfig.json
 *.log
 .DS_Store
 Thumbs.db

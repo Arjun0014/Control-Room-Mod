@@ -52,7 +52,8 @@ import { type Family, classifyTask, familyOf, routeMain, routeSubagent } from '.
 import { activeAgents, decideSpawn, isOffered } from '../features/subagents'
 import type { Host } from '../host'
 import { ResourceMonitor } from './monitor'
-import { Debounced, findRunBySession, loadHistory, loadSettings, nextRunNumber, saveRun } from './persist'
+import { Debounced, findRunBySession, loadHistory, loadIndex, loadSettings, nextRunNumber, saveRun } from './persist'
+import { CARRIED_KEY, type CarriedMarker, carriedWrites, configDirOf, readFormerStore } from './formerStore'
 import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
 import { Publisher } from './publisher'
@@ -74,7 +75,7 @@ type TurnState = {
 
 export type UsageFigures = { tokens: number | undefined; window: number | undefined; pct: number | undefined; costUsd: number | undefined }
 
-const OWN_PLUGIN = 'control-room'
+const OWN_PLUGIN = 'project-sentinel'
 
 const isOwnPrompt = (origin: PromptOrigin | undefined): boolean => origin?.kind === 'plugin' && origin.name === OWN_PLUGIN
 
@@ -602,8 +603,9 @@ export class Runtime {
   }
 
   /** classic.SessionStart: a session begins (startup, resume, compact) or a fresh context after /clear. */
-  async onClassicSessionStart(input: { source: string; sessionId: string; model?: string }): Promise<void> {
+  async onClassicSessionStart(input: { source: string; sessionId: string; model?: string; transcriptPath?: string }): Promise<void> {
     await this.ensureLoaded()
+    await this.carryFormerStore(input.transcriptPath)
     if (input.source !== 'clear') {
       this.startSource = { source: input.source, sessionId: input.sessionId }
       if (input.source === 'compact') this.publisher.mark('chain', 'hud')
@@ -660,6 +662,56 @@ export class Runtime {
     })
     // The fresh conversation is empty, so asking for its context blocks again costs nothing.
     this.host?.invalidatePromptContext()
+  }
+
+  /** Whether this runtime has looked for the store the plugin kept under its former name. */
+  private isCarryChecked = false
+
+  /**
+   * Once per install: the settings, runs, Quest log and cache memory the plugin kept as Control Room
+   * come along to Project Sentinel (app/formerStore.ts). The old store is only read, never changed.
+   */
+  private async carryFormerStore(transcriptPath: string | undefined): Promise<void> {
+    const host = this.host
+    if (host === null || this.isCarryChecked) return
+    const configDir = configDirOf(transcriptPath)
+    if (configDir === null) return
+    this.isCarryChecked = true
+    if ((await host.storeGet(CARRIED_KEY).catch(() => undefined)) !== undefined) return
+    const now = Date.now()
+    const former = await readFormerStore(host, configDir)
+    if (former === null) {
+      const marker: CarriedMarker = { from: null, at: now, keys: 0 }
+      await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
+      return
+    }
+    const has = async (key: string) => (await host.storeGet(key).catch(() => undefined)) !== undefined
+    const counter = await host.storeGet(STORE_KEYS.runCounter).catch(() => undefined)
+    const writes = carriedWrites(former.store, {
+      settings: await has(STORE_KEYS.settings),
+      quest: await has(STORE_KEYS.quest),
+      cache: await has(STORE_KEYS.cache),
+      counter: typeof counter === 'number' && Number.isFinite(counter) ? Math.floor(counter) : 0,
+      index: await loadIndex(host),
+    })
+    const keys = Object.keys(writes)
+    for (const key of keys) await host.storeSet(key, writes[key]).catch(() => undefined)
+    const marker: CarriedMarker = { from: former.file, at: now, keys: keys.length }
+    await host.storeSet(CARRIED_KEY, marker).catch(() => undefined)
+    this.trace(`carried ${keys.length} keys over from ${former.file}`)
+    if (keys.length === 0) return
+    // What came along takes effect now: the settings, the Quest log, the cache's memory, the run numbers.
+    this.isLoaded = false
+    await this.ensureLoaded()
+    await this.cache.load()
+    if (this.run !== null && keys.includes(STORE_KEYS.runCounter) && this.run.sessions.length === 1 && (this.run.sessions[0]?.turns ?? 0) === 0) {
+      this.run = { ...this.run, number: await nextRunNumber(host) }
+      this.persistRun(true)
+    }
+    this.reconfigure({})
+    void this.refreshHistory()
+    this.note('Project Sentinel is Control Room renamed: your settings, runs, Quest log and cache memory came along.')
+    this.publisher.markAll()
   }
 
   async onSessionEnd(e: SessionEndInput): Promise<void> {

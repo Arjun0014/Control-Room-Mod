@@ -83,8 +83,8 @@ describe('run state', () => {
   })
 
   test('the handoff prompt names the four places, each for what it is for, without prescribing the notes', () => {
-    const prompt = handoffPrompt({ tokens: 712_000, window: 1_000_000, handoffFile: 'NEXT_SESSION_PROMPT.md', runNumber: 3, sessionNumber: 4, planTool: 'mcp__control-room__milestones' })
-    expect(prompt).toContain('`mcp__control-room__milestones`')
+    const prompt = handoffPrompt({ tokens: 712_000, window: 1_000_000, handoffFile: 'NEXT_SESSION_PROMPT.md', runNumber: 3, sessionNumber: 4, planTool: 'mcp__project-sentinel__milestones' })
+    expect(prompt).toContain('`mcp__project-sentinel__milestones`')
     expect(prompt).toContain('canonical record of progress')
     expect(prompt).toContain('blocked with its blocker')
     expect(prompt).toContain("The project's own documentation")
@@ -186,7 +186,7 @@ describe('handoff and continuity, end to end', () => {
     rt.requestHandoff()
     await f.advance(300)
     const prompt = f.kept.submitted.at(-1) ?? ''
-    expect(prompt).toContain('`mcp__control-room__milestones`')
+    expect(prompt).toContain('`mcp__project-sentinel__milestones`')
     rt.onTurnStart({ turnId: 'h1', text: prompt })
     rt.recordMilestones(milestones('in_progress'), undefined)
     const [docInput, docResult] = edit('/work/README.md')

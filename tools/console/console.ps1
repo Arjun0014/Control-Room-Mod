@@ -30,14 +30,14 @@ $ErrorActionPreference = 'Stop'
 # The screen is box drawing and glyphs: hand it on as UTF-8, not the console code page.
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pidFile = Join-Path $env:TEMP 'control-room-console.pid'
-$screenFile = Join-Path $env:TEMP 'control-room-screen.txt'
+$pidFile = Join-Path $env:TEMP 'project-sentinel-console.pid'
+$screenFile = Join-Path $env:TEMP 'project-sentinel-screen.txt'
 Add-Type -Path (Join-Path $here 'ConDrive.cs') -ReferencedAssemblies System.Drawing
 
 if ($Action -eq 'launch') {
   if ($Dir -eq '' -or -not (Test-Path $Dir)) { throw 'launch needs -Dir: an existing folder Claude Code already trusts (a trust dialog would wait for you).' }
   # -Plugin loads another copy (a frozen snapshot, so saves to the working copy do not reload a long test).
-  $pluginDir = if ($Plugin -ne '') { (Resolve-Path $Plugin).Path } else { (Resolve-Path (Join-Path $here '..\..\plugins\control-room')).Path }
+  $pluginDir = if ($Plugin -ne '') { (Resolve-Path $Plugin).Path } else { (Resolve-Path (Join-Path $here '..\..\plugins\project-sentinel')).Path }
   # Started from inside a Claude Code session, the child would inherit that session's wiring (its
   # API proxy, so it reads "Not logged in") and NO_COLOR (so it draws in monochrome). Start clean.
   foreach ($n in @(Get-ChildItem env: | Where-Object { $_.Name -match '^(CLAUDE|ANTHROPIC)|^NO_COLOR$' } | ForEach-Object { $_.Name })) {

@@ -11,7 +11,7 @@ export async function flush(rounds = 60): Promise<void> {
  * The engine as the Runtime sees it, in memory: a manual clock and a record
  * of every effect, so Runtime behaviour is tested without an engine at all.
  */
-export function fakeHost(options: { cwd?: string; samplerLines?: string[]; handoffMtime?: () => number | null } = {}) {
+export function fakeHost(options: { cwd?: string; samplerLines?: string[]; handoffMtime?: () => number | null; files?: Record<string, string>; pluginRoot?: string } = {}) {
   let time = 1_000_000
   let seq = 0
   const timers: { id: number; at: number; every: number | null; fn: () => void; isCancelled: boolean }[] = []
@@ -53,7 +53,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
 
   const host: Host = {
     time: () => time,
-    pluginRoot: '/plugin',
+    pluginRoot: options.pluginRoot ?? '/plugin',
     now: async () => time,
     after: (ms, fn) => schedule(ms, fn, null),
     every: (ms, fn) => schedule(ms, fn, ms),
@@ -86,7 +86,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     listTools: async () => live.tools.map(name => ({ name, description: '', mcp: false })),
     registerTool: async spec => {
       kept.registeredTools.push(spec.name)
-      return `mcp__control-room__${spec.name}`
+      return `mcp__project-sentinel__${spec.name}`
     },
     stopTask: async () => ({ result: 'stopped' }),
     classify: async () => 'premature',
@@ -103,7 +103,7 @@ export function fakeHost(options: { cwd?: string; samplerLines?: string[]; hando
     ask: async () => 'Deny',
     checkTool: async () => ({ decision: 'allow' as const }),
     copy: async () => true,
-    readText: async () => '',
+    readText: async path => options.files?.[path] ?? '',
     stat: async path => {
       if (path.endsWith('NEXT_SESSION_PROMPT.md')) {
         const m = options.handoffMtime?.() ?? time + 1

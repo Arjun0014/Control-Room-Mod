@@ -561,7 +561,7 @@ export type AutopilotRecord = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'control-room': {
+    'project-sentinel': {
       hud: HudModel
       pane: PaneModel
       resources: ResourcesView

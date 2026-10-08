@@ -122,7 +122,7 @@ describe('ui', () => {
     await boot($, w)
     for (const surface of ['terminal', 'desktop'] as const) {
       for (const columns of [44, 80, 120, 200]) {
-        const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'AbovePrompt', props: bandProps(columns), viewport: { columns, rows: 40 } })
+        const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'AbovePrompt', props: bandProps(columns), viewport: { columns, rows: 40 } })
         expect(await ui.find({ text: /68%/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ text: /\$1\.25/ }), `${surface} ${columns}`).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open' }), `${surface} ${columns}`).toBeDefined()
@@ -140,13 +140,13 @@ describe('ui', () => {
     const w = world(on, { tokens: 300_000 })
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await boot($, w)
-    const quiet = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const quiet = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(await quiet.find({ text: /Hands off/ })).toBeUndefined()
     expect(await quiet.find({ text: /Frontier/ })).toBeUndefined()
     await quiet.unmount()
     await $.command.run({ command: 'cr', args: 'profile frontier', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
-    const busy = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const busy = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(await busy.find({ text: /CONTEXT/ })).toBeDefined()
     expect(await busy.find({ text: /Frontier Max/ })).toBeUndefined()
     expect(await busy.find({ text: /Hands off/ })).toBeUndefined()
@@ -156,12 +156,12 @@ describe('ui', () => {
     const w = world(on)
     on('ui.render', { component: 'AbovePrompt' }, () => ENGINE_ROW)
     await boot($, w)
-    const survey = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: { ...bandProps(100), hasSurvey: true } })
+    const survey = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: { ...bandProps(100), hasSurvey: true } })
     expect(await survey.find({ text: /CONTEXT/ })).toBeUndefined()
     await survey.unmount()
     await $.command.run({ command: 'cr', args: 'hud status', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } })
     await w.clock.advance(300)
-    const hidden = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(100) })
+    const hidden = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(100) })
     expect(await hidden.find({ text: /CONTEXT/ })).toBeUndefined()
     expect(w.kept.statuses.some(s => s !== undefined && s.startsWith('◆ Context'))).toBe(true)
   })
@@ -171,7 +171,7 @@ describe('ui', () => {
     await boot($, w)
     for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
       for (const [columns, placement] of [[44, 'dock'], [66, 'dock'], [140, 'inline']] as const) {
-        const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement), viewport: { columns: 200, rows: 50, isFullscreen: placement === 'dock' } })
+        const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement), viewport: { columns: 200, rows: 50, isFullscreen: placement === 'dock' } })
         for (const tab of TABS) {
           await ui.press({ key: `tab-${tab.id}` })
           await w.clock.advance(300)
@@ -189,7 +189,7 @@ describe('ui', () => {
     await $.command.run({ command: 'cr', args: 'profile frontier', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       let checked = 0
       for (const tab of TABS) {
         await ui.press({ key: `tab-${tab.id}` })
@@ -209,7 +209,7 @@ describe('ui', () => {
     const w = world(on)
     await boot($, w)
     const mount = (surface: 'terminal' | 'desktop', columns: number, placement: 'dock' | 'inline') =>
-      $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement), viewport: { columns: columns + 2, rows: 50, isFullscreen: placement === 'dock' } })
+      $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement), viewport: { columns: columns + 2, rows: 50, isFullscreen: placement === 'dock' } })
     for (const [surface, placement] of [['terminal', 'inline'], ['desktop', 'dock']] as const) {
       const wide = await mount(surface, 180, placement)
       expect(await wide.drawn(), surface).toMatchObject({ props: { alignItems: 'center' } })
@@ -227,7 +227,7 @@ describe('ui', () => {
     const w = world(on)
     await boot($, w)
     for (const [columns, isOneRow] of [[MAX_COLUMNS + 2, true], [navRowColumns(TABS), true], [navRowColumns(TABS) - 1, false], [50, false], [30, false]] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(columns + 2) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(columns + 2) })
       const nav = await ui.find({ key: 'nav' })
       const rows = (nav?.children ?? []).filter(c => /^nav-row-\d+$/.test(keyOf(c))) as Node[]
       if (isOneRow) {
@@ -251,7 +251,7 @@ describe('ui', () => {
     const w = world(on)
     await boot($, w)
     const shrinkers = async (surface: 'terminal' | 'desktop') => {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(48) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(48) })
       let clipped = 0
       each(await ui.drawn(), n => {
         if (n.type === 'Box' && n.props?.minWidth === 0 && n.props.overflow === 'hidden') clipped += 1
@@ -269,7 +269,7 @@ describe('ui', () => {
     await $.command.run({ command: 'cr', args: 'guard on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
     const at = async (columns: number) => {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(columns) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(columns) })
       await ui.press({ key: 'tab-setup' })
       await w.clock.advance(300)
       const where = { beside: await ui.find({ key: 'profile-save-right' }), under: await ui.find({ key: 'profile-save-stacked' }) }
@@ -290,7 +290,7 @@ describe('ui', () => {
     await $.command.run({ command: 'cr', args: 'guard on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await w.clock.advance(300)
     const at = async (columns: number, placement: 'dock' | 'inline') => {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(columns, placement) })
       await ui.press({ key: 'tab-behavior' })
       await w.clock.advance(300)
       const where = { beside: await ui.find({ key: 'gu-strict-right' }), under: await ui.find({ key: 'gu-strict-stacked' }) }
@@ -306,7 +306,7 @@ describe('ui', () => {
     expect(wide.beside).toBeDefined()
     expect(wide.under).toBeUndefined()
     // Switches never move, however narrow.
-    const narrow = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(44) })
+    const narrow = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(44) })
     await narrow.press({ key: 'tab-behavior' })
     await w.clock.advance(300)
     expect(await narrow.find({ key: 'gu-on-right' })).toBeDefined()
@@ -316,13 +316,13 @@ describe('ui', () => {
     const w = world(on)
     await boot($, w)
     for (const surface of ['terminal', 'mobile'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       await ui.press({ key: 'tab-guardrails' })
       await w.clock.advance(300)
       expect(await ui.find({ type: 'Select' }), surface).toBeUndefined()
       await ui.unmount()
     }
-    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await desktop.press({ key: 'tab-guardrails' })
     await w.clock.advance(300)
     await desktop.select({ key: 'perm-push', value: 'deny' })
@@ -333,7 +333,7 @@ describe('ui', () => {
   test('a picker opens in place, picks, and closes, with keys or the pointer', async ($, on) => {
     const w = world(on)
     await boot($, w)
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await ui.press({ key: 'tab-guardrails' })
     await w.clock.advance(300)
     expect(await ui.find({ type: 'Button', key: 'perm-push:deny' })).toBeUndefined()
@@ -354,7 +354,7 @@ describe('ui', () => {
   test('Control Centre controls change and persist settings', async ($, on) => {
     const w = world(on)
     await boot($, w)
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await ui.press({ key: 'tab-behavior' })
     await w.clock.advance(300)
     await ui.press({ key: 'fr-on' })
@@ -393,7 +393,7 @@ describe('ui', () => {
   test('mobile draws choices in place, as buttons', async ($, on) => {
     const w = world(on)
     await boot($, w)
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'mobile', component: 'Pane', requestId: 'control-room', props: paneProps(60) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'mobile', component: 'Pane', requestId: 'control-room', props: paneProps(60) })
     await ui.press({ key: 'tab-behavior' })
     await w.clock.advance(300)
     await ui.press({ key: 'ro-strategy' })
@@ -408,7 +408,7 @@ describe('ui', () => {
     on('ui.render', { component: 'ToolUse' }, () => ENGINE_ROW)
     await boot($, w)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'ToolUse', requestId: `t-${surface}`, props: toolRow(`t-${surface}`), viewport: { columns: 100, rows: 40 } })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'ToolUse', requestId: `t-${surface}`, props: toolRow(`t-${surface}`), viewport: { columns: 100, rows: 40 } })
       expect(await ui.find({ text: /npm test/ })).toBeDefined()
       expect(await ui.find({ text: /ENGINE ROW/ })).toBeUndefined()
       await ui.press({ key: `expand-t-${surface}` })
@@ -424,13 +424,13 @@ describe('ui', () => {
     on('ui.render', { component: 'ToolUse' }, () => ENGINE_ROW)
     on('ui.render', { component: 'ToolResult' }, () => ENGINE_ROW)
     await boot($, w)
-    const result = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'ToolResult', requestId: 'e1', props: { tool_use_id: 'e1', tool: 'Edit', output: {}, isErrored: false } })
+    const result = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'ToolResult', requestId: 'e1', props: { tool_use_id: 'e1', tool: 'Edit', output: {}, isErrored: false } })
     expect(await result.find({ text: /ENGINE ROW/ })).toBeUndefined()
     await $.command.run({ command: 'cr', args: 'focus off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } })
     await w.clock.advance(300)
     await result.redraw()
     expect(await result.find({ text: /ENGINE ROW/ })).toBeDefined()
-    const row = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'ToolUse', requestId: 'b1', props: toolRow('b1') })
+    const row = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'ToolUse', requestId: 'b1', props: toolRow('b1') })
     expect(await row.find({ text: /ENGINE ROW/ })).toBeDefined()
   })
 
@@ -464,7 +464,7 @@ describe('ui', () => {
     await $.tool.call({ tool: 'Bash', command: 'npm run lint' })
     await w.clock.advance(300)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       await ui.press({ key: 'tab-activity' })
       await w.clock.advance(300)
       const text = textOf(await ui.drawn())
@@ -508,7 +508,7 @@ describe('ui', () => {
       ],
     })
     await w.clock.advance(300)
-    const wide = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const wide = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const line = textOf(await wide.drawn())
     // The headline: what Claude is doing in its own words, then where the milestone sits; the instruments below.
     expect(line).toContain('Running regression tests · step 3 of 4')
@@ -520,7 +520,7 @@ describe('ui', () => {
     expect(line).toContain('RUN $1.25')
     await wide.unmount()
     // Narrow: no names, the instruments stay apart by shape.
-    const narrow = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(48) })
+    const narrow = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(48) })
     const small = textOf(await narrow.drawn())
     expect(small).not.toContain('CONTEXT')
     expect(small).toContain('◉─○ 2/4')
@@ -528,7 +528,7 @@ describe('ui', () => {
     expect(small).toContain('30%')
     await narrow.unmount()
     // Desktop: each reading a cell, a caption over its graphic and value; every graphic an image of a fixed size.
-    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const drawn = await desktop.drawn()
     expect(textOf(drawn)).toContain('Work2 of 4')
     expect(textOf(drawn)).toContain('Context')
@@ -542,7 +542,7 @@ describe('ui', () => {
     for (const key of ['cell-work', 'cell-ctx', 'cell-cache', 'cell-run']) expect(await desktop.find({ key }), key).toBeDefined()
     await desktop.unmount()
     // A narrow band takes the compact cells.
-    const compact = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(60) })
+    const compact = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(60) })
     expect(textOf(await compact.drawn())).toContain('Work2/4')
     await compact.unmount()
   })
@@ -556,7 +556,7 @@ describe('ui', () => {
     on('turn.complete', ($, e) => ({ text: e.answer }))
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await boot($, w)
-    const before = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const before = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     // Before the first turn there is nothing to say on top: the readings alone.
     expect(textOf(await before.drawn())).not.toContain('Ran ')
     await before.unmount()
@@ -565,7 +565,7 @@ describe('ui', () => {
     await $.tool.call({ tool: 'Bash', command: 'npm run lint' })
     await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
     await w.clock.advance(300)
-    const after = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const after = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const text = textOf(await after.drawn())
     expect(text).toContain('Ran tests once, passing · lint once, failing')
     // What needs a look is a chip on the right: the failing check by name, shown once, not again as an issue.
@@ -574,7 +574,7 @@ describe('ui', () => {
     expect(text).not.toContain('Tests failing')
     await after.unmount()
     // Docked beside the panel: the chip still fits.
-    const docked = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(79) })
+    const docked = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(79) })
     expect(textOf(await docked.drawn())).toContain('Lint failing')
   })
 
@@ -590,7 +590,7 @@ describe('ui', () => {
     await $.turn.start({ text: 'go', turnId: 't1' })
     await $.tool.call({ tool: 'Bash', command: 'npm test' })
     await w.clock.advance(300)
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Spinner', requestId: 'main', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Spinner', requestId: 'main', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } })
     await ui.drawn()
     expect(seen.at(-1)).toContain('Working · 1 tool')
   })
@@ -598,7 +598,7 @@ describe('ui', () => {
   test('Behavior offers the answer styles on every surface, with a line written in the chosen one', async ($, on) => {
     const w = world(on)
     await boot($, w)
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await ui.press({ key: 'tab-behavior' })
     await w.clock.advance(300)
     const cards = cardsOf(await ui.drawn())
@@ -615,7 +615,7 @@ describe('ui', () => {
     expect(text).toContain('GO only for what was verified')
     await ui.unmount()
     for (const surface of ['desktop', 'mobile'] as const) {
-      const other = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(90) })
+      const other = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(90) })
       expect(textOf(await other.drawn()), surface).toContain('How Claude writes to you')
       await other.unmount()
     }
@@ -627,10 +627,10 @@ describe('ui', () => {
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await boot($, w)
     await $.turn.start({ text: 'Build the parser and test it.', turnId: 't1' })
-    await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building' }] } as never)
+    await $.tool.call({ tool: 'mcp__project-sentinel__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building' }] } as never)
     await w.clock.advance(300)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       await ui.press({ key: 'tab-activity' })
       await w.clock.advance(300)
       const text = textOf(await ui.drawn())
@@ -639,7 +639,7 @@ describe('ui', () => {
       }
       await ui.unmount()
     }
-    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(textOf(await band.drawn())).toContain('★ Lv 1')
   })
 
@@ -664,7 +664,7 @@ describe('ui', () => {
     w.store['runs.index.v1'] = ['r1']
     await boot($, w)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       await ui.press({ key: 'tab-context' })
       await w.clock.advance(300)
       const text = textOf(await ui.drawn())
@@ -698,7 +698,7 @@ describe('ui', () => {
     await w.clock.advance(300)
     expect(w.kept.toasts).toContain('Cache rebuilt: 300k tokens · Model changed')
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       await ui.press({ key: 'tab-context' })
       await w.clock.advance(300)
       const text = textOf(await ui.drawn())
@@ -708,7 +708,7 @@ describe('ui', () => {
       await ui.unmount()
     }
     // The switch and the idle limit are set right there.
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await ui.press({ key: 'tab-context' })
     await w.clock.advance(300)
     expect(await ui.find({ key: 'cache-idle-inc' })).toBeUndefined()
@@ -720,10 +720,10 @@ describe('ui', () => {
     expect(textOf(await ui.drawn())).toContain('Next refresh at')
     await ui.unmount()
     // The status bar names the costly rebuild for a few minutes, in place of the time left.
-    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(textOf(await band.drawn())).toContain('CACHE ● rebuilt 300k')
     await band.unmount()
-    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     expect((await desktop.find({ type: 'Svg' }))?.props.alt).toBeDefined()
     expect(textOf(await desktop.drawn())).toContain('rebuilt 300k')
   })
@@ -739,17 +739,17 @@ describe('ui', () => {
     })
     await boot($, w)
     // Before the first turn: the top line is quiet, and nothing is cached yet.
-    const before = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const before = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const idle = textOf(await before.drawn())
     expect(idle).toContain('Ready')
     expect((await before.find({ type: 'Button', key: 'open' }))?.props.label).toBe('◆ Control Room')
     expect(idle).not.toContain('CACHE')
     await before.unmount()
     await $.turn.start({ text: 'go', turnId: 't1' })
-    await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
+    await $.tool.call({ tool: 'mcp__project-sentinel__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
     await w.clock.advance(300)
-    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     const text = textOf(await band.drawn())
     expect(text).toContain('Building the parser · step 2 of 3')
     expect(text).toContain('RUN $1.25')
@@ -768,7 +768,7 @@ describe('ui', () => {
     await band.unmount()
     // Desktop: the state's mark, the track, the meter and the clock as SVG, each transparent on the app's theme.
     // The cache keeps its cell while Claude works: warm, its time left no reading while requests keep it so.
-    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const svgs: Node[] = []
     each(await desktop.drawn(), n => void (n.type === 'Svg' ? svgs.push(n) : undefined))
     expect(svgs.map(s => String(s.props?.alt))).toEqual(['working', 'Work: 1 of 3 milestones done', 'Context 30% used', expect.stringMatching(/^Prompt cache warm/)])
@@ -779,11 +779,11 @@ describe('ui', () => {
     // Once the turn ends and the person is away, the cache shows how long it has left.
     await $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
     await w.clock.advance(300)
-    const away = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
+    const away = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
     expect(textOf(await away.drawn())).toMatch(/CACHE ● (1h|59m) left/)
     await away.unmount()
     for (const [columns, expected] of [[120, /^Cache(1h|59m) left$/], [60, /^Cache(1h|59m)$/]] as const) {
-      const remote = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(columns) })
+      const remote = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(columns) })
       expect(textOf(await remote.find({ key: 'cell-cache' })), String(columns)).toMatch(expected)
       await remote.unmount()
     }
@@ -796,7 +796,7 @@ describe('ui', () => {
     // Mobile leaves the band to the engine.
     for (const surface of ['desktop'] as const) {
       for (const [columns, none] of [[120, 'No milestones yet'], [60, 'None']] as const) {
-        const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'AbovePrompt', props: bandProps(columns) })
+        const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'AbovePrompt', props: bandProps(columns) })
         const where = `${surface} ${columns}`
         // Before any milestone and before anything is cached: Work and Cache keep their place, in dim words.
         const work = await ui.find({ key: 'cell-work' })
@@ -817,7 +817,7 @@ describe('ui', () => {
     const w = world(on, { tokens: 300_000 })
     await boot($, w)
     for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       const text = textOf(await ui.drawn())
       for (const expected of ['Run 1 · Session 1', '$1.25', 'WORK', 'CONTEXT', 'CACHE', 'Carries across handoffs', 'Starts over', 'Nothing cached yet', 'BEHAVIOR', 'GUARDRAILS', 'ACTIVITY']) {
         expect(text, `${surface}: ${expected}`).toContain(expected)
@@ -827,7 +827,7 @@ describe('ui', () => {
       expect(text.indexOf('CACHE'), surface).toBeLessThan(text.indexOf('BEHAVIOR'))
       await ui.unmount()
     }
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await ui.press({ key: 'sys-keepwarm' })
     await w.clock.advance(2000)
     expect(saved(w).cache.keepWarm).toBe(true)
@@ -838,13 +838,13 @@ describe('ui', () => {
     on('turn.start', ($, e) => ({ turnId: e.turnId }))
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
     await boot($, w)
-    const off = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    const off = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
     expect(await off.find({ type: 'Client' })).toBeUndefined()
     await off.unmount()
     expect((await $.command.run({ command: 'cr', args: 'companion on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })).text).toContain('Kit')
     await w.clock.advance(300)
 
-    const band = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
     const client = await band.find({ type: 'Client' })
     expect(String(client?.props.module)).toContain('companion.client.tsx')
     expect((client?.props.props as { mood: string }).mood).toBe('wake')
@@ -869,7 +869,7 @@ describe('ui', () => {
     await band.advance(12_000)
     expect(await where()).not.toBe(before)
     // It works on a milestone: busy in one place.
-    await $.tool.call({ tool: 'mcp__control-room__milestones', milestones: [{ title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
+    await $.tool.call({ tool: 'mcp__project-sentinel__milestones', milestones: [{ title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
     await w.clock.advance(300)
     await band.redraw()
     expect(((await band.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('work')
@@ -885,7 +885,7 @@ describe('ui', () => {
       each(await ui.drawn(), n => void (n.type === 'Svg' && String(n.props?.alt).includes('Kit') ? (found = n) : undefined))
       return found
     }
-    const desktop = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const svg = await kitSvg(desktop)
     expect(String(svg?.props?.alt)).toContain('Kit')
     // An image that animates itself, of a fixed size: never a sandboxed frame the surface sizes and paints.
@@ -895,18 +895,18 @@ describe('ui', () => {
     expect(String(svg?.props?.source)).toContain('<animate')
     await desktop.unmount()
     // A narrow band gives it a narrower lane, never one wider than the band.
-    const narrowBand = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(40) })
+    const narrowBand = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(40) })
     expect((await kitSvg(narrowBand))?.props?.width).toBe(240)
     await narrowBand.unmount()
     await $.command.run({ command: 'cr', args: 'motion off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
     await w.clock.advance(300)
-    const still = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const still = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
     const held = await kitSvg(still)
     expect(held).toBeDefined()
     expect(String(held?.props?.source)).not.toContain('<animate')
     await still.unmount()
     // Setup carries both switches.
-    const pane = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const pane = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await pane.press({ key: 'tab-setup' })
     await w.clock.advance(300)
     await pane.press({ key: 'ui-companion' })
@@ -930,7 +930,7 @@ describe('ui', () => {
     })
     await boot($, w)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       await ui.press({ key: 'tab-setup' })
       await w.clock.advance(300)
       let text = textOf(await ui.drawn())
@@ -985,7 +985,7 @@ describe('ui', () => {
     await $.tool.call({ tool: 'Bash', command: 'npm run build' })
     await w.clock.advance(300)
     for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+      const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'Pane', requestId: 'control-room', props: paneProps(66) })
       // Overview: Now carries the state's mark (the status bar's icon on Desktop, set on its first line); the cache a small dot.
       await ui.press({ key: 'tab-overview' })
       await w.clock.advance(300)
@@ -1027,7 +1027,7 @@ describe('ui', () => {
       await ui.unmount()
     }
     // Restore safe defaults puts every permission back.
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await ui.press({ key: 'tab-guardrails' })
     await w.clock.advance(300)
     await ui.press({ key: 'perm-reset' })
@@ -1086,10 +1086,10 @@ describe('ui', () => {
         const t = (n.children as string[]).join('')
         if (t.trim() !== '' && looksTabular(t)) offenders.push(`${where}: ${JSON.stringify(t)}`)
       })
-    const band = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'AbovePrompt', props: bandProps(110) })
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(110) })
     check(await band.drawn(), 'status bar')
     await band.unmount()
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(90) })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: paneProps(90) })
     for (const tab of TABS) {
       await ui.press({ key: `tab-${tab.id}` })
       await w.clock.advance(300)

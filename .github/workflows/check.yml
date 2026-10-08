@@ -60,9 +60,9 @@ jobs:
         # Loading the mod once writes .claude-plugin/types/ and tsconfig.json beside it. The headless
         # session then stops at "Not logged in" before any model call, which is expected here.
         run: |
-          claude --plugin-dir plugins/control-room -p "ok" < /dev/null || true
-          test -f plugins/control-room/.claude-plugin/types/claude-code/index.d.ts
-          test -f plugins/control-room/tsconfig.json
+          claude --plugin-dir plugins/project-sentinel -p "ok" < /dev/null || true
+          test -f plugins/project-sentinel/.claude-plugin/types/claude-code/index.d.ts
+          test -f plugins/project-sentinel/tsconfig.json
 
       - name: Type-check
         run: npm run typecheck

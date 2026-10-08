@@ -18,7 +18,7 @@
 import type { Register, ToolCallArgs, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 /** Control Room's milestones tool, offered where Claude Code has no task list. */
-const MILESTONES_TOOL = 'mcp__control-room__milestones'
+const MILESTONES_TOOL = 'mcp__project-sentinel__milestones'
 
 /** The request the scripted turn answers: the run's objective. */
 const REQUEST = 'The ISS speed test fails. Fix it, add orbitalPeriod with a test, and document the helpers.'

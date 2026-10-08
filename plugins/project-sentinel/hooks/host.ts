@@ -76,7 +76,7 @@ export type Host = {
   listAgents(): Promise<AgentInfo[]>
   /** The tools the model can call now (to see whether Claude Code offers a task list). */
   listTools(): Promise<readonly ToolInfo[]>
-  /** Offers the model one of Control Room's own tools; resolves to its full name (`mcp__control-room__<name>`). */
+  /** Offers the model one of Control Room's own tools; resolves to its full name (`mcp__project-sentinel__<name>`). */
   registerTool(spec: ToolSpec): Promise<string>
   stopTask(taskId: string): Promise<ToolCallResult>
   classify(text: string, labels: readonly string[], model?: string): Promise<string | undefined>

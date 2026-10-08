@@ -109,9 +109,9 @@ export function policySections(
   return sections
 }
 
-export const POLICY_SECTION_ID = 'control-room:policies'
+export const POLICY_SECTION_ID = 'project-sentinel:policies'
 
 export function policyText(sections: readonly PolicySection[]): string | null {
   if (sections.length === 0) return null
-  return ['# Control Room — active session policies', 'Set by the user through the Control Room plugin.', '', ...sections.map(s => s.text)].join('\n\n')
+  return ['# Project Sentinel — active session policies', 'Set by the user in Control Room, the Project Sentinel plugin’s panel.', '', ...sections.map(s => s.text)].join('\n\n')
 }

@@ -30,7 +30,7 @@ describe('preview', () => {
     const dump = async (name: string, surfaces: readonly ('desktop' | 'terminal')[] = ['desktop']) => {
       for (const surface of surfaces) {
         for (const columns of surface === 'desktop' ? WIDTHS : [150, 100, 80]) {
-          const ui = await $.ui.mount({ plugin: 'control-room', surface, component: 'AbovePrompt', props: band(columns), viewport: { columns, rows: 40 } })
+          const ui = await $.ui.mount({ plugin: 'project-sentinel', surface, component: 'AbovePrompt', props: band(columns), viewport: { columns, rows: 40 } })
           console.log(`PREVIEW\t${name}\t${surface}\t${columns}\t${JSON.stringify(await ui.drawn())}`)
           await ui.unmount()
         }
@@ -43,7 +43,7 @@ describe('preview', () => {
     await w.clock.advance(300)
     await dump('working-no-plan')
     await $.tool.call({
-      tool: 'mcp__control-room__milestones',
+      tool: 'mcp__project-sentinel__milestones',
       milestones: [
         { title: 'Understand the code', status: 'completed' },
         { title: 'Investigate the Git strip', status: 'completed' },
@@ -74,7 +74,7 @@ describe('preview', () => {
     await dump('kit', ['desktop', 'terminal'])
     // The panel's pages, as a docked pane draws them.
     const pane = { title: 'Control Room', isFocused: true, bodyColumns: PANE, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 80 }, view: {} }
-    const ui = await $.ui.mount({ plugin: 'control-room', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: pane, viewport: { columns: PANE, rows: 80 } })
+    const ui = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'Pane', requestId: 'control-room', props: pane, viewport: { columns: PANE, rows: 80 } })
     for (const tab of ['overview', 'context', 'behavior', 'guardrails', 'activity', 'setup']) {
       await ui.press({ key: `tab-${tab}` })
       await w.clock.advance(300)

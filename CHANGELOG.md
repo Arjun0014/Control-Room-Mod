@@ -8,6 +8,15 @@ match. `claude plugin tag plugins/project-sentinel` checks this when tagging a r
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-10-08
+
+### Changed
+
+- **The Control Room button looks like a button on Desktop.** With the panel closed it was the
+  app's secondary button, gray on the status bar's own gray, and read as a tag. It is now the app's
+  primary button, the panel open or closed: filled, with the app's own hover and press. The
+  terminal's filled chip is unchanged.
+
 ## [1.4.2] - 2026-10-08
 
 What Anthropic's plugin directory found in 1.4.0, answered: its one blocking finding is gone, and

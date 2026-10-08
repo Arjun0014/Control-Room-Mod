@@ -748,6 +748,10 @@ describe('ui', () => {
     expect((await before.find({ type: 'Button', key: 'open' }))?.props.label).toBe('◆ Control Room')
     expect(idle).not.toContain('CACHE')
     await before.unmount()
+    // On Desktop the button is the app's primary one with the panel closed too: a button, not a tag.
+    const closed = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    expect((await closed.find({ type: 'Button', key: 'open' }))?.props).toMatchObject({ label: '◆ Control Room', variant: 'primary' })
+    await closed.unmount()
     await $.turn.start({ text: 'go', turnId: 't1' })
     await $.tool.call({ tool: 'mcp__project-sentinel__milestones', milestones: [{ title: 'Sketch', status: 'completed' }, { title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
     for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _

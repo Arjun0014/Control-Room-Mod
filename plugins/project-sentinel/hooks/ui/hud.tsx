@@ -252,15 +252,16 @@ function segmentEl(kit: Kit, s: Segment): RenderElement {
 const buttonLabel = (hud: HudModel, columns: number): string => (columns >= 64 ? `${G.brand} Control Room` : `${G.brand} ${hud.isPaneOpen ? 'Close' : 'Open'}`)
 
 /**
- * The Control Room button. Desktop draws its native button (primary while
- * the panel is open). The terminal draws a filled chip, brighter under the
- * pointer and in the brand color while the panel is open, so it reads as a
- * control and not as more text.
+ * The Control Room button. Desktop draws its native primary button, the panel
+ * open or closed: it is the bar's one control, and the secondary button, gray
+ * on the bar's own gray, read as a tag. The terminal draws a filled chip,
+ * brighter under the pointer and in the brand color while the panel is open,
+ * so it reads as a control and not as more text.
  */
 function controlButton(kit: Kit, hud: HudModel): RenderElement {
   const { Box, Button } = kit.ui
   const text = buttonLabel(hud, kit.columns)
-  if (isNative(kit)) return <Button key="open" label={text} variant={hud.isPaneOpen ? 'primary' : 'secondary'} onPress={kit.actions.togglePane} />
+  if (isNative(kit)) return <Button key="open" label={text} variant="primary" onPress={kit.actions.togglePane} />
   return (
     <Box key="open-chip" flexShrink={0} paddingX={1} backgroundColor={hud.isPaneOpen ? 'claude' : 'subtle'} hover={{ backgroundColor: hud.isPaneOpen ? 'claude' : 'inactive' }}>
       <Button key="open" label={text} plain onPress={kit.actions.togglePane} />

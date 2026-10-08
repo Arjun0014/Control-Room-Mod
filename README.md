@@ -36,7 +36,7 @@ One plugin gives you:
 - **Kit**, if you like: a small Claude-orange creature above the status bar that shows what Claude
   is doing, and answers a click
 
-> **Status: 1.4.2.** Project Sentinel is built on Claude Code's function-hooks plugin API ("mods"),
+> **Status: 1.4.3.** Project Sentinel is built on Claude Code's function-hooks plugin API ("mods"),
 > which is still early access and may change between Claude Code releases. It is verified on
 > Claude Code **2.1.289**, **2.1.292** and **2.1.293** (the engine the CLI and Claude Desktop run
 > now) on Windows 11. See [Compatibility](#compatibility).

@@ -167,7 +167,8 @@ name (`✗ Lint failing`, red; not counted again as an issue), calls that need a
 near a ceiling, red at it; Desktop has its Machine cell instead), running agents, the Quest log's
 level. Then the **Control Room** button: in the
 terminal a filled chip in the theme's quiet gray, brand orange while the panel is open; on
-Desktop the native button, primary while the panel is open.
+Desktop the native primary button, the panel open or closed (the secondary one, gray on the bar's
+gray, read as a tag rather than a button).
 
 **The instruments**, each its own shape so they cannot be confused:
 

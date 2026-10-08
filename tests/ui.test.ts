@@ -880,7 +880,7 @@ describe('ui', () => {
     expect(lifetimeWords({ ...base, ttl: '1h', ttlSource: 'plan' })).toBe('1-hour cache')
   })
 
-  test('Kit, the companion: off by default; on, it walks its own row on its own clock, and a click opens Control Room', async ($, on) => {
+  test('Kit, the companion: off by default; on, one surface module draws it in the terminal and on Desktop, on its own clock, and a touch gets a reaction', async ($, on) => {
     const w = world(on, { tokens: 300_000 })
     on('turn.start', ($, e) => ({ turnId: e.turnId }))
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
@@ -891,67 +891,110 @@ describe('ui', () => {
     expect((await $.command.run({ command: 'cr', args: 'companion on', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })).text).toContain('Kit')
     await w.clock.advance(300)
 
+    // The terminal: the module named by a fixed path, its props plain data with the surface added.
     const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
     const client = await band.find({ type: 'Client' })
-    expect(String(client?.props.module)).toContain('companion.client.tsx')
-    expect((client?.props.props as { mood: string }).mood).toBe('wake')
-    await band.resize({ columns: 100, rows: 2 })
+    expect(String(client?.props.module)).toContain('kit.client.tsx')
+    expect(client?.props.props).toMatchObject({ surface: 'terminal', mood: 'wake', isFresh: true, isReduced: false })
+    await band.resize({ columns: 100, rows: 5, in: 'kit' })
+    // Where Kit's half blocks start on its five rows, and what the rows say.
+    const rowsOf = (tree: unknown) => ((tree as Node).children ?? []).map(textOf)
+    const rows = async () => rowsOf(await band.drawn({ in: 'kit' }))
+    const leftOf = async () => Math.min(...(await rows()).map(r => (/[▀▄█]/.test(r) ? r.search(/[▀▄█]/) : 999)))
+    // A fresh context: Kit walks in from beyond the left edge, then rests at its place.
     await band.advance(1000)
-    const drawn = textOf(await band.drawn({ in: 'companion' }))
-    expect(drawn).toMatch(/[▀▄█]/)
-    // It walks: a few seconds later the fox stands somewhere else on its row.
-    const where = async () => {
-      let left = -1
-      each(await band.drawn({ in: 'companion' }), n => {
-        if (left < 0 && n.type === 'Box' && typeof n.props?.marginLeft === 'number' && textOf(n).match(/[▀▄█]/)) left = n.props.marginLeft
-      })
-      return left
-    }
-    // Claude starts a turn and thinks: Kit paces its lane.
+    expect(await rows()).toHaveLength(5)
+    expect(await leftOf()).toBe(0)
+    expect((await rows()).join('').replace(/[^▀▄█]/g, '').length).toBeLessThan(60)
+    await band.advance(12_000)
+    const home = await leftOf()
+    expect(home).toBeGreaterThan(10)
+    // Drawn again in the same context (a new instance), it does not walk in again: it is where it was.
+    await band.unmount()
+    const again = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    await again.resize({ columns: 100, rows: 5, in: 'kit' })
+    await again.advance(400)
+    const rowsAgain = rowsOf(await again.drawn({ in: 'kit' }))
+    expect(Math.min(...rowsAgain.map(r => (/[▀▄█]/.test(r) ? r.search(/[▀▄█]/) : 999)))).toBe(home)
+    await again.unmount()
+
+    // Claude thinks: Kit paces its lane.
+    const live = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    await live.resize({ columns: 100, rows: 5, in: 'kit' })
+    const liveLeft = async () => Math.min(...rowsOf(await live.drawn({ in: 'kit' })).map(r => (/[▀▄█]/.test(r) ? r.search(/[▀▄█]/) : 999)))
     await $.turn.start({ text: 'Build the parser.', turnId: 't1' })
     await w.clock.advance(300)
-    await band.redraw()
-    expect(((await band.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('think')
-    const before = await where()
-    await band.advance(12_000)
-    expect(await where()).not.toBe(before)
-    // It works on a milestone: busy in one place.
+    await live.redraw()
+    expect(((await live.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('think')
+    const before = await liveLeft()
+    await live.advance(15_000)
+    expect(await liveLeft()).not.toBe(before)
+    // It works on a milestone; a touch while Claude works: a quick look up, and nothing opens.
     await $.tool.call({ tool: 'mcp__project-sentinel__milestones', milestones: [{ title: 'Build', status: 'in_progress', doing: 'Building the parser' }, { title: 'Test', status: 'pending' }] } as never)
     await w.clock.advance(300)
-    await band.redraw()
-    expect(((await band.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('work')
-    // A click on Kit opens Control Room.
-    await band.pointer({ type: 'down', x: 1, y: 0, button: 'left' })
+    await live.redraw()
+    expect(((await live.find({ type: 'Client' }))?.props.props as { mood: string }).mood).toBe('work')
+    await live.advance(3000)
+    const at = await liveLeft()
+    await live.pointer({ type: 'down', x: at + 8, y: 3, button: 'left', in: 'kit' })
+    await live.advance(400)
+    expect(rowsOf(await live.drawn({ in: 'kit' })).join('')).toContain('!')
     await w.clock.advance(300)
-    expect(w.kept.opened).toContain('control-room')
-    await band.unmount()
+    expect(w.kept.opened).not.toContain('control-room')
+    await live.unmount()
 
-    // Desktop: an SVG that animates itself; reduced motion holds it still.
-    const kitSvg = async (ui: { drawn: () => Promise<unknown> }) => {
+    // Desktop: the same module draws an image a frame, a lane that fits the band, and takes a touch in cells.
+    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    const desktopClient = await desktop.find({ type: 'Client' })
+    expect(desktopClient?.props.props).toMatchObject({ surface: 'desktop', mood: 'work' })
+    await desktop.resize({ columns: 100, rows: 4, in: 'kit' })
+    await desktop.advance(500)
+    const findArt = async () => {
       let found: Node | undefined
-      each(await ui.drawn(), n => void (n.type === 'Svg' && String(n.props?.alt).includes('Kit') ? (found = n) : undefined))
+      each(await desktop.drawn({ in: 'kit' }), n => void (n.type === 'Svg' ? (found = n) : undefined))
       return found
     }
-    const desktop = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
-    const svg = await kitSvg(desktop)
-    expect(String(svg?.props?.alt)).toContain('Kit')
-    // An image that animates itself, of a fixed size: never a sandboxed frame the surface sizes and paints.
-    expect(svg?.props?.isInteractive).toBeUndefined()
-    expect(svg?.props?.width).toBe(360)
-    expect(svg?.props?.height).toBe(68)
-    expect(String(svg?.props?.source)).toContain('<animate')
-    await desktop.unmount()
-    // A narrow band gives it a narrower lane, never one wider than the band.
-    const narrowBand = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(40) })
-    expect((await kitSvg(narrowBand))?.props?.width).toBe(240)
-    await narrowBand.unmount()
-    await $.command.run({ command: 'cr', args: 'motion off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
+    const art = await findArt()
+    expect(String(art?.props?.alt)).toContain('Kit')
+    expect(String(art?.props?.source)).toContain('<path')
+    expect(String(art?.props?.source)).not.toContain('<animate')
+    expect(art?.props?.isInteractive).toBeUndefined()
+    expect(art?.props?.width).toBe(558)
+    expect(art?.props?.height).toBe(84)
+    const first = String(art?.props?.source)
+    await desktop.advance(3000)
+    expect(String((await findArt())?.props?.source)).not.toBe(first)
+    await desktop.pointer({ type: 'down', x: 8, y: 2, button: 'left', in: 'kit' })
+    await desktop.advance(300)
+    expect(w.kept.opened).not.toContain('control-room')
+    // A module that cannot draw says so; Kit is left out, and the status bar draws without it.
+    await desktop.post({ fault: 'drawing failed' }, { in: 'kit' })
     await w.clock.advance(300)
-    const still = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
-    const held = await kitSvg(still)
-    expect(held).toBeDefined()
-    expect(String(held?.props?.source)).not.toContain('<animate')
-    await still.unmount()
+    await desktop.unmount()
+    const without = await $.ui.mount({ plugin: 'project-sentinel', surface: 'desktop', component: 'AbovePrompt', props: bandProps(120) })
+    expect(await without.find({ type: 'Client' })).toBeUndefined()
+    expect(await without.find({ key: 'hud-head' })).toBeDefined()
+    await without.unmount()
+  })
+
+  test('Kit held still: Reduce motion holds one pose; VS Code, which draws no surface module, shows that pose as an image', async ($, on) => {
+    const w = world(on, { tokens: 300_000, settings: { ui: { companion: true, reducedMotion: true } } })
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    await boot($, w)
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    expect((await band.find({ type: 'Client' }))?.props.props).toMatchObject({ isReduced: true })
+    await band.resize({ columns: 100, rows: 5, in: 'kit' })
+    await band.advance(400)
+    const still = JSON.stringify(await band.drawn({ in: 'kit' }))
+    await band.advance(8000)
+    expect(JSON.stringify(await band.drawn({ in: 'kit' }))).toBe(still)
+    await band.unmount()
+    const vscode = await $.ui.mount({ plugin: 'project-sentinel', surface: 'vscode', component: 'AbovePrompt', props: bandProps(120) })
+    let image: Node | undefined
+    each(await vscode.drawn(), n => void (n.type === 'Svg' && String(n.props?.alt).includes('Kit') ? (image = n) : undefined))
+    expect(String(image?.props?.source)).toContain('<path')
+    expect(image?.props?.height).toBe(84)
+    await vscode.unmount()
     // Setup carries both switches.
     const pane = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
     await pane.press({ key: 'tab-setup' })

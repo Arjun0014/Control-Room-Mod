@@ -178,19 +178,54 @@ export type HudModel = {
   git: string | null
 }
 
+/** What Kit, the optional companion, is doing: one of fifteen moods, from what the run is doing. */
+export type KitMood =
+  | 'idle'
+  | 'think'
+  | 'work'
+  | 'search'
+  | 'test'
+  | 'celebrate'
+  | 'worried'
+  | 'waiting'
+  | 'handoff'
+  | 'wake'
+  | 'sleepy'
+  | 'dim'
+  | 'sleep'
+  | 'tend'
+  | 'tired'
+
 /**
- * Kit, the optional companion: one mood's frames (10 rows of palette letters,
- * '.' see-through, facing right), its palette, its pace, how it walks, the
- * glyphs beside its head, and what it is doing in words.
+ * Kit as the hooks module hands it to its surface module (hooks/kit.client.tsx): the mood,
+ * what it is doing in words, the calm switches, whether a turn is running, the local hour
+ * (night-time yawns), the context it belongs to (it walks in once per fresh context), and
+ * one-shot signals as values the module compares with what it last saw: milestones done, a
+ * green finish, failures, a Keep warm refresh. Plain data: everything Kit does between two
+ * redraws of the status bar happens in the module, on the surface's own clock.
  */
 export type CompanionView = {
-  mood: string
-  frames: string[][]
-  palette: Record<string, string>
-  fps: number
-  walk: 'none' | 'slow' | 'normal' | 'patrol' | 'enter' | 'exit'
-  bubbles: { text: string; color: string }[]
+  mood: KitMood
   caption: string
+  isReduced: boolean
+  /** The machine is busy: two frames a second at most, and no walking. */
+  isBusy: boolean
+  /** The machine is at its limit: one still pose. */
+  isStrained: boolean
+  isWorking: boolean
+  hour: number
+  /** When this context began (system clock), its identity for Kit; null before the first. */
+  contextStartedAt: number | null
+  /** The context began less than a minute ago: a Kit drawn now walks in from the left. */
+  isFresh: boolean
+  /** Milestones done in the run. */
+  done: number
+  /** When the last turn finished green; null when it did not. */
+  greenAt: number | null
+  /** Checks that failed in this context. */
+  fails: number
+  /** When Keep warm last refreshed the cache; null before it has. */
+  refreshAt: number | null
 }
 
 export type CacheWarmth = 'none' | 'warm' | 'cold' | 'unknown'

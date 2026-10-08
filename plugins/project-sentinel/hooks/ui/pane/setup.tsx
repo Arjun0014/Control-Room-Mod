@@ -133,7 +133,7 @@ export function setupPage(kit: Kit, pane: PaneModel): RenderElement {
           row(k, {
             key: 'ui-companion',
             label: 'Companion',
-            subtitle: s.ui.companion ? 'Kit shows what Claude is doing; click it to open Control Room' : 'A small pixel creature on the status bar that shows what Claude is doing',
+            subtitle: s.ui.companion ? 'Kit shows what Claude is doing, and answers a click' : 'A small pixel creature on the status bar that shows what Claude is doing',
             control: switchControl(k, { key: 'ui-companion', isOn: s.ui.companion, onPress: () => u(d => void (d.ui.companion = !d.ui.companion)) }),
           }),
           row(k, {

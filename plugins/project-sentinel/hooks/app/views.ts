@@ -37,7 +37,7 @@ import type { ActivityItem, FileChange } from '../features/activity'
 import { handoffPoint, isHandoffActive } from '../features/autopilot'
 import * as Chain from '../features/chain'
 import { GROUP_LABEL, GROUP_ORDER, attentionOf, groupOf, isOpen, nowOf, turnSummaryOf } from '../features/digest'
-import { animationOf, moodOf } from '../features/companion'
+import { companionView, moodOf } from '../features/companion'
 import { gitLine } from '../features/git'
 import { ACHIEVEMENTS, levelOf, runQuestOf } from '../features/quest'
 import { type ValidationSummary, summarize } from '../features/validation'
@@ -274,7 +274,7 @@ export function hudOf(rt: Runtime): HudModel {
   }
 }
 
-/** Kit's mood from what Claude is doing, and the animation for it; null while the companion is off or has failed to draw. */
+/** Kit's mood from what Claude is doing, and what its surface module needs; null while the companion is off or has failed to draw. */
 function companionOf(rt: Runtime, now: number, validation: readonly ValidationSummary[]): HudModel['companion'] {
   const s = rt.settings
   if (!s.ui.companion || rt.companionFault !== null) return null
@@ -287,6 +287,7 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   const load = liveLoadOf(rt)
   const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'warn' || load.ramTone === 'bad')
   const cache = rt.cache.hud(rt.clock(), rt.turn.isRunning)
+  const isGreen = (thisTurn.length > 0 && thisTurn.every(r => r.status === 'passed')) || (p.total > 0 && p.done === p.total && p.done > rt.turnStartDone)
   const mood = moodOf({
     now,
     isWorking: rt.turn.isRunning,
@@ -295,7 +296,7 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
     isCheckRunning: validation.some(v => v.status === 'running'),
     isFailing: validation.some(v => v.isFailing) || barAttentionOf(rt, now) > 0,
     autopilotState: s.autopilot.enabled ? rt.autopilot.state : 'off',
-    isGreen: (thisTurn.length > 0 && thisTurn.every(r => r.status === 'passed')) || (p.total > 0 && p.done === p.total && p.done > rt.turnStartDone),
+    isGreen,
     turnEndedAt: turn.endedAt,
     hasTurned: turn.index > 0,
     contextStartedAt: rt.contextStartedAt,
@@ -308,7 +309,21 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   })
   // A machine at its limit holds Kit still: the companion never adds to the load.
   const isStrained = rt.monitor.pressure.level === 'high' || rt.monitor.pressure.level === 'critical'
-  return animationOf(mood, { isReduced: s.ui.reducedMotion, isBusy, isStrained })
+  return companionView({
+    mood,
+    now,
+    hour: new Date(now).getHours(),
+    isReduced: s.ui.reducedMotion,
+    isBusy,
+    isStrained,
+    isWorking: rt.turn.isRunning,
+    contextStartedAt: rt.contextStartedAt,
+    done: p.done,
+    // One-shot moments, as values Kit compares with what it last saw.
+    greenAt: !rt.turn.isRunning && isGreen ? turn.endedAt : null,
+    fails: rt.activity.validationRuns().filter(r => r.status === 'failed').length,
+    refreshAt: rt.cache.state.keepWarm.lastAt,
+  })
 }
 
 /**

@@ -281,7 +281,7 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
         else s.ui.companion = toggle
       })
       if (verb === 'motion') return { text: toggle ? 'Animation on.' : 'Reduced motion: still drawings instead of animation.' }
-      return { text: toggle ? 'Companion on: Kit lives on the status bar and shows what Claude is doing. Click it to open Control Room.' : 'Companion off.' }
+      return { text: toggle ? 'Companion on: Kit lives above the status bar and shows what Claude is doing. Give it a click now and then.' : 'Companion off.' }
     }
     case 'hud': {
       const valid = ['band', 'status', 'both', 'off']

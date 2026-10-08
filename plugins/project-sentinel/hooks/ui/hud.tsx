@@ -31,7 +31,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { HudChip, HudModel, Tone, TrackStop } from '../../types'
 import * as fmt from '../core/format'
-import { type CompanionAnimation, LANE_H, svgCompanion } from '../features/companion'
+import { desktopLanePx, kitStillSvg } from '../kit.client'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
 import { G, STATE_MARK, STOP_LOOK, clockGlyph, meterCells, scaleTrack, svgClock, svgContextMeter, svgLevel, svgStateIcon, svgWorkTrack, toneProps } from './theme'
@@ -64,10 +64,6 @@ const INDENT = 2
 
 /** The pixels a cell of a status-bar graphic takes as SVG. */
 const CELL_PX = 8
-
-/** Kit's lane on the remote surfaces, in CSS pixels: room for a few of its widths to pace in. */
-const KIT_LANE_W = 360
-const KIT_LANE_MIN = 200
 
 const spanWidth = (spans: readonly Span[] | undefined): number => (spans ?? []).reduce((n, p) => n + p.text.length, 0)
 
@@ -401,28 +397,28 @@ function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderEleme
 }
 
 /**
- * Kit's lane, only while the companion is on: the terminal's surface module
- * (made by the hooks module, which alone may name it), or on Desktop an SVG
- * that animates itself, in a short lane above the headline.
+ * Kit's lane, only while the companion is on: its surface module (made by the hooks module,
+ * which alone may name it) in the terminal and on Desktop, where Kit lives on the surface's own
+ * clock; where a surface draws no surface module (VS Code), Kit held still in its mood's pose.
  */
 function laneRow(kit: Kit, hud: HudModel, stage: RenderElement | null): RenderElement | null {
   const { Box, Svg } = kit.ui
   const companion = hud.companion
   if (companion === null) return null
-  if (kit.surface === 'terminal') {
-    return stage === null ? null : (
-      <Box key="hud-lane" flexDirection="row" height={5}>
+  if (stage !== null) {
+    return (
+      <Box key="hud-lane" flexDirection="row" height={kit.surface === 'terminal' ? 5 : undefined}>
         {stage}
       </Box>
     )
   }
-  if (Svg === undefined) return null
-  // A short lane of a fixed size, drawn as an image (it animates itself): narrower in a phone-sized
-  // band, and an image is never boxed in a frame the surface sizes and paints on its own.
-  const width = Math.min(KIT_LANE_W, Math.max(KIT_LANE_MIN, kit.columns * 6))
+  if (kit.surface === 'terminal' || Svg === undefined) return null
+  // An image of a fixed size: never boxed in a frame the surface sizes and paints on its own.
+  const width = desktopLanePx(kit.columns)
+  const still = kitStillSvg(companion, width)
   return (
     <Box key="hud-lane" flexDirection="row">
-      <Svg key="companion" source={svgCompanion(companion as CompanionAnimation, width)} alt={companion.caption} width={width} height={LANE_H} />
+      <Svg key="companion" source={still.source} alt={companion.caption} width={still.width} height={still.height} />
     </Box>
   )
 }
@@ -633,12 +629,12 @@ function cellsRow(kit: Kit, hud: HudModel): RenderElement {
   )
 }
 
-function nativeHud(kit: Kit, hud: HudModel): RenderElement {
+function nativeHud(kit: Kit, hud: HudModel, stage: RenderElement | null): RenderElement {
   const { Box } = kit.ui
   return (
     <Box flexDirection="column" rowGap={1}>
       {hud.alert === null ? null : alertLine(kit, hud.alert)}
-      {laneRow(kit, hud, null)}
+      {laneRow(kit, hud, stage)}
       {headlineRow(kit, hud)}
       {cellsRow(kit, hud)}
     </Box>
@@ -647,7 +643,7 @@ function nativeHud(kit: Kit, hud: HudModel): RenderElement {
 
 export function hudView(kit: Kit, hud: HudModel, stage: RenderElement | null = null): RenderElement {
   const { Box } = kit.ui
-  if (kit.surface !== 'terminal') return nativeHud(kit, hud)
+  if (kit.surface !== 'terminal') return nativeHud(kit, hud, stage)
   const lane = laneRow(kit, hud, stage)
   return (
     <Box flexDirection="column">

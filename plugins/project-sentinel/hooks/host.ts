@@ -35,9 +35,11 @@ import type {
 import type {
   ActivityView,
   AutopilotRecord,
+  CacheMemo,
   ChainView,
   FocusModel,
   HudModel,
+  OpsView,
   PaneModel,
   PermissionsView,
   ResourcesView,
@@ -70,6 +72,10 @@ export type Host = {
   compact(instructions: string): Promise<SessionCompactResult>
 
   submit(text: string): Promise<PromptSubmitResult>
+  /** Submits the person's own words (a message the Cold Resume Guard held while it compacted): read bare, as theirs. */
+  submitAsUser(text: string): Promise<PromptSubmitResult>
+  /** Puts text back in the prompt box as the person's draft (a message the Cold Resume Guard did not send). */
+  fillPrompt(text: string): Promise<{ isFilled: boolean; refusal?: string }>
   /** Runs /clear (an Autopilot handoff's fresh context). */
   clearContext(): Promise<CommandRunResult>
   /**
@@ -86,6 +92,8 @@ export type Host = {
   /** Offers the model one of Control Room's own tools; resolves to its full name (`mcp__project-sentinel__<name>`). */
   registerTool(spec: ToolSpec): Promise<string>
   stopTask(taskId: string): Promise<ToolCallResult>
+  /** Claude Code's own SendMessage delivery to one of the session's agents (a background agent or a teammate). */
+  sendToAgent(agentId: string, text: string): Promise<{ isDelivered: boolean; reason?: string }>
   classify(text: string, labels: readonly string[], model?: string): Promise<string | undefined>
   /** One tool-less completion over the main thread's last request (Keep warm): never added to the transcript. */
   fork(prompt: string): Promise<ModelForkResult>
@@ -97,6 +105,8 @@ export type Host = {
   panes(): Promise<readonly UiPane[]>
   /** Brings the top of the Control Room pane into view (after a section change, or "Back to top"). */
   scrollPaneToTop(): Promise<void>
+  /** Moves the pane's focus ring onto one of its fields (the Mission Queue's, after `/cr queue`). */
+  focusPane(key: string): Promise<boolean>
   /** Asks the person in Claude Code's own question dialog (AskUserQuestion); rejects when dismissed or with nobody to ask. */
   ask(question: string, options: readonly string[], header?: string): Promise<string>
   /** What Claude Code's own permission check would decide for a call (its rules and the mode), running nothing. */
@@ -142,6 +152,7 @@ export type Host = {
   publishPermissions(value: PermissionsView): Promise<void>
   publishFocus(value: FocusModel): Promise<void>
   publishSpinner(value: SpinnerModel): Promise<void>
+  publishOps(value: OpsView): Promise<void>
 
   /** The handoff in flight, in `$.state`: survives a reload of the plugin, not a restart or /clear. */
   saveAutopilotRecord(record: AutopilotRecord | null): Promise<void>
@@ -149,6 +160,9 @@ export type Host = {
   /** The policy section this context's system prompt carries, in `$.state`: a reload keeps it while the cache is warm. */
   savePolicyMemo(memo: { sessionId: string; text: string } | null): Promise<void>
   loadPolicyMemo(): Promise<{ sessionId: string; text: string } | null>
+  /** The prompt cache's last request, in `$.state`: a reload keeps knowing when the cache lapses. */
+  saveCacheMemo(memo: CacheMemo | null): Promise<void>
+  loadCacheMemo(): Promise<CacheMemo | null>
 
   /** Re-runs agent listings (Subagent Control changed what is offered). */
   invalidateDescribes(): void

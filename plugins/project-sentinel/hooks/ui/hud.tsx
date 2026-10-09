@@ -15,7 +15,9 @@
  * WORK is a track of milestones (it carries across handoffs), CONTEXT a
  * filling meter with the handoff point as a notch (it starts over after one),
  * CACHE a clock face (shown only while it can matter: when you are away, or
- * after a costly rebuild), and the whole run's cost on the right.
+ * after a costly rebuild), and the whole run's cost on the right. While a
+ * watcher parks the run, WATCHER counts down to its wake (on Desktop it takes
+ * the Machine cell: nothing runs, so the machine is not the story).
  *
  * Kit, when on, walks a lane of its own: in the terminal it stands on the
  * HUD's top edge; on Desktop it is a short animated image above the headline.
@@ -35,6 +37,10 @@ import { desktopLanePx, kitStillSvg } from '../kit.client'
 import type { Kit } from './kit'
 import { clip, isNative } from './primitives'
 import { G, STATE_MARK, STOP_LOOK, clockGlyph, meterCells, scaleTrack, svgClock, svgContextMeter, svgLevel, svgStateIcon, svgWorkTrack, toneProps } from './theme'
+
+/** The watcher that parks the run, while it sleeps: its countdown is an instrument of its own. */
+const sleepingWatcher = (hud: HudModel): NonNullable<NonNullable<HudModel['ops']>['watcher']> | null =>
+  hud.ops !== null && hud.ops.isSleeping && hud.ops.watcher !== null && hud.ops.watcher.status === 'armed' ? hud.ops.watcher : null
 
 /**
  * A run of text in one style. `isTrack` draws the empty part of a graphic in the theme's quietest
@@ -176,14 +182,26 @@ export function hudSegments(hud: HudModel, tier: Tier, surface: Kit['surface'] =
   // CACHE: only while it can matter.
   const cache = hud.cache
   if (cache !== null && cache.isShown) {
-    const word = cache.recentMiss !== null ? cache.text : cache.warmth === 'warm' && cache.leftMs !== null && tier.notes ? `${cache.text} left` : cache.text
+    const word = cache.parked !== undefined ? (tier.notes ? cache.parked.text : cache.parked.short) : cache.recentMiss !== null ? cache.text : cache.warmth === 'warm' && cache.leftMs !== null && tier.notes ? `${cache.text} left` : cache.text
     const text: Span = { text: ` ${word}`, tone: cache.tone === 'warn' ? 'warn' : undefined, isDim: cache.tone === 'muted' ? true : undefined }
     const glyphTone: Tone = cache.tone === 'normal' ? 'info' : cache.tone
-    const alt = cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
+    const alt = cacheAlt(cache)
     segments.push(
       isSvg
         ? { key: 'cache', priority: 2, side: 'left', spans: label(tier, 'CACHE'), graphic: { source: svgClock({ fraction: cache.fraction, tone: glyphTone, size: 14 }), cells: 2, alt, height: 14 }, after: [text] }
         : { key: 'cache', priority: 2, side: 'left', spans: [...label(tier, 'CACHE'), { text: clockGlyph(cache.fraction), tone: glyphTone }, text] },
+    )
+  }
+
+  // WATCHER: while a watcher parks the run, the time to its wake (the headline says until when, and why).
+  const watcher = sleepingWatcher(hud)
+  if (watcher !== null) {
+    const left: Span = { text: ` ${watcher.left}`, isBold: true }
+    const alt = `Watcher ${watcher.id} wakes the run in ${watcher.left}, at ${watcher.at}`
+    segments.push(
+      isSvg
+        ? { key: 'watcher', priority: 1, side: 'left', spans: label(tier, 'WATCHER'), graphic: { source: svgStateIcon('sleeping', 14), cells: 2, alt, height: 14 }, after: [left] }
+        : { key: 'watcher', priority: 1, side: 'left', spans: [...label(tier, 'WATCHER'), { text: G.wait, tone: 'info' }, left] },
     )
   }
 
@@ -282,15 +300,29 @@ function chipsThatFit(chips: readonly HudChip[], room: number): HudChip[] {
   return out
 }
 
+/**
+ * A chip: its mark in its tone, then its words. One that `opens` is a control: pressed, it opens
+ * Activity → Operations (Review, a watcher's countdown, queued work, agents, the budget).
+ */
 function chipEl(kit: Kit, chip: HudChip): RenderElement {
-  const { Text } = kit.ui
-  const mark = chip.key === 'failing' ? G.fail : chip.tone === 'bad' || chip.tone === 'warn' ? G.warn : chip.key === 'quest' ? G.star : G.dot
+  const { Text, Button } = kit.ui
+  const mark = chip.key === 'failing' ? G.fail : chip.tone === 'bad' || chip.tone === 'warn' ? G.warn : chip.key === 'quest' ? G.star : chip.key === 'watcher' ? G.wait : G.dot
+  const parts = [
+    <Text key={`chip-${chip.key}-mark`} {...toneProps(chip.tone)}>{`${mark} `}</Text>,
+    <Text key={`chip-${chip.key}-text`} {...toneProps(chip.tone === 'info' || chip.tone === 'accent' ? 'normal' : chip.tone)} bold={chip.tone === 'bad' ? true : undefined}>
+      {chip.text}
+    </Text>,
+  ]
+  if (chip.opens === 'ops') {
+    return (
+      <Button key={`chip-${chip.key}`} label={chip.text} plain onPress={kit.actions.openOps}>
+        {parts}
+      </Button>
+    )
+  }
   return (
     <Text key={`chip-${chip.key}`} wrap="truncate-end">
-      <Text {...toneProps(chip.tone)}>{`${mark} `}</Text>
-      <Text {...toneProps(chip.tone === 'info' || chip.tone === 'accent' ? 'normal' : chip.tone)} bold={chip.tone === 'bad' ? true : undefined}>
-        {chip.text}
-      </Text>
+      {parts}
     </Text>
   )
 }
@@ -361,26 +393,65 @@ function instrumentsRow(kit: Kit, hud: HudModel): RenderElement {
   )
 }
 
-/** A handoff that needs the person, on a line of its own above, with its actions. */
+type AlertAction = { key: string; label: string; onPress: () => void; isPrimary?: boolean }
+
+/** What the alert line offers: the handoff's, a watcher that waits for the person, a held message, the budget, a suggestion. */
+export function alertActions(kit: Kit, alert: NonNullable<HudModel['alert']>): AlertAction[] {
+  const a = kit.actions
+  const ref = alert.ref ?? ''
+  switch (alert.kind) {
+    case 'pending':
+      return [
+        { key: 'handoff-now', label: 'Hand off now', onPress: a.handoff, isPrimary: true },
+        { key: 'snooze', label: 'Later', onPress: a.snooze },
+      ]
+    case 'awaiting':
+      return [
+        { key: 'fresh', label: 'Start fresh', onPress: a.fresh, isPrimary: true },
+        { key: 'snooze', label: 'Later', onPress: a.snooze },
+      ]
+    case 'watcher':
+      return [
+        { key: 'watch-check', label: 'Check now', onPress: () => a.watchCheck(ref), isPrimary: true },
+        ...(alert.canFresh === true ? [{ key: 'watch-fresh', label: 'Start fresh', onPress: () => a.watchFresh(ref) }] : []),
+        { key: 'watch-snooze', label: 'In 30m', onPress: () => a.watchSnooze(ref, 30) },
+        { key: 'watch-dismiss', label: 'Dismiss', onPress: () => a.watchDismiss(ref) },
+      ]
+    case 'held':
+      return [
+        { key: 'held-back', label: 'Put back', onPress: a.heldPutBack, isPrimary: true },
+        { key: 'held-send', label: 'Send now', onPress: a.heldSend },
+        { key: 'held-discard', label: 'Discard', onPress: a.heldDiscard },
+      ]
+    case 'budget':
+      return [
+        { key: 'budget-go', label: 'Continue anyway', onPress: a.budgetApprove, isPrimary: true },
+        { key: 'budget-open', label: `Budget ${G.chevron}`, onPress: a.openOps },
+      ]
+    case 'suggest':
+      return [
+        alert.hasTime === true
+          ? { key: 'suggest-take', label: 'Create watcher', onPress: a.suggestTake, isPrimary: true }
+          : { key: 'suggest-1h', label: 'In 1h', onPress: () => a.suggestAt('in 60m'), isPrimary: true },
+        { key: 'suggest-change', label: 'Change time', onPress: a.openOps },
+        { key: 'suggest-ignore', label: 'Ignore', onPress: a.suggestIgnore },
+      ]
+    case 'load':
+      return []
+  }
+}
+
+const ALERT_MARK: Record<NonNullable<HudModel['alert']>['kind'], string> = { pending: G.warn, awaiting: G.dot, load: G.warn, watcher: G.wait, held: G.warn, budget: G.warn, suggest: G.wait }
+
+/** What needs the person now, on a line of its own above, with its actions. */
 function alertLine(kit: Kit, alert: NonNullable<HudModel['alert']>): RenderElement {
   const { Box, Text, Button } = kit.ui
-  const actions =
-    alert.kind === 'pending'
-      ? [
-          { key: 'handoff-now', label: 'Hand off now', onPress: kit.actions.handoff, isPrimary: true },
-          { key: 'snooze', label: 'Later', onPress: kit.actions.snooze },
-        ]
-      : alert.kind === 'awaiting'
-        ? [
-            { key: 'fresh', label: 'Start fresh', onPress: kit.actions.fresh, isPrimary: true },
-            { key: 'snooze', label: 'Later', onPress: kit.actions.snooze },
-          ]
-        : []
+  const actions = alertActions(kit, alert)
   return (
     <Box flexDirection="row" key="hud-alert" alignItems="center" columnGap={2}>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} {...clip(kit)}>
         <Box width={INDENT} flexShrink={0}>
-          <Text {...toneProps(alert.tone)}>{alert.kind === 'awaiting' ? G.dot : G.warn}</Text>
+          <Text {...toneProps(alert.tone)}>{ALERT_MARK[alert.kind]}</Text>
         </Box>
         <Box flexShrink={1} {...clip(kit)}>
           <Text wrap="truncate-end" bold>
@@ -487,8 +558,18 @@ export function graphicsFor(columns: number, tier: CellTier): { stops: number; p
   return { stops, pitch, meter: Math.round(Math.max(56, Math.min(280, ctxPx))) }
 }
 
+/** What the cache's clock says to a screen reader. */
+function cacheAlt(cache: NonNullable<HudModel['cache']>): string {
+  if (cache.parked !== undefined) return `Prompt cache ${cache.parked.text} while the watcher parks the run`
+  return cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
+}
+
 /** The prompt cache's words in its cell: what it holds while warm, its time left near the expiry or while you are away, what became of it. */
 function cacheWord(cache: NonNullable<HudModel['cache']>, tier: CellTier): string {
+  if (cache.parked !== undefined) {
+    if (tier === 'compact') return cache.parked.short
+    return tier === 'wide' && cache.cachedTokens > 0 ? `${cache.parked.text} · ${fmt.tokens(cache.cachedTokens)}` : cache.parked.text
+  }
   if (cache.recentMiss !== null || cache.warmth !== 'warm') return cache.text
   // A turn's requests keep the cache warm; its time left matters only near the expiry (a long call).
   const left = cache.leftMs === null || (cache.isInUse && cache.tone !== 'warn') ? null : cache.text
@@ -552,7 +633,7 @@ export function hudCells(hud: HudModel, columns: number): Cell[] {
     cells.push({ key: 'cache', caption: caption('Cache'), parts: [{ key: 'v', value: none() }], weight: WEIGHT.cache })
   } else {
     const glyphTone: Tone = cache.tone === 'normal' ? 'info' : cache.tone
-    const alt = cache.warmth === 'warm' ? `Prompt cache warm${cache.leftMs === null ? '' : `, about ${cache.text} left`}` : `Prompt cache ${cache.text}`
+    const alt = cacheAlt(cache)
     cells.push({
       key: 'cache',
       caption: caption('Cache'),
@@ -562,8 +643,23 @@ export function hudCells(hud: HudModel, columns: number): Cell[] {
   }
 
   // Machine: CPU and memory, each a slim level bar and its percentage, from the sampler's live readings.
+  // While a watcher parks the run nothing runs, so the cell counts down to its wake instead.
   const load = hud.load
-  if (load === null || (load.cpu === null && load.ram === null)) {
+  const watcher = sleepingWatcher(hud)
+  if (watcher !== null) {
+    cells.push({
+      key: 'machine',
+      caption: caption(tier === 'compact' ? 'Wakes' : 'Watcher'),
+      parts: [
+        {
+          key: 'v',
+          graphic: { source: svgStateIcon('sleeping', 14), alt: `Watcher ${watcher.id} wakes the run at ${watcher.at}`, width: 16, height: 14 },
+          value: [{ text: watcher.left, isBold: true }, ...(tier === 'compact' ? [] : [{ text: ` · ${watcher.at}`, isDim: true }])],
+        },
+      ],
+      weight: WEIGHT.machine,
+    })
+  } else if (load === null || (load.cpu === null && load.ram === null)) {
     cells.push({ key: 'machine', caption: caption('Machine'), parts: [{ key: 'v', value: none() }], weight: WEIGHT.machine })
   } else {
     const isWide = tier === 'wide'

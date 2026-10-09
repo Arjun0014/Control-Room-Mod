@@ -10,6 +10,7 @@
 
 import { LIMITS } from '../constants'
 import type { HandoffRecord } from './handoff'
+import { type RunOps, emptyOps } from './ops'
 import { type Plan, emptyPlan } from './plan'
 import type { RunQuest } from './quest'
 
@@ -67,6 +68,12 @@ export type Run = {
   quest?: RunQuest
   /** The latest handoff: its health when the notes were checked, and the fresh context's continuity. Absent before 1.2.0. */
   lastHandoff?: HandoffRecord | null
+  /**
+   * The run over time (features/ops.ts): the Mission Queue, the Decision Inbox, Watchers, the Run
+   * Budget. Kept with the run, so it survives /clear, handoffs, reloads and a resumed session.
+   * Absent before 1.6.0; read through `opsOf`, which validates it.
+   */
+  ops?: RunOps
 }
 
 export function newSession(id: string, index: number, start: SessionStart, now: number): SessionEntry {
@@ -109,6 +116,7 @@ export function newRun(input: {
     sessions: [newSession(input.sessionId, 1, input.start, input.now)],
     plan: emptyPlan(),
     objective: null,
+    ops: emptyOps(),
   }
 }
 

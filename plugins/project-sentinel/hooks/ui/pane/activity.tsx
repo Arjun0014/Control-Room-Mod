@@ -5,7 +5,9 @@
  * doing now and next; what it did this turn, in a few counted lines; what
  * needs a look (Attention); how the checks went (Validation); and the files
  * it changed, real project changes first, generated and temporary files
- * folded apart. Every tool call, in order, is the secondary view.
+ * folded apart. Operations is the run over time (ui/pane/operations.tsx):
+ * what waits for the person, work queued for later, watchers, agents, the
+ * budget. Every tool call, in order, is the last view.
  */
 
 import type { RenderElement } from 'claude-code'
@@ -16,6 +18,7 @@ import type {
   AttentionView,
   ChangeGroupView,
   FileChangeView,
+  OpsView,
   PaneModel,
   QuestView,
   Tone,
@@ -45,6 +48,7 @@ import {
   workTrack,
 } from '../primitives'
 import { ACCENT, G, STATE_MARK, SVG_COLOR, TIMELINE, toneProps } from '../theme'
+import { operationsPage } from './operations'
 
 const CALL_STATUS: Record<string, { glyph: string; tone: Tone }> = {
   running: { glyph: G.run, tone: 'info' },
@@ -486,7 +490,14 @@ function rawCard(kit: Kit, view: ActivityView): RenderElement {
 // ---------------------------------------------------------------------------
 // The page
 
-export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | undefined): RenderElement {
+/** Operations' label in the switch: a count of what waits for the person, when anything does. */
+function opsLabel(ops: OpsView | undefined): string {
+  if (ops === undefined) return 'Operations'
+  const review = ops.decisions.filter(d => d.status === 'open').length + (ops.held === null ? 0 : 1) + ops.watchers.filter(w => w.needs !== null).length
+  return review === 0 ? 'Operations' : `Operations (${review})`
+}
+
+export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | undefined, ops?: OpsView): RenderElement {
   const { Box } = kit.ui
   const sub = pane.activitySub
   const focus = pane.settings.focus
@@ -501,13 +512,23 @@ export function activityPage(kit: Kit, pane: PaneModel, view: ActivityView | und
           value: sub,
           options: [
             { value: 'summary', label: 'Summary' },
+            { value: 'ops', label: opsLabel(ops) },
             { value: 'raw', label: view === undefined || view.sessionTools === 0 ? 'All tool calls' : `All tool calls (${view.sessionTools})` },
           ],
-          onSelect: v => kit.actions.setActivitySub(v === 'raw' ? 'raw' : 'summary'),
+          onSelect: v => kit.actions.setActivitySub(v === 'raw' ? 'raw' : v === 'ops' ? 'ops' : 'summary'),
         }).element
       }
     </Box>
   )
+
+  if (sub === 'ops') {
+    return (
+      <Box flexDirection="column">
+        {switcher}
+        {operationsPage(kit, pane, ops)}
+      </Box>
+    )
+  }
 
   if (view === undefined) {
     return (

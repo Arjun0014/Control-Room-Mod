@@ -14,13 +14,13 @@
 
 import type { RenderElement } from 'claude-code'
 
-import type { ChainRunView, ChainSessionView, ChainView, HudModel, PaneModel } from '../../../types'
+import type { ChainRunView, ChainSessionView, ChainView, HudModel, OpsView, PaneModel } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
 import { buttons, card, clip, columns, emptyState, listItem, meterBar, pair, row, segmented, spaced, steps, stepper, switchControl } from '../primitives'
 import { ACCENT, G, toneProps } from '../theme'
-import { cacheCards } from './cache'
-import { handoffCard } from './handoff'
+import { cacheCards, coldResumeCard } from './cache'
+import { handoffCard, resumeCard } from './handoff'
 
 const END: Record<string, string> = {
   handoff: 'handed off',
@@ -88,7 +88,7 @@ function runChart(kit: Kit, run: ChainRunView, threshold: number | null, window:
   )
 }
 
-export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: ChainView | undefined): RenderElement {
+export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: ChainView | undefined, ops?: OpsView): RenderElement {
   const { Box, Text } = kit.ui
   const a = pane.autopilot
   const s = pane.settings.autopilot
@@ -123,6 +123,9 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
         : `The context is cleared${s.autoContinue ? ', and Claude carries on by itself' : ''}, with your settings.`
 
   const current = chain?.current ?? null
+  // Ready to resume sits by the handoff while Autopilot waits for the person to start the fresh context.
+  const isAwaiting = a.state === 'awaiting'
+  const resume = ops === undefined ? null : resumeCard(kit, ops.resume, isAwaiting)
 
   return (
     <Box flexDirection="column">
@@ -170,6 +173,8 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
           ),
         ],
       })}
+
+      {isAwaiting ? resume : null}
 
       {card(kit, {
         key: 'ap-settings',
@@ -233,6 +238,10 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
       })}
 
       {cacheCards(kit, pane.cache, pane.settings.cache)}
+
+      {ops === undefined ? null : coldResumeCard(kit, ops.cold, pane.cache, pane.settings.cache)}
+
+      {isAwaiting ? null : resume}
 
       {pane.handoff === null ? null : handoffCard(kit, pane.handoff)}
 

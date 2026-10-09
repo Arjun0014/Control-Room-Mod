@@ -127,6 +127,8 @@ export function guardrailsPage(kit: Kit, pane: PaneModel, permissions: Permissio
         title: 'Subagents',
         accent,
         aside: pane.agents.running.length > 0 ? `${pane.agents.running.length} running` : undefined,
+        // What may be started lives here; what runs, with its controls, in Activity → Operations.
+        link: { label: 'See what is running', onPress: kit.actions.openOps },
         rows: k => [
           row(k, {
             key: 'sa-mode',

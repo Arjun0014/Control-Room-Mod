@@ -29,6 +29,10 @@ One plugin gives you:
   holds the cache while you are away
 - **run progress** that survives those handoffs, and an **Activity** view that leads with what
   needs a look
+- **Operations**, the run over time: work you queue for Claude for later, decisions Claude leaves
+  for you instead of stopping, **watchers** that park the run until a result is due and then wake
+  it, a **Cold Resume Guard** that asks before a large conversation whose cache has lapsed is
+  re-read, the agents actually running, and an optional run budget
 - **answer styles**: brief, Simplified Technical English, mission-control status calls, or a quest
   log with XP for verified progress
 - policies for effort, finishing the job, models, subagents, machine load and risky actions, with
@@ -36,7 +40,7 @@ One plugin gives you:
 - **Kit**, if you like: a small Claude-orange creature above the status bar that shows what Claude
   is doing, and answers a click
 
-> **Status: 1.5.1.** Project Sentinel is built on Claude Code's function-hooks plugin API ("mods"),
+> **Status: 1.6.0.** Project Sentinel is built on Claude Code's function-hooks plugin API ("mods"),
 > which is still early access and may change between Claude Code releases. It is verified on
 > Claude Code **2.1.289**, **2.1.293** (the engine Claude Desktop runs now) and **2.1.295** (the
 > CLI) on Windows 11. See [Compatibility](#compatibility).
@@ -131,6 +135,32 @@ are native buttons and popups and the meters are drawn as graphics. What came af
 two-line status bar, Activity's charts, the answer styles, the Cache card and Kit) has not been
 photographed on Desktop yet.</sub>
 
+### Operations
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/cli-operations.png" alt="Activity, Operations in the terminal: Needs review with nothing waiting and the switch that offers Claude the decision tool; the Mission Queue with its field, Deliver at the next safe boundary, and two items, each reading Goes into W-1's fresh wake (17:41), with move, Edit, Deliver now and Delete; Watchers with W-1 for the S-002 result at 17:41, in 1h 55m, Fresh, with Wake now, Edit, Pause, Write notes first and Delete"></td>
+    <td width="50%"><img src="docs/images/desktop-operations-preview.png" alt="Activity, Operations as the desktop preview draws it: a decision Claude left, Postgres or SQLite for the cache store, with a button for each option, a field for your own words and Not needed; the Mission Queue with two items for after the handoff; the watcher form with quick times and the Smart strategy; Agents with Claude ready; a run budget at $1.25 of $30"></td>
+  </tr>
+  <tr>
+    <td>In the terminal: two items queued for the fresh context that watcher W-1 will start when it wakes the run at 17:41.</td>
+    <td>On Desktop, in the preview: a decision Claude left for you, a button per option and a field for your own words; below it the queue, the watcher form, the agents and a run budget.</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/images/cli-status-bar-sleeping.png" alt="The terminal status bar while the watcher parks the run: Kit curled up asleep with zZ above it; the headline reads Sleeping until 17:41, S-002 result, fresh wake, no keep-alive; below, WATCHER with a clock and 1h 55m, and RUN $0.00"><br>
+  <img src="docs/images/desktop-status-bar-review.png" alt="The Desktop status bar after a turn, as the preview draws it, with an amber Review 1 chip beside Lint failing and the Control Room button"><br>
+  <img src="docs/images/desktop-status-bar-sleeping.png" alt="The Desktop status bar while a watcher holds the cache, as the preview draws it: Sleeping until 17:34, S-002 result, cache held warm; the Cache cell reads held warm, 240k, and the fourth cell is the Watcher, 2h, 17:34">
+</p>
+
+<sub>Project Sentinel 1.6.0. The terminal images are captures of Claude Code 2.1.295 in a 150-column
+Windows console, set up with `/cr` commands alone (`/cr queue --handoff`, `/cr watch in 2h … --fresh`,
+`/cr budget $30`), so no model turn ran. The Desktop images are drawn by
+[tools/desktop-preview](tools/desktop-preview/README.md) from the trees the plugin draws on the
+`desktop` surface, with the app's own layout rules; its font and colors are close guesses, and
+Operations has not been photographed in the app yet.</sub>
+
 ## Features
 
 | System | What it does | Default |
@@ -142,6 +172,12 @@ photographed on Desktop yet.</sub>
 | **Run progress** | The run's objective and milestones, done of total, counted from Claude's own task list and carried across handoffs, so the work meter keeps climbing while the context meter starts over. A milestone may also be *verifying* (with its evidence) or *blocked* (with what it waits for). Where Claude Code offers no task list (its task tools are off by default in 2.1.29x), Project Sentinel gives Claude a small `milestones` tool to keep one. | On |
 | **Cache Guardian** | The main conversation's prompt cache, from the token counts Claude Code reports for each request: how much is cached, how long it stays warm (the cache's lifetime is learned), the share read from the cache, and why each rebuild happened (a model or effort switch, the model router, changed policies, a new tool, compaction, idling past the lifetime), with what would avoid the next. A model switch that would re-send 100k+ warm tokens is confirmed first; the model router no longer downgrades a conversation whose cache is warm (from 20k tokens); while it is warm, setting changes reach Claude as notes instead of rewriting the cached system prompt. | On |
 | **Keep warm** | Refreshes the prompt cache shortly before it lapses while you are away, by re-sending the last request once (the transcript never sees it), for up to an idle limit you set. Each refresh costs tokens, mostly cheap cache reads. Each refresh is then checked against the conversation's own next request: *VERIFIED* when it read the cache after the expiry the refresh replaced, *FAILED* (and Keep warm pauses) when it rebuilt with nothing changed. `/cr cache` lists them. | Off |
+| **Mission Queue** | Work you give Claude for later without interrupting it: from Activity → Operations (*Add work for later*, with when it goes) or `/cr queue <text>`. Each item goes only at a boundary: the next safe one (the milestone under way completes or the turn ends), after this turn, after the current milestone, or into the next fresh context. Never into a turn's reasoning: an item due mid-turn goes with the next batch of tool results, otherwise as a prompt of its own when the turn ends. Edit, reorder, deliver now or delete; kept with the run across `/clear`, handoffs, reloads and resumed sessions, delivered once. | On |
+| **Decision Inbox** | Claude is offered one tool, `decision_request`, for a choice that is yours and need not stop the work (which approach, whether to delete generated files, whether to publish once CI passes). It waits in Activity → Operations → *Needs review* with its options and a field for your own words; `/cr decisions` lists them, `/cr decide D-2` asks in Claude Code's own dialog. The answer reaches Claude with its next tool results while it works, as a prompt of its own when the run waits on it, else with your next message. Claude Code's permission prompts and confirmations are never deferred here. | On |
+| **Watchers** | Park the run until a time, then wake Claude to check what it was waiting for: Operations → *Watchers* or `/cr watch in 2h S-002 result` (`at 14:00`, `tomorrow at 9am`; an ambiguous `at 2:30` is asked, never guessed). *Keep warm* holds the conversation's cache to the wake, *Fresh* spends nothing and wakes in a fresh context from the handoff notes, *Smart* chooses and says why. A watcher never clears a run that moved since it was armed: it says *Watcher due* and offers Check now, Reschedule or Dismiss. A fresh wake needs healthy resume state. Watchers run while Claude Code runs (no daemon is installed); one due while it was closed waits for you when the session is open again. The *Scout* suggests one when Claude says it will check back at a time (Off, Suggest, or Arm explicit waits). | On (Scout: Suggest) |
+| **Cold Resume Guard** | Before a message is sent into a large context (100k tokens by default) whose prompt cache has surely lapsed, Claude Code's own dialog asks first: *Continue full session*, *Start fresh from resume state* (only when Context → *Ready to resume* is ready), *Compact first* (it reads the context once), or *Cancel* (the message comes back to the prompt box). It says why the cache lapsed, and a dollar figure only from Claude Code's own price for the model; tokens otherwise. | On |
+| **Agent Command Center** | What Claude Code reports about the session's agents, and nothing else: status, type, elapsed time, what each is doing, model, result or failure, parent. *Stop* and *Message* are Claude Code's own `TaskStop` and `SendMessage`, offered only for agents that take them. Guardrails says what Claude may start; Operations shows what runs. | Always |
+| **Run Budget** | Optional limits on the run's cost (as Claude Code reports it), wall-clock time and handoffs. Said once at 80%; at a limit: notify only, ask before Project Sentinel starts more work by itself, or have Claude finish the milestone and pause. Nothing stops a tool call or a turn under way. | Off |
 | **Activity** | The run's milestones, then where this turn's time went (a strip colored by reading, editing, running and checking) and a few counted lines. What needs a look comes next: failures nothing has fixed (with the line of output that says why), refusals, slow calls. Then the checks (tests, build, type-check, lint), each run a dot, and every changed file grouped as code, tests, docs and config, each with its diffstat and its diff. Every tool call is the secondary view. | `/cr`, Activity |
 | **Session chain** | Follows a run across context resets: sessions, times, peak context, cost per session as Claude Code reports it, total cost, handoffs. | On |
 | **Frontier Max** | Senior-engineer standards in the system prompt (verify, finish, report honestly), plus the strongest reasoning effort the model supports. Models without an effort setting get none, never a fake one. It is in the first request of a session, after a `/clear` or a compaction, and when turned on mid-session (a note while the cached system prompt is held). Behavior → Frontier Max says how it reached Claude and at what effort; `/cr diagnostics` shows it request by request (fingerprints only). | Off |
@@ -155,7 +191,7 @@ photographed on Desktop yet.</sub>
 | **Machine load** (Resource Governor) | Advisory CPU and memory ceilings (Low, Medium, High or Custom), from a lightweight machine-wide sampler. Claude is told about pressure mid-task, extra heavy jobs can be held back, and only Claude-started background jobs can be stopped. It is not an OS quota. | Off |
 | **Permissions** (Permission Policy) | Default, Ask or Deny per category: package installs, network, downloads, project edits, edits outside the project, deleting files, commits, push, force push and resets, deploy and publish, and dangerous commands. *Ask* always asks you first, in Claude Code's own dialogs, even in a permission mode that would not ask; *Deny* refuses. It never answers a permission prompt for you, and never loosens a deny, plan mode or your organisation's settings. | Safe defaults |
 | **Profiles** | Normal, Frontier Max, Low Resource, Release / QA and your own. Setup shows exactly what changed since you applied one. | Normal |
-| **Kit** (the companion) | A small Claude-orange creature in a lane above the status bar, in the terminal and on Desktop, that shows what Claude is doing: pacing while it thinks, typing while it works, reading in round glasses while it searches, watching a check, a dance with confetti at a green finish, a facepalm at a failure, a question mark when the run needs you, fanning itself on a busy processor, tending a small fire while Keep warm holds the cache, dozing as the cache nears its expiry, carrying the notes off at a handoff and walking back in, curled up asleep when nothing happens. What it does comes in short episodes picked at random per mood, never the same twice running, and it walks to where it has not been lately, so it uses the whole status bar. A touch reacts by where it lands: a pat on the head, a boop on the nose, a tail flick, a pet on its body (a purr, a roll for a belly rub, a blush…); a few in a row make it giggle, then dizzy. It never jumps: it walks, turns and sits down. Calm by design; *Reduce motion* holds it still. | Off |
+| **Kit** (the companion) | A small Claude-orange creature in a lane above the status bar, in the terminal and on Desktop, that shows what Claude is doing: pacing while it thinks, typing while it works, reading in round glasses while it searches, watching a check, a dance with confetti at a green finish, a facepalm at a failure, a question mark when the run needs you, fanning itself on a busy processor, tending a small fire while Keep warm holds the cache (or a watcher holds it to its wake), curled up asleep while a watcher parks the run, dozing as the cache nears its expiry, carrying the notes off at a handoff and walking back in, curled up asleep when nothing happens. What it does comes in short episodes picked at random per mood, never the same twice running, and it walks to where it has not been lately, so it uses the whole status bar. A touch reacts by where it lands: a pat on the head, a boop on the nose, a tail flick, a pet on its body (a purr, a roll for a belly rub, a blush…); a few in a row make it giggle, then dizzy. It never jumps: it walks, turns and sits down. Calm by design; *Reduce motion* holds it still. | Off |
 | **Git** (terminal) | The branch, how far it is ahead of or behind its upstream, and the uncommitted files, in Overview and `/cr status`, from one read-only `git status` after a turn. Desktop's Git strip is the app's own; plugins cannot draw, hide or move it. | In a repository |
 
 Cost is shown only as Claude Code reports it, and "—" means it was not reported. Progress is
@@ -270,13 +306,14 @@ live in the panel.
 
 | Item | Meaning |
 | --- | --- |
-| `◎ Linting · step 3 of 4` | **The headline**: what the run is doing, with a mark for its state. While a turn runs: the milestone under way in Claude's words, else the running call, else `Thinking`; a check running or a milestone being verified is `◎`; a call past 20 seconds adds its time; `◆ Waiting for you to approve: git push` while a call set to *Ask* waits for your answer. Between turns, what the run waits for comes first: `◷ Waiting for the test run` (a background job), `◷ Waiting to check back · wakes at 06:12` (a scheduled wake-up), `⊘ Blocked: …` (something only you can give), `◆ Waiting for your answer` (Claude asked you something). Otherwise what the last turn did in counted words (`✓ Changed 4 files · Ran tests 3×, passing after a fix`), `✓ All 6 milestones done`, or before the first turn the run's objective (`○ Ready` without one). A handoff under way reads `↻ Writing the handoff notes`. |
-| `▲ RAM 83%` | **Chips**: only what needs a look, the most pressing first. `✗ Lint failing` (a check failing, by name), `▲ 2 issues` (calls that need a look), `Kept going ×1` (the lazy-exit guard continued the turn), `▲ CPU 91%` or `▲ RAM 92%` near or over a ceiling (the terminal; Desktop has a Machine cell), `2 agents`, `★ Lv 4` with the Quest log style. |
+| `◎ Linting · step 3 of 4` | **The headline**: what the run is doing, with a mark for its state. While a turn runs: the milestone under way in Claude's words, else the running call, else `Thinking`; a check running or a milestone being verified is `◎`; a call past 20 seconds adds its time; `◆ Waiting for you to approve: git push` while a call set to *Ask* waits for your answer. Between turns, what the run waits for comes first: `◷ Waiting for the test run` (a background job), `◷ Waiting to check back · wakes at 06:12` (a scheduled wake-up), `⊘ Blocked: …` (something only you can give), `◆ Waiting for your answer` (Claude asked you something). `◆ Needs you · 1 decision` (a decision Claude left blocks the run), `◆ Watcher due: S-002 result` (a watcher waits for you), `◷ Sleeping until 14:00 · S-002 result` (a watcher parks the run, with whether the cache is held warm or the wake is fresh). Otherwise what the last turn did in counted words (`✓ Changed 4 files · Ran tests 3×, passing after a fix`), `✓ All 6 milestones done`, or before the first turn the run's objective (`○ Ready` without one). A handoff under way reads `↻ Writing the handoff notes`. |
+| `▲ RAM 83%` | **Chips**: only what needs a look, the most pressing first. `✗ Lint failing` (a check failing, by name), `▲ 2 issues` (calls that need a look), `Kept going ×1` (the lazy-exit guard continued the turn), `▲ CPU 91%` or `▲ RAM 92%` near or over a ceiling (the terminal; Desktop has a Machine cell), `2 agents`, `★ Lv 4` with the Quest log style. The orchestration layer's chips are buttons that open Activity → Operations: `▲ Review 2` (amber: decisions waiting for you), `◷ Watcher 1h 42m` (a watcher armed while the run is not asleep), `● Queued 3` (queued work due when the turn ends), `▲ Cost $25.00 of $30` (the run budget near or at a limit). None shows while there is nothing to say. |
 | `◆ Control Room` | Opens or closes the panel: a filled button, in Claude orange while the panel is open (`◆ Open` or `◆ Close` when the bar is narrow). |
 | `WORK ●━●━◎─○ 2/4` | The run's milestones, done of total, from Claude's own task list: `●` done, `◉` under way, `◎` being verified, `◌` waiting or blocked (amber), `○` to come. It carries across handoffs, so it keeps climbing while Context starts over. |
 | `CONTEXT ▇▇▇▇█▇▇ 47% · hands off 80%` | How much of the context window is in use: a solid bar, green, amber near the handoff point and red past it (with Autopilot off, against 90% of the window), and the handoff point as an orange notch. It starts over after a handoff, and a handoff under way says so beside it (`Handoff soon`, `Writing the handoff`, `Starting fresh`, `Resuming`, `Waiting for you`). |
 | `CACHE ● rebuilt 446k` | The prompt cache, only while it can matter: when you are away, a clock face emptying as its lifetime runs out and the time left (`◕ 42m left`; `lapsed?` when it may have lapsed), amber near the expiry with no refresh coming; and for a few minutes after a costly rebuild, `rebuilt 446k`. While Claude works its requests keep the cache warm, so the terminal leaves it out (Desktop keeps its cell: `warm · 345k`), and it never reads `lapsed?` during a turn. |
 | `RUN $4.18` | The whole run's cost as Claude Code reports it, across handoffs (`+` when some session's cost was not reported). This session's own cost is in the panel. |
+| `WATCHER ◷ 1h 42m` | Only while a watcher parks the run: the time to its wake. On Desktop it takes the Machine cell's place (nothing runs, so the machine is not the story). |
 
 Width decides the detail. The names (`WORK`, `CONTEXT`, `RUN`) show from 72 columns, docked
 beside the panel included; the meter and the track shorten before the least important reading
@@ -299,7 +336,12 @@ Work                       Context · hands off at 70%    Cache              Mac
 ```
 
 When a handoff is about to happen, a line above offers **Hand off now** and **Later**; if a
-handoff ever waits for you, it offers **Start fresh**. With the companion on (Setup →
+handoff ever waits for you, it offers **Start fresh**. The same line asks about a watcher that waits
+for you (**Check now**, **Start fresh** when that is safe, **In 30m**, **Dismiss**), a message the
+Cold Resume Guard kept (**Put back**, **Send now**, **Discard**), the run budget holding automation
+(**Continue anyway**, **Budget ›**), and the Scout's suggestion (*Claude seems to be waiting for a
+future result. Check the leaderboard again in two hours?* **Create watcher**, **Change time**,
+**Ignore**). With the companion on (Setup →
 *Companion*, `/cr companion on`), Kit lives in a lane above the headline: in the terminal it
 stands on the status bar's top edge, on Desktop it is drawn in finer pixels. Give it a click.
 
@@ -320,11 +362,11 @@ Choosing a section starts its page at the top, and every page ends with **↑ Se
 
 | Section | Answers |
 | --- | --- |
-| **Overview** | How is this run doing? The run (its number, the session, its cost and objective; in the terminal, the Git branch), then its three lifecycles as cards, Work, Context and Cache, each with how it starts over, then what is happening now and the machine. Then the profile, and one card per section with its systems, each with its switch and one line of state. Anything that needs you sits on top. |
-| **Context** | When does Claude hand off, and what does the cache hold? The Autopilot's state, meter and settings; the prompt cache (Cache, then Cache health with the recent rebuilds); the last handoff (what it left, what the fresh context picked up); then the run's sessions and earlier runs. |
+| **Overview** | How is this run doing? The run (its number, the session, its cost and objective; in the terminal, the Git branch), then its three lifecycles as cards, Work, Context and Cache, each with how it starts over, then what is happening now and the machine. An **Operations** card only while something is in it (Review 2 · Watcher · wakes in 1h 42m · Queued 3 · Agents 2 active · Budget). Then the profile, and one card per section with its systems, each with its switch and one line of state. Anything that needs you sits on top. |
+| **Context** | When does Claude hand off, and what does the cache hold? The Autopilot's state, meter and settings; the prompt cache (Cache, then Cache health with the recent rebuilds); the **Cold Resume Guard** (its switch, the size it asks above, whether it would ask now and why); **Ready to resume** (what a fresh context would get: the run, its milestones, what it reads, what it carries, the next action, or why a fresh start is not offered); the last handoff (what it left, what the fresh context picked up); then the run's sessions and earlier runs. |
 | **Behavior** | How does Claude work? The answer style (with a line written in it), Frontier Max, Release check, the lazy-exit guard, the model router and run progress. Finer settings appear only while a system is on. |
 | **Guardrails** | What may Claude do, and how hard may it push the machine? Permissions, subagents, machine load with live meters, and Claude's background jobs. |
-| **Activity** | How far is the run, and what needs a look? The Quest card with the Quest log style, run progress (objective, milestones, now and next, checks), this turn as a time strip and a few counted lines, Attention, Validation with each check's runs, and the changed files by kind, each with its diffstat and diff. Every tool call, and Focus view's switches, below. |
+| **Activity** | How far is the run, and what needs a look? *Summary*: the Quest card with the Quest log style, run progress (objective, milestones, now and next, checks), this turn as a time strip and a few counted lines, Attention, Validation with each check's runs, and the changed files by kind, each with its diffstat and diff. *Operations*: Needs review, Mission Queue, Watchers, Agents and Run budget (see [Features](#features)). *All tool calls*: every call, and Focus view's switches. |
 | **Setup** | Profiles (with exactly what changed), display (the status bar, live CPU and memory, notifications, the companion, reduce motion, open at start), and about. |
 
 ### Commands
@@ -345,7 +387,15 @@ surfaces without the panel.
 | `/cr guard on\|off` · `/cr qa on\|off` · `/cr focus on\|off` | Lazy-exit guard, Release check, Focus view |
 | `/cr style standard\|brief\|ste\|mission\|quest` | How Claude writes to you (no argument lists them) |
 | `/cr resources off\|low\|medium\|high\|<cpu>/<ram>` | Machine load level, or custom ceilings such as `60/80` |
-| `/cr agents unlimited\|off\|ask\|<n>` | Subagents |
+| `/cr agents` | What is running now (Activity → Operations → Agents) |
+| `/cr agents unlimited\|off\|ask\|<n>` | What Claude may start: subagents |
+| `/cr queue <text>` | Work for later, at the next safe boundary; `--turn`, `--milestone` or `--handoff` first chooses another. Typed while Claude works, it runs when the turn ends and never enters it |
+| `/cr queue` · `/cr queue list` · `/cr queue now\|cancel <id>` | Open the queue to type in · list it · deliver one now or delete it |
+| `/cr watch in 2h <what>` · `/cr watch at 14:00 <what>` | Park the run until then and wake Claude to check (`--warm` or `--fresh`; Smart by default). An ambiguous time is asked |
+| `/cr watchers` · `/cr watch now\|pause\|resume\|cancel <id>` | The watchers, and each one's controls |
+| `/cr decisions` · `/cr decide <id> [answer]` | What Claude left for you to decide; answer one (in Claude Code's dialog when no answer is typed; an option's number or words pick it) |
+| `/cr budget [$30] [6h] [handoffs 5] [notify\|ask\|finish]` · `/cr budget off\|continue` | The run budget: set, show, remove, or let the run go on past a limit |
+| `/cr resume` | What a fresh context would get now, and whether a fresh start is offered |
 | `/cr router off\|balanced\|performance\|economy\|custom` | Model router |
 | `/cr cache` | The prompt cache in words: its state and lifetime, what it holds, Keep warm, and the recent rebuilds with what would have avoided them |
 | `/cr cache keep on\|off` · `/cr cache idle 2h` | Keep warm, and how long it holds the cache while you are idle (`45m`, `2h`) |
@@ -379,15 +429,22 @@ Conflicts are resolved in a fixed order (higher wins):
 3. **Your live actions**: an interrupt cancels pending automation. A prompt you type while a
    handoff is pending is honoured, with a reminder.
 4. **Autopilot**: once a handoff is pending, the guard stands down, and no new large work is
-   encouraged. Keep warm stands down too when the handoff will clear the context.
-5. **Machine load**: constrains *how* (parallelism, heavy jobs), never *whether*. It applies
+   encouraged. Keep warm stands down too when the handoff will clear the context. Queued work,
+   answers and watcher wakes wait until the handoff is done (work queued for after the handoff
+   rides the fresh context's first message).
+5. **Operations**: Project Sentinel starts a turn of its own (queued work, an answer, a watcher's
+   wake) only at a boundary, one at a time, and never while a turn runs, a handoff is under way, a
+   question is open or background work will bring the turn back. A watcher never clears a run that
+   moved since it was armed. At a run budget limit set to Ask or Finish, none of this (nor
+   Autopilot's continuation) starts without your yes.
+6. **Machine load**: constrains *how* (parallelism, heavy jobs), never *whether*. It applies
    under Frontier Max too.
-6. **Subagents**: hard limits that Frontier Max and the router cannot exceed.
-7. **Frontier Max**: vetoes router downgrades of the main conversation (unless the router is Custom).
-8. **Lazy-exit guard**: subordinate to everything above and to its own caps.
-9. **Model router**: acts only where nothing above constrains it, and never downgrades the main
+7. **Subagents**: hard limits that Frontier Max and the router cannot exceed.
+8. **Frontier Max**: vetoes router downgrades of the main conversation (unless the router is Custom).
+9. **Lazy-exit guard**: subordinate to everything above and to its own caps.
+10. **Model router**: acts only where nothing above constrains it, and never downgrades the main
    conversation while a prompt cache of 20k tokens or more is warm.
-10. **Focus view**: presentation only. It never changes what Claude reads.
+11. **Focus view**: presentation only. It never changes what Claude reads.
 
 Overview shows each system's *effective* state, for example "Lazy-exit guard ● On  Paused
 during the handoff".
@@ -402,7 +459,18 @@ runs one read-only `git status` after a turn and keeps only the branch and count
 its own plugin store, and once, after the rename, reads the store it kept as Control Room to
 carry your settings over (it reads `CLAUDE_CONFIG_DIR`, `USERPROFILE` and `HOME` only to find it). Claude, not the plugin, writes the handoff file. Where Claude Code has
 no task list of its own, Project Sentinel offers Claude one small tool, `milestones`, whose answer
-only records the list for run progress. It never answers a permission prompt for you.
+only records the list for run progress; with the Decision Inbox on (the default) it offers
+`decision_request`, whose answer only records the question for you. It never answers a permission
+prompt for you.
+
+The orchestration layer keeps what you give it with the run, in the same store: queued work in your
+words, Claude's decision questions and your answers, watcher labels and times, the run budget, and
+Claude Code's own cache-write price per model (for the Cold Resume Guard's figure). It submits
+prompts only of fixed kinds, at a boundary: your queued words, your answers, a watcher's wake, the
+first prompt of a fresh context it started. When you press them, *Stop* and *Message* on an agent
+use Claude Code's own `TaskStop` and `SendMessage`, and the Cold Resume Guard's *Cancel* puts your
+message back in the prompt box (Claude Code's `$.prompt.fill`); a message it could not put back is
+kept in memory only, never stored.
 
 Two features send requests to your configured model through Claude Code's own client, as every
 turn does: the guard's optional smart check (the last request and answer), and **Keep warm**,
@@ -420,9 +488,10 @@ directory shows it.
 | --- | --- |
 | Claude Code 2.1.293, terminal CLI (Windows 11) | Verified live with real models (Sonnet 5.5, Opus 5.5): Autopilot end to end (four runs: threshold crossed mid-turn, the handoff turn, notes verified, `/clear`, the fresh session, the continuation, milestones and objective carried, one handoff where a low threshold used to loop); Keep warm on the 1-hour and the 5-minute cache, its self-check verified, its figures identical to Claude Code's own `prompt_cache`; a model switch confirmed first and its rebuild named as Claude Code names it; policy and effort changes while warm. The 1.3.0 status bar with Kit and every panel section in a real console at 80, 100 and 150 columns during a scripted turn from the demo driver. 1.4.0 (Haiku 5.5, a frozen test copy): a live Autopilot handoff whose fresh context received its notes as a context block and finished the task; Kit through a scripted demo turn and answering clicks in a real console; the cache at the plan's one-hour default from the first request. |
 | Claude Code 2.1.295, CLI (Windows 11) | 1.5.0 verified live with Sonnet 5.5 through a recording proxy (fingerprints and token counts only): Keep warm on the 5-minute and the 1-hour cache, each refresh then VERIFIED by the conversation's own request, and a control without it rebuilding; Frontier Max with its effort in the first request of a session, turned on and off mid-session, after `/clear`, after a compaction and across a reload; the Autopilot chain with `/clear` and with compaction, a prompt queued mid-handoff, a reload mid-handoff and the guard standing down. A clean install into a throwaway configuration; the update from 1.4.1 and a fresh terminal session as a user (panel, status bar, Kit off and on, a head pat, the model switch asking first). |
+| Claude Code 2.1.295, CLI (Windows 11): 1.6.0 | The orchestration layer verified live with Sonnet 5.5 through the recording proxy, on a renamed test copy. Mission Queue: `/cr queue` while idle went as a turn of its own; typed during a turn, Claude Code ran the command when the turn ended and the item went once, after it. Decision Inbox: Claude left a blocking decision with `decision_request`, `/cr decisions` listed it, `/cr decide D-1 Spaces` answered it and Claude acted on the answer. Watchers: one woke the run in its context at its minute; one stood down because a turn ran after it was armed (*nothing sent, nothing cleared*); one due while Claude Code was closed waited for the person when the session was resumed; a Fresh wake ran `/clear` and the fresh context, given the run's milestones and notes, finished the check. Cold Resume Guard, in a real console on a resumed 90k-token session whose cache had lapsed: Claude Code's dialog asked before anything was sent; *Cancel* put the message back in the prompt box and no request went; *Continue* sent it. |
 | Claude Code 2.1.289 and 2.1.292 | Verified: the test suite run on their engines, type-checked against their declarations, live headless runs in the Desktop host protocol (1.2.0 and earlier) |
 | Continuous integration | On every push and pull request: type-check, strict validation of the plugin and the marketplace, the source rules Anthropic's directory reads, and the tests, on Linux, Windows and macOS with the latest Claude Code, and on Linux with 2.1.289 |
-| Claude Desktop Code tab, visual | 1.0.1 and 1.0.2 reviewed in the app (the screenshots above are 1.0.1); 1.2.0's status bar seen in the app (its white bar and overflow are what 1.3.0 fixes). 1.3.0 seen in the app (Claude Desktop 2.26454): the person's review of a release candidate, then the status bar's four cells, Kit and Overview captured read-only from the app's window. 1.4.0's release candidates installed in the person's app (Claude Desktop 2.26454, Claude Code 2.1.293) and captured read-only: the update from Control Room (a session open during it keeps Control Room while Project Sentinel stands by; a fresh session runs Project Sentinel alone, with the settings, runs and cache memory carried over and its run continued), Kit animating through a turn, and the five cells with the Machine cell at two widths. Kit's touch was not tried in the app (the app's window is never clicked). Every layout is also checked on the `desktop` surface in the harness and with [tools/desktop-preview](tools/desktop-preview/README.md), which renders with the app's own layout rules. 1.5.0's Kit was refused by the app's page (seen in the app: its image gave no width, which the page requires of a surface module); 1.5.1's Kit trees pass the page's own check, run from the app's bundle. |
+| Claude Desktop Code tab, visual | 1.0.1 and 1.0.2 reviewed in the app (the screenshots above are 1.0.1); 1.2.0's status bar seen in the app (its white bar and overflow are what 1.3.0 fixes). 1.3.0 seen in the app (Claude Desktop 2.26454): the person's review of a release candidate, then the status bar's four cells, Kit and Overview captured read-only from the app's window. 1.4.0's release candidates installed in the person's app (Claude Desktop 2.26454, Claude Code 2.1.293) and captured read-only: the update from Control Room (a session open during it keeps Control Room while Project Sentinel stands by; a fresh session runs Project Sentinel alone, with the settings, runs and cache memory carried over and its run continued), Kit animating through a turn, and the five cells with the Machine cell at two widths. Kit's touch was not tried in the app (the app's window is never clicked). Every layout is also checked on the `desktop` surface in the harness and with [tools/desktop-preview](tools/desktop-preview/README.md), which renders with the app's own layout rules. 1.5.0's Kit was refused by the app's page (seen in the app: its image gave no width, which the page requires of a surface module); 1.5.1's Kit trees pass the page's own check, run from the app's bundle. 1.6.0's Operations, its chips and the sleeping status bar are checked on the `desktop` surface and in the preview; they have not been seen in the app yet. |
 | The `milestones` tool with a real model | Verified live: Sonnet 5.5 kept outcome-level milestones ("Temperature module", "Index re-exports and README") and carried them, with the objective, across handoffs. Answer styles are tested through the engine only. |
 | macOS and Linux machine-load sampling | Implemented and unit-tested against real `top`, `sysctl` and `/proc` output. Not yet run live. |
 | Mobile and VS Code surfaces | Draw (mobile opens choices in place, as in the terminal; VS Code shows Kit's pose still). Not reviewed visually. |
@@ -460,6 +529,20 @@ directory shows it.
   watched; subagents start their own.
 - **Git in the terminal only.** Desktop shows Git beside the session, and no plugin API reaches that
   strip, so Project Sentinel does not repeat it there.
+- **Watchers live in Claude Code's process.** A watcher is a timer in the running Claude Code: closed
+  (or the machine asleep), nothing wakes. It is kept with the run, and when that session is open
+  again an overdue watcher waits for you (*Watcher was due 43 minutes ago*, **Wake now**); it does
+  not wake by itself then. Project Sentinel installs no daemon, service or scheduled task. Claude
+  Code's own `CronCreate` and `ScheduleWakeup` are session-only too; its cloud routines start other
+  sessions, not this one.
+- **The Cold Resume Guard asks in Claude Code's dialog.** Where no one can be asked (a headless run),
+  it does not ask and the message goes. It knows a cache has lapsed from the lifetime it learned, an
+  hour of quiet (longer than any lifetime), or Claude Code's own word at a resumed session; a cache
+  that may still be warm is never called cold. Its dollar figure comes only from Claude Code's
+  estimate for that model (seen at a model switch or a resume); otherwise it says tokens.
+- **Agents as Claude Code reports them.** No cost per agent (Claude Code reports none); *Stop* and
+  *Message* only where Claude Code's `TaskStop` and `SendMessage` take the agent (background agents
+  and teammates). Decisions from subagents are not taken: the inbox is the main conversation's.
 
 ## Development
 

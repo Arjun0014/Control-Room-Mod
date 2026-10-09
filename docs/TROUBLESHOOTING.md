@@ -218,6 +218,32 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 | "Compaction failed: … not available in a headless (-p / SDK) session" (before 1.5.0) | Desktop and other SDK sessions compact only inside a turn, so the *Compact* continuation (and the fallback when `/clear` is refused) stopped there. Autopilot now runs `/compact` as a command in those sessions and carries on when Claude Code has compacted; the debug log says `autopilot: this session compacts only inside a turn: running /compact`. If nothing compacts within ten minutes it waits for you. |
 | "Control Room reloaded in the middle of a handoff" | The plugin was reloaded (`/reload-plugins`, an update) while a handoff was under way. Autopilot picks up where it was; only when it cannot tell whether a step already happened (the handoff prompt was about to go out, or a compaction) does it wait for you, so nothing runs twice. Press **Hand off now** or **Start fresh**. |
 
+## Operations
+
+Activity → Operations, `/cr queue list`, `/cr watchers`, `/cr decisions` and `/cr budget` show
+the layer in words; `claude --debug-file <path>` traces each step (`ops: Q-1 queued`, `ops: W-1
+due`, `ops: W-1 wakes the run in this context`, `cold resume: asking …`).
+
+| Symptom | Cause and fix |
+| --- | --- |
+| A queued item was not delivered | It goes only at its boundary, and only while the session is free: no turn running, no handoff under way, no approval or question waiting for you, no background job that will bring the turn back. While a watcher parks the run, the queue waits for the wake (**Deliver now** sends it at once). At a run budget limit set to *Ask*, it waits for your yes. *After the handoff* waits for the next fresh context Project Sentinel starts. |
+| "Sent before a reload: check the transcript" | The plugin reloaded while the prompt was on its way, so Project Sentinel cannot tell whether it entered. It never sends it again by itself: look at the transcript, then **Send again** or **Delete**. |
+| `/cr queue` typed while Claude works did nothing yet | `/cr` runs when the turn ends, by design: a slash command and its reply become part of the conversation, and the item must not enter the turn under way. To queue mid-turn without that, use *Add work for later* in Operations. |
+| Claude never uses the Decision Inbox | Behavior is up to Claude: the tool is for choices that are yours and need not stop the work. Check that Operations → Needs review → *Let Claude leave decisions here* is on (it is offered from the next session start after turning it on, or at once in a new session). Permission prompts never go there. |
+| An answer did not reach Claude | A non-blocking answer rides your next message (or **Send now**); while Claude works it goes with the next tool results. A blocking one goes as a prompt of its own once the session is free. |
+| "Watcher due · this run changed since it was armed" | A turn ran (yours, or one you pushed with *Deliver now*), the milestones changed, or the context was cleared after the watcher was armed. It never wakes, let alone clears, a run that moved: **Check now** sends the wake into this context, **In 30m** re-arms it from here, **Dismiss** drops it. |
+| "A fresh wake is not safe now" | A Fresh (or Smart → fresh) wake needs healthy resume state: the run's milestones, and `NEXT_SESSION_PROMPT.md` of 200 bytes or more written after the milestones last changed. Context → *Ready to resume* says what is missing. **Write notes first** on the watcher asks Claude to write them; **Check now** wakes it in this context instead. |
+| "The cache went cold before the wake" | Keep warm did not hold the cache to the wake (it paused itself, or the five-minute cache was past its cap). Waking here would re-read the whole context, so it asks; a Smart watcher with healthy resume state wakes fresh instead. |
+| A watcher did not wake while I was away | Watchers are timers in Claude Code's running process: closed, or the machine asleep, nothing wakes. When the session is open again, an overdue watcher reads *Watcher was due 43 minutes ago* and waits for **Wake now**. No daemon or scheduled task is installed. |
+| "Which one?" for a watcher time | `at 2:30` could be 02:30 or 14:30: pick one, or type `2:30pm` or `14:30`. Times are local, at least a minute and at most a week ahead. |
+| The Cold Resume Guard did not ask | It asks only when the cache has surely lapsed (its known lifetime passed, an hour of quiet, or Claude Code's word at a resume) and the context is at least *Warn above* (100k by default); never for a prompt typed while Claude works, never in a headless run. A cache that may still be warm is never called cold. |
+| The Cold Resume Guard shows tokens, not dollars | It prices only from Claude Code's own estimate for that model, which comes with a model switch or a resumed session. Until one is seen (or after 30 days) it says tokens. |
+| Continuing cost more than the Cold Resume Guard said | The figure is Claude Code's own estimate, of the context it reports at a resume. The request that follows re-writes the whole prompt, which can be larger: seen live, the estimate was $0.36 for 90k tokens, and the request re-wrote 129k tokens, adding $0.52 to the cost Claude Code reports. Read the figure as a lower bound. |
+| *Start fresh from resume state* is missing from its question | The resume state is not healthy; the question says why. Context → *Ready to resume* shows the same. |
+| My message was not sent and is not in the prompt box | Where the box cannot take text back (some Desktop hosts), the message is kept in Operations (and the status bar's alert line): **Put back**, **Send now** or **Discard**. It is kept in memory only, so a restart loses it. |
+| An agent has no Stop or Message | Claude Code's `TaskStop` and `SendMessage` take background agents and teammates only; a foreground agent ends with its turn. An agent shows as running only while Claude Code lists it so. |
+| "Run 41 left open work" | An ended run of this project left watchers, queued work or open decisions. Nothing moves by itself: resume that session to carry it on there, or **Bring them here**. |
+
 ## Permission Policy
 
 - **"Control Room Permission Policy: … is set to Deny"**: change that category in Guardrails →

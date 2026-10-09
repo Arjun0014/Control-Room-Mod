@@ -16,7 +16,7 @@
 
 import type { ModelForkResult, Timer } from 'claude-code'
 
-import type { CacheMissView, CacheView, HudModel, RefreshView } from '../../types'
+import type { CacheMemo, CacheMissView, CacheView, HudModel, RefreshView } from '../../types'
 import { STORE_ENTRIES } from '../constants'
 import { fingerprint } from '../core/hash'
 import type { Settings } from '../core/settings'
@@ -38,6 +38,8 @@ type Ctx = {
   missed: (miss: Cache.CacheMiss) => void
   /** Keep warm's verdict on itself, and why it paused when it did. */
   verdict: (verdict: 'yes' | 'no', reason: string | null) => void
+  /** A watcher holding this cache until it wakes (its Keep warm strategy or Smart's hold), else null. */
+  hold: () => { until: number } | null
 }
 
 const RECENT_MISS_MS = 5 * 60_000
@@ -104,11 +106,32 @@ export class CacheGuardian {
       verified: s.keepWarm.verified === 'unknown' ? this.memory.verified : s.keepWarm.verified,
       verifiedAt: s.keepWarm.verified !== this.memory.verified && s.keepWarm.verified !== 'unknown' ? this.ctx.now() : this.memory.verifiedAt,
       effortRebuilds: this.memory.effortRebuilds,
+      writeRates: this.memory.writeRates,
       ...patch,
     }
     if (JSON.stringify(next) === JSON.stringify(this.memory)) return
     this.memory = next
     void this.ctx.host()?.storeSet(STORE_ENTRIES.cache, next).catch(() => undefined)
+  }
+
+  /** The last request as a reload must keep knowing it (`$.state`): when it went, how large, on which model, the lifetime. */
+  memoOf(sessionId: string | null): CacheMemo | null {
+    const s = this.state
+    if (sessionId === null || s.lastRequestAt === null || s.lastPrefix < Cache.MIN_PREFIX) return null
+    return { sessionId, lastRequestAt: s.lastRequestAt, lastPrefix: s.lastPrefix, model: s.model, ttl: s.ttl?.value ?? null }
+  }
+
+  /**
+   * After a reload of the plugin in the same context: the cache is the one the runtime before this
+   * one saw, so its expiry is still known (the Cold Resume Guard, Keep warm under a watcher).
+   */
+  restoreMemo(memo: CacheMemo, sessionId: string | null): void {
+    if (memo.sessionId !== sessionId || this.state.lastRequestAt !== null) return
+    let next: Cache.CacheState = { ...this.state, lastRequestAt: memo.lastRequestAt, lastPrefix: memo.lastPrefix, model: memo.model }
+    if (memo.ttl !== null) next = Cache.withTtl(next, memo.ttl, 'stored')
+    this.state = next
+    if (!this.ctx.isTurnRunning()) this.idleSince = memo.lastRequestAt
+    this.ctx.changed()
   }
 
   /** A fresh context (/clear): its cache starts empty; the system prompt may change freely. */
@@ -132,6 +155,18 @@ export class CacheGuardian {
     // Planned again at once: a refresh is owed now, not at the next turn's end.
     if (!this.ctx.isTurnRunning()) this.schedule()
     this.ctx.changed()
+  }
+
+  /** Claude Code's estimate of re-caching a context on a model (a model switch, a resume): its price per token, remembered. */
+  noteWriteRate(input: { model: string; ttl: '5m' | '1h' | null; usd: number; tokens: number; pricing: string | undefined }): void {
+    const writeRates = Cache.withWriteRate(this.memory.writeRates, { ...input, at: this.ctx.now() })
+    if (JSON.stringify(writeRates) === JSON.stringify(this.memory.writeRates)) return
+    this.remember({ writeRates })
+  }
+
+  /** Claude Code's cache-write price for this model and lifetime, if it gave one lately; null otherwise. */
+  writeRate(model: string, ttl: '5m' | '1h' | null): Cache.WriteRate | null {
+    return Cache.writeRateFor(this.memory.writeRates, model, ttl, this.ctx.now())
   }
 
   /** True when a change of effort was seen to rebuild the cache on this model (learned from earlier misses). */
@@ -345,15 +380,17 @@ export class CacheGuardian {
 
   refreshPlan(now: number): Cache.RefreshPlan {
     const s = this.ctx.settings().cache
+    const hold = this.ctx.hold()
     return Cache.nextRefresh(this.state, {
       now,
-      isOn: s.keepWarm,
+      isOn: s.keepWarm || hold !== null,
       isTurnRunning: this.ctx.isTurnRunning(),
       contextTokens: Math.max(this.ctx.contextTokens(), this.state.lastPrefix),
       minTokens: s.minTokens,
       idleSince: this.idleSince,
       maxIdleMs: s.maxIdleMinutes * 60_000,
       standDown: this.ctx.standDown(),
+      holdUntil: hold?.until ?? null,
     })
   }
 
@@ -494,7 +531,7 @@ export class CacheGuardian {
       text,
       tone: recent !== null || isNear ? 'warn' : warmth === 'warm' ? 'normal' : 'muted',
       cachedTokens: s.lastPrefix,
-      keepWarm: this.ctx.settings().cache.keepWarm && s.keepWarm.verified !== 'no',
+      keepWarm: (this.ctx.settings().cache.keepWarm || this.ctx.hold() !== null) && s.keepWarm.verified !== 'no',
       nextRefreshAt: this.plan.at,
       recentMiss: recent === null ? null : { label: Cache.CAUSE_LABEL[recent.cause], recached: recent.recached, severity: recent.severity, at: recent.at },
       isShown: recent !== null || (!isTurnRunning && s.lastPrefix >= this.ctx.settings().cache.minTokens),

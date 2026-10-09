@@ -52,7 +52,12 @@ export const isNative = (kit: Kit): boolean => kit.surface === 'desktop' || kit.
 export type Choice = { value: string; label: string; hint?: string }
 
 /** A control and the cells it takes; `below` is drawn under its row (an open picker). */
-export type Control = { element: RenderElement; width: number; below?: RenderElement | null }
+/**
+ * A row's control and how wide it draws. `stack` puts it under the label at any width: a text field
+ * for free text, which the terminal draws as wide as its text, so beside the label it would squeeze
+ * the label into a column.
+ */
+export type Control = { element: RenderElement; width: number; below?: RenderElement | null; stack?: true }
 
 type Child = RenderElement | null | false | undefined
 
@@ -153,8 +158,8 @@ export function row(
   const textWidth = Math.max(input.label.length, subtitle?.length ?? 0)
   const isStacked =
     control !== undefined &&
-    control.width > 12 &&
-    (control.width > Math.floor(kit.columns * 0.55) || (control.width > NARROW_CONTROL && kit.columns - control.width - 2 < textWidth))
+    (control.stack === true ||
+      (control.width > 12 && (control.width > Math.floor(kit.columns * 0.55) || (control.width > NARROW_CONTROL && kit.columns - control.width - 2 < textWidth))))
   const subtitleTone = input.subtitleTone ?? 'muted'
   const subtitleEl = subtitle === null ? null : (
     <Text key={`${input.key}-sub`} {...toneProps(subtitleTone)} dimColor={subtitleTone === 'muted' ? true : undefined} wrap="wrap">

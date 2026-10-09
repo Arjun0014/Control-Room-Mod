@@ -170,6 +170,8 @@ In the panel: **Context → Cache**. `/cr cache` shows it in words.
 | `minTokens` | 5,000–1,000,000 | 20,000 | Keep warm leaves a smaller context alone (starting it cold costs little), and *Keep policies stable* holds only a cache at least this large. Not in the panel. |
 | `guardModelSwitch` | on / off | on | *Ask before a model switch*: a switch you make (`/model`, the model picker) that would re-send 100k or more warm tokens is confirmed first, with Claude Code's own estimate of what it costs. `/cr cache guard on\|off` |
 | `stablePolicies` | on / off | on | *Keep policies stable*: while the cache is warm, a setting you change reaches Claude as a note, and the system prompt keeps the policies it was cached with until the cache lapses or the context starts fresh. Off, every change rewrites the system prompt, which rebuilds the whole cache. `/cr cache stable on\|off` |
+| `coldResume` | on / off | on | *Ask before a cold resume* (Context → **Cold Resume Guard**): before a message is sent into a context whose prompt cache has surely lapsed, Claude Code's question dialog asks first: *Continue full session*, *Start fresh from resume state* (only while Context → *Ready to resume* reads Ready), *Compact first* (compaction reads the context once, then it is smaller), or *Cancel* (the message comes back to the prompt box). Never for a prompt typed while Claude works, never where no one can be asked. |
+| `coldResumeTokens` | 20,000–2,000,000 | 100,000 | *Warn above*: the context, in tokens, from which a cold resume is asked about. The panel steps through 20k, 50k, 100k, 150k, 200k, 300k, 400k, 500k, 750k, 1M, 1.5M and 2M. |
 
 Claude Code reports how many tokens each request read from the cache and wrote to it. From those
 Project Sentinel derives the rest: a request that read less than half of what the one before it sent
@@ -192,6 +194,36 @@ reply asked for; the transcript never sees it, and it costs tokens (mostly cache
 of the input price, plus the short reply). It checks itself: the first request after an expiry it
 replaced must still read the cache. If refreshes do not hold the cache, it says so and stops;
 turning it on again lets it try afresh.
+
+*Surely lapsed* means one of: the cache's lifetime is known and its expiry passed; more than an
+hour passed since the last request (longer than any lifetime); or Claude Code said so when the
+session was resumed (`prompt_cache_likely_expired`). A cache that may still be warm is never called
+cold. The Cold Resume Guard says why it lapsed (idle past the lifetime, Keep warm off or paused,
+its idle limit, a handoff), and gives a dollar figure only from Claude Code's own estimate of
+re-caching for that model (seen at a model switch or a resume, priced from your managed pricing or
+the list price, at most 30 days old); otherwise it says tokens.
+
+### Operations (`ops`)
+
+In the panel: **Activity → Operations**. See [ORCHESTRATION.md](ORCHESTRATION.md) for how the
+layer works.
+
+| Setting | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `decisions` | on / off | on | *Let Claude leave decisions here* (Needs review): Claude is offered the `decision_request` tool for a choice that is yours and need not stop the work. Off, Claude asks you directly. Turned off mid-session, the tool stays offered until the session ends and answers that the inbox is off. |
+| `watchers` | on / off | on | *Watchers*: park the run until a time, then wake Claude. Off, nothing parks or wakes the run (`/cr watch` says so). |
+| `scout` | `off` / `suggest` / `auto` | `suggest` | *Suggestions* (the Watcher Scout): after a turn in which Claude evidently waits for a future result (a milestone marked waiting, or a sentence of its own pairing a check with a time), `suggest` offers a watcher on the status bar's alert line; `auto` (*Arm explicit waits*) arms one when the time is explicit and unambiguous, and suggests the rest; `off` never does. No model is asked. |
+
+What the person sets up in Operations is kept with the run, not in the settings: the Mission
+Queue, the decisions and their answers, the watchers and the **run budget**. A run budget is set in
+Operations → *Run budget* or with `/cr budget`, and is off until you set one:
+
+| Limit | Values | Notes |
+| --- | --- | --- |
+| Cost | US dollars | The run's cost as Claude Code reports it, summed over its sessions (`+` where a session's was not reported) |
+| Time | a duration (`6h`, `90m`) | Wall-clock time since the run began |
+| Handoffs | 1–50 | Autopilot handoffs in the run |
+| At a limit | *Notify only* / *Ask before continuing* (default) / *Finish the milestone, then pause* | Said once at 80% and once at the limit. *Ask*: Project Sentinel starts no turn by itself (queued work, a wake, an Autopilot continuation, the lazy-exit guard) without your yes, and asks once before your next message. *Finish*: as *Ask*, and Claude is told with its next tool results to finish the milestone it is on and stop there. Nothing stops a tool call or a turn under way. |
 
 ### Subagents (`subagents`)
 

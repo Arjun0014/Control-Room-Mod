@@ -42,6 +42,10 @@ const FORMER_HUD = { plugin: 'control-room', key: 'hud' } as const
 const STANDBY = { plugin: 'project-sentinel', key: 'standby' } as const
 /** The policy section this context's system prompt carries: a reload keeps sending it while the cache is warm. */
 const POLICY = { plugin: 'project-sentinel', key: 'policy' } as const
+/** The orchestration layer's view (Activity → Operations, Overview, Context). */
+const OPS = { plugin: 'project-sentinel', key: 'ops' } as const
+/** The prompt cache's last request in this context: a reload keeps knowing when it lapses. */
+const CACHE_MEMO = { plugin: 'project-sentinel', key: 'cacheMemo' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -52,6 +56,7 @@ const activityAtom = atom(ACTIVITY, Views.activityOf(blank))
 const permissionsAtom = atom(PERMISSIONS, Views.permissionsOf(blank))
 const focusAtom = atom(FOCUS, Views.focusOf(blank))
 const spinnerAtom = atom(SPINNER, Views.spinnerOf(blank))
+const opsAtom = atom(OPS, Views.opsOf(blank))
 
 // ---------------------------------------------------------------------------
 // The Host: every engine call Control Room makes, spelled once.
@@ -73,6 +78,8 @@ function hostOf($: EngineInterface): Host {
     compact: instructions => $.session.compact({ instructions }),
 
     submit: text => $.prompt.submit({ text }),
+    submitAsUser: text => $.prompt.submit({ text, asUser: true }),
+    fillPrompt: text => $.prompt.fill({ text }).then(r => ({ isFilled: r.isFilled, refusal: r.refusal })),
     clearContext: () => $.command.run({ command: 'clear', args: '' }),
     compactCommand: instructions => $.command.run({ command: 'compact', args: instructions }),
     registerCommand: spec => $.command.register(spec),
@@ -82,6 +89,7 @@ function hostOf($: EngineInterface): Host {
     listTools: () => $.tool.list(),
     registerTool: spec => $.tool.register(spec).then(r => r.tool),
     stopTask: taskId => $.tool.call({ tool: 'TaskStop', task_id: taskId }),
+    sendToAgent: (agentId, text) => $.session.send({ to: { agentId }, text }).then(r => ({ isDelivered: r.isDelivered, reason: r.reason })),
     classify: (text, labels, model) => $.model.classify(text, labels, model === undefined ? undefined : { model }),
     fork: prompt => $.model.fork({ prompt }),
 
@@ -91,6 +99,7 @@ function hostOf($: EngineInterface): Host {
     close: pane => $.ui.close(pane),
     panes: () => $.ui.panes(),
     scrollPaneToTop: () => $.ui.scroll({ in: PANE_ID, to: 'start' }).then(() => undefined),
+    focusPane: key => $.ui.focus({ requestId: PANE_ID, key }).then(r => r.deny === undefined),
     ask: (question, options, header) => $.ui.ask(question, header === undefined ? options : { options, header }),
     checkTool: (tool, input) => $.tool.check({ tool, input }),
     copy: (text, surface) => $.ui.copy({ text, surface }).then(r => r.isCopied),
@@ -131,11 +140,14 @@ function hostOf($: EngineInterface): Host {
     publishPermissions: v => $.state.set(PERMISSIONS, v).then(() => undefined),
     publishFocus: v => $.state.set(FOCUS, v).then(() => undefined),
     publishSpinner: v => $.state.set(SPINNER, v).then(() => undefined),
+    publishOps: v => $.state.set(OPS, v).then(() => undefined),
 
     saveAutopilotRecord: record => $.state.set(AUTOPILOT, { record }).then(() => undefined),
     loadAutopilotRecord: () => $.state.get(AUTOPILOT).then(read => read.value?.record ?? null),
     savePolicyMemo: memo => $.state.set(POLICY, memo).then(() => undefined),
     loadPolicyMemo: () => $.state.get(POLICY).then(read => read.value ?? null),
+    saveCacheMemo: memo => $.state.set(CACHE_MEMO, memo).then(() => undefined),
+    loadCacheMemo: () => $.state.get(CACHE_MEMO).then(read => read.value ?? null),
 
     invalidateDescribes: () => $.ui.invalidate('tool.describe'),
     invalidatePromptContext: () => $.ui.invalidate('prompt.context'),
@@ -183,7 +195,17 @@ export const register: Register = on => {
     if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     if (e.permission_mode !== undefined) rt.permissionMode = e.permission_mode
-    await rt.onClassicSessionStart({ source: e.source, sessionId: e.session_id, model: e.model, transcriptPath: e.transcript_path })
+    await rt.onClassicSessionStart({
+      source: e.source,
+      sessionId: e.session_id,
+      model: e.model,
+      transcriptPath: e.transcript_path,
+      // A resumed session: Claude Code's own word on its cache (the Cold Resume Guard's facts).
+      secondsSince: e.seconds_since_last_response,
+      contextTokens: e.context_tokens,
+      isCacheExpired: e.prompt_cache_likely_expired,
+      usd: e.estimated_cache_write_usd,
+    })
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -221,6 +243,10 @@ export const register: Register = on => {
     if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
     await rt.ensureLoaded()
+    // Cold Resume Guard: before a message re-reads a large context whose cache has surely lapsed, ask
+    // (nothing is sent yet). The Run Budget asks once at a limit set to Ask. Either may keep the message.
+    const held = (await rt.ops.coldGuard(e)) ?? (await rt.ops.budgetGuard(e))
+    if (held !== null) return held
     const extra = rt.onPromptSubmit(e.text, e.origin)
     return next(extra.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...extra] })
   }).catch(($, e, next) => next(e))
@@ -333,6 +359,14 @@ export const register: Register = on => {
     return { result: rt.recordMilestones(isRecord(e) ? { ...e } : {}, e.agentId) }
   })
 
+  // The Decision Inbox's tool (Behavior → Decisions): the question waits for the person; Claude is told what to do meanwhile.
+  on('tool.call', { tool: /^mcp__project-sentinel__decision_request$/ }, async ($, e, next) => {
+    if (rt.isStandby) return next(e)
+    if (rt.host === null) rt.bind(hostOf($))
+    await rt.ensureLoaded()
+    return { result: rt.ops.decisionTool(isRecord(e) ? { ...e } : {}, e.agentId) }
+  })
+
   on('tool.call', async ($, e, next) => {
     if (rt.isStandby) return next(e)
     if (rt.host === null) rt.bind(hostOf($))
@@ -372,7 +406,21 @@ export const register: Register = on => {
     if (rt.host === null) rt.bind(hostOf($))
     const decision = await rt.onAgentSpawn(e)
     if (decision.deny !== undefined) return { deny: decision.deny }
-    return next(decision.model === undefined ? e : { ...e, model: decision.model })
+    const answer = await next(decision.model === undefined ? e : { ...e, model: decision.model })
+    // The Agent Command Center keeps what the spawn says (its model, background, fork), by the agent's id.
+    if (answer.deny === undefined && answer.agentId !== undefined) {
+      rt.ops.noteSpawn({
+        agentId: answer.agentId,
+        model: answer.model ?? null,
+        isBackground: e.background,
+        isFork: e.fork,
+        description: e.description,
+        type: e.subagentType,
+        name: e.name ?? null,
+        parentId: e.parentAgentId ?? null,
+      })
+    }
+    return answer
   }).catch(($, e, next) =>
     rt.settings.subagents.mode === 'block' && !next.called ? { deny: 'Control Room: subagents are disabled in this session.' } : next(e),
   )
@@ -456,6 +504,7 @@ export const register: Register = on => {
       chain: needs.includes('chain') ? await read($, chainAtom) : undefined,
       activity: needs.includes('activity') ? await read($, activityAtom) : undefined,
       permissions: needs.includes('permissions') ? await read($, permissionsAtom) : undefined,
+      ops: needs.includes('ops') ? await read($, opsAtom) : undefined,
     }
     return paneView(kitOf($.ui.resolve(e), e.props.bodyColumns, e.surface, e.props.placement), data)
   })

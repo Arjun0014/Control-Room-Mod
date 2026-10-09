@@ -1,0 +1,240 @@
+# Orchestration (1.6.0)
+
+> **Status: released in 1.6.0.** Built as described here, tested over the in-memory host and the
+> engine (`tests/ops.test.ts`, `tests/operations.test.ts`, `tests/opsui.test.ts`) and live with a real
+> model (the changelog's *Verified live* lists what was proven, and how).
+
+How Project Sentinel orchestrates a long run over time: work queued for later, decisions Claude
+leaves for the person, runs parked until a result is due, the cost of coming back to a cold cache,
+the agents actually running, and an optional budget. This page is the design record of that layer:
+what each part is, where it lives, what it may do by itself and what it never does. The UI decisions
+are summarised in [DESIGN.md](DESIGN.md#operations), the mechanisms in
+[ARCHITECTURE.md](ARCHITECTURE.md#10-the-orchestration-layer).
+
+## One layer, not seven features
+
+Everything here answers one question: **what happens next in this run, and who is it waiting
+for?** So it is one layer with one home.
+
+```
+Activity
+  Summary · Operations · All tool calls
+
+  Operations
+    NEEDS REVIEW      what waits for the person: Claude's decisions, a watcher that needs a choice,
+                      a message held back by the Cold Resume Guard
+    MISSION QUEUE     work the person gave Claude for later (person → Claude)
+    WATCHERS          the run parked until a time, then woken (and Claude Code's own wake-ups, read only)
+    AGENTS            what is actually running, as Claude Code reports it
+    RUN BUDGET        optional limits on the run's cost, time and handoffs
+
+Context
+  Autopilot · Cache (with the Cold Resume Guard) · Ready to resume · Last handoff · Run
+
+Overview
+  OPERATIONS          one card, only while something is in it: Review 2 · Queued 3 ·
+                      Watcher 1 · wakes in 1h 42m · Agents 2 active · Budget $16 of $30
+```
+
+The status bar stays a HUD: it shows this layer only when it matters (`Review 2`, the run
+sleeping until a watcher wakes it, a decision blocking the run), never as a row of counters.
+
+## What belongs to what
+
+| Belongs to | Survives | Holds |
+| --- | --- | --- |
+| **The run** (its record in the plugin store) | `/clear`, Autopilot handoffs, a reload of the plugin, a resumed session, a watcher's sleep and wake | Mission Queue, Decision Inbox, Watchers, Run Budget, run progress |
+| **The context** (module memory, reset at a fresh context) | a reload (through `$.state`, as 1.5.0 kept the policy section) | context use, the prompt cache, what this context was told |
+| **The process** (Claude Code's own agent list) | nothing: it is read again | the agents running |
+
+A run is the work of one `claude` process, or of a session resumed into it (1.0's rule). An
+**ended run keeps its operations inert**: no timer of an ended run fires, and its queue, decisions and
+watchers never leak into a new run. When a new session starts in the same project while an ended run
+still has open operations, Operations says so once (*Run 41 left 1 watcher (due 43 minutes ago)
+and 2 queued items*), and offers **Bring them here**; nothing moves without that press. Resuming the
+session itself (Desktop: open it; terminal: `claude --continue`) continues that run, operations
+included.
+
+## Event boundaries
+
+Nothing here acts on a timer inside a turn, and nothing is appended to the transcript while Claude
+works (1.5.0's rule). Every delivery happens at one of these boundaries:
+
+| Boundary | What it is | What may go out |
+| --- | --- | --- |
+| **Turn end** | Claude's turn ended cleanly (not aborted, nothing still running that brings it back) | a queued item, a decision's answer, a due watcher, as a prompt of its own |
+| **Milestone done** | a milestone that was under way is marked completed, mid-turn | a queued item set *After the current milestone*, as a note with the next batch of tool results |
+| **Fresh context** | the first message of a context after Project Sentinel's own `/clear` | items set *After the handoff*, inside that context's first message |
+| **Prompt** | the person sends a message | answers to non-blocking decisions, as that prompt's context |
+
+At most one of Project Sentinel's own prompts goes out per boundary, in this order: a watcher's
+wake, then a blocking decision's answer, then queued items (oldest first, in the order the person
+put them), then the rest. Each starts its turn; the next waits for that turn's end.
+
+A prompt is marked delivered when Claude Code says it entered the session (`$.prompt.submit`
+resolves without a drop). One that was on its way when the plugin reloaded is never sent again by
+itself: it reads *Sent before a reload, check the transcript* with **Send again**.
+
+## Mission Queue (person → Claude)
+
+Two ways in, one store: **Add work for later** in Operations, which takes work at any moment and
+adds nothing to the conversation, and `/cr queue <text>` from the prompt box. A slash command's
+echo and output are part of the conversation (seen live: the next request carries
+`<command-name>` and `<local-command-stdout>`), so `/cr` is not a mid-turn command: typed while
+Claude works, Claude Code runs it when the turn ends, and the item never reaches the running turn.
+`/cr queue` alone opens Operations with the field focused. When to deliver:
+
+| Choice | Due when |
+| --- | --- |
+| Next safe boundary (default) | the current milestone completes or the turn ends, whichever comes first; with no milestone under way, the turn's end; at once when nothing runs |
+| After this turn | the running turn ends (at once when nothing runs) |
+| After the current milestone | the milestone under way when it was added is completed (if none is, as the next safe boundary) |
+| After the handoff | the next fresh context Project Sentinel starts (Autopilot, a fresh wake, a fresh resume) |
+
+There is no "at 14:00" for queued work: a time is a watcher. Items can be edited, reordered,
+delivered now or deleted. A sleeping run keeps its queue; at the wake, due items follow the
+watcher's check in order.
+
+## Decision Inbox (Claude → person)
+
+Claude is offered one tool, `decision_request` (with Behavior → *Decisions* on, the default),
+for a decision that genuinely belongs to the person and need not interrupt the work now: a
+question, why it matters, up to four options, whether free text is welcome, whether it blocks the
+current milestone. Its description tells Claude what it is not for: status updates, choices Claude
+can make itself, and anything Claude Code asks permission for. The answer it gets back: recorded as
+`D-2`; carry on with other work (non-blocking), or finish what you can and end your turn (blocking).
+
+The person answers in **Needs review** (a button per option, a field for free text) or with
+`/cr decide D-2`, which asks in Claude Code's own question dialog. The answer is kept with the run,
+linked to its question and milestone, and goes to Claude at the next boundary: with the next batch
+of tool results while Claude works, as a prompt of its own when the run waits on it, else with the
+person's next message (**Send now** sends it at once).
+
+**Never deferred:** Claude Code's permission prompts, Project Sentinel's own *Ask* approvals, and
+any confirmation Claude Code requires. The inbox has no part in them, and nothing in it answers or
+bypasses them.
+
+## Watchers (park the run until a time)
+
+A watcher does not watch anything. It parks the run until a time, then wakes Claude to continue;
+Claude knows what it was waiting for from the run's milestones, the handoff notes and the docs.
+Each watcher has an id, its run, what it waits for in words, when it was made, when it wakes, its
+strategy, its status, the milestone under way when it was armed, and a **checkpoint**: the run's
+fingerprint when it parked (its turns, its milestones, its context).
+
+**Making one:** **Add watcher** in Operations (what it waits for; wake *in 2h* or *at 14:00*;
+strategy), or `/cr watch in 2h S-002 result`, `/cr watch at 14:00 Check the score`. Times are read
+by a small strict grammar (minutes and hours from now; a 24-hour clock time; a 12-hour time with am
+or pm; `tomorrow`): `at 2:30` with no am or pm is ambiguous, and Project Sentinel asks which one
+rather than choose. Every watcher shows its local time and a countdown.
+
+**Strategies:**
+
+| | While the run sleeps | At the wake |
+| --- | --- | --- |
+| **Keep warm** | Keep warm holds this conversation's cache until the wake (the person chose to pay for it) | Claude continues in this context, told what it was waiting for |
+| **Fresh** | nothing is spent | if the run is still parked at its checkpoint and the resume state is healthy: `/clear`, the run state and notes into the fresh context, and Claude continues there |
+| **Smart** (default) | chooses one of the two, and says why | the same, decided again at the wake |
+
+Smart compares what holding costs (refreshes of this context, at cache-read prices) with what a
+fresh start costs (one fresh context), and keeps the conversation when that is cheap or the fresh
+resume is not ready. It never holds a five-minute cache past 45 minutes, and it does nothing at all
+when the cache outlives the wait. Its choice and reason show in the watcher's details: *Smart
+chose Fresh · 6h wait · 742k context · resume state ready*.
+
+**Safety: a watcher never clears an active run.** At its time, a watcher wakes only a run still
+parked at its checkpoint. If anything moved since (the person or Claude ran a turn, the milestones
+changed, the context was cleared), it reads **Watcher due · this run changed since it was armed**
+with **Check now** (a prompt in this context, never a clear), **Reschedule** and **Dismiss**. A
+watcher due while Claude works is marked due and waits for the turn's end. A fresh wake whose
+resume state is not ready asks instead of clearing. If Keep warm failed while a warm watcher slept,
+the wake does not blindly re-read hundreds of thousands of tokens: a healthy fresh resume is used
+when the watcher is Smart or Fresh; otherwise it asks.
+
+**Process lifetime:** a watcher is a timer in Claude Code's own process (`$.clock`). It runs only
+while Claude Code runs: closed, nothing wakes. Every watcher is saved with its run, and the next time
+that run's session is open (resumed), an overdue one reads *Watcher was due 43 minutes ago* with
+**Wake now**; it does not wake by itself then, because the person is there. Project Sentinel
+installs no daemon, service or scheduled task. (Claude Code's `CronCreate` and `ScheduleWakeup` are
+session-only too; its cloud routines start other sessions, not this one.)
+
+**Watcher Scout:** after a turn, when Claude evidently waits for a future result, Project Sentinel
+may suggest a watcher (*Claude appears to be waiting for a future result. Check S-002 again in 2
+hours?* **Create watcher** · **Change time** · **Ignore**). It reads only what is explicit: a
+milestone marked waiting, and a time or duration said beside a check (*check the leaderboard again
+in two hours*). Settings: Off, **Suggest** (default), or *Auto-arm explicit waits* (a waiting
+milestone or a sentence with an explicit time; vague waits are still only suggested). No model is
+asked.
+
+**Sleeping:** while a watcher holds the run, the status bar reads *Sleeping until 14:00 · S-002
+result*, with the watcher's countdown, and whether the cache is held warm or the wake is fresh.
+Kit curls up (or tends the fire while the cache is held), and wakes with the run.
+
+## Cold Resume Guard
+
+Before a message is sent into a context whose prompt cache has surely lapsed, and whose earlier
+context is large (100k tokens by default), Project Sentinel asks first, in Claude Code's own
+question dialog, and nothing has been sent yet:
+
+> **Cache cold** · The prompt cache expired: this session has 616k tokens of earlier context,
+> and continuing re-reads all of it before the cache is warm again (about $4.62 at Claude Code's
+> cache-write price for opus-5-5). Why: Keep warm was off. Continue?
+>
+> **Continue full session** · **Start fresh from resume state** · **Compact first (reads it once)** · **Cancel**
+
+*Surely lapsed*: the cache's lifetime is known and its expiry passed, or more than an hour passed
+(longer than any lifetime), or Claude Code says so when a session is resumed
+(`prompt_cache_likely_expired`). A cache that may be warm is never called cold. The dollar figure is
+shown only from Claude Code's own estimate (`estimated_cache_write_usd`, which it computes from the
+managed `modelPricing` or the list price) for this model, at a model switch or a resume; otherwise
+the dialog gives tokens only. Nothing is priced by Project Sentinel itself.
+
+*Start fresh* is offered only when the resume state is healthy (below). *Compact first* says what
+it is: compaction itself reads the old conversation once, and makes the context smaller after.
+*Cancel* sends nothing and puts the message back in the prompt box (or, where the box cannot take
+it, keeps it in Needs review with **Put back** and **Send now**). The guard is off for prompts typed
+while Claude works (its requests keep the cache warm) and where no one can be asked (a headless
+run).
+
+## Resume state and Resume Preview
+
+A fresh start is healthy when all hold: the run has structured run state (milestones); the work
+under way is known (a milestone in progress, waiting or blocked, or all of them done); the handoff
+notes (`NEXT_SESSION_PROMPT.md`) exist and were written after the run's milestones last changed;
+and the last handoff's continuity check, if any, did not fail on the notes or the run state since.
+
+The Resume Preview says what a fresh context will get, wherever one is about to start (the Cold
+Resume Guard, a fresh wake, Autopilot's *Start fresh*): the run and its objective, the milestones
+done and under way, what Claude will read (the run state, the notes, the docs the last handoff
+updated), the queued items and open decisions it carries, and the next action. An automatic wake
+does not stop for it: it is logged, and the wake stops for the person only when the resume state is
+not healthy or the run changed.
+
+## Agent Command Center
+
+What Claude Code reports, nothing else: `$.agent.list()` (id, type, description, status:
+pending, running, waiting, idle, completed, failed, killed; its parent; its name), the spawn
+(`agent.spawn`: its model, whether it runs in the background or is a fork), its loop's tool calls
+(what it is doing now), and its end (`turn.complete`: the first line of its answer, or why it
+stopped). Shown: status, type, elapsed time, current activity, model, result or failure, parent
+and child. Controls: **Stop** (Claude Code's `TaskStop`, which takes background agents and
+teammates by id) and **Message** (Claude Code's own `SendMessage` delivery, `$.session.send`, for
+agents that take messages), only where Claude Code accepts them; its refusal is shown as it words
+it. No cost per agent (Claude Code reports none), no invented status. After a reload, agents are read
+again from Claude Code; the details only this runtime saw read as not known. Guardrails says what
+Claude may start; Agents shows what runs.
+
+## Run Budget
+
+Optional and off. Limits only what Project Sentinel can measure: the run's cost as Claude Code
+reports it (summed across its sessions; subagents and Keep warm's refreshes count as far as Claude
+Code's own cost includes them), its wall-clock time since it began, and its handoffs. At 80% it
+says so once. At a limit:
+
+| At limit | What happens |
+| --- | --- |
+| Notify only | a toast and a chip; nothing else changes |
+| Ask before continuing (default) | Project Sentinel starts no turn by itself (a queued item, a wake, an Autopilot continuation, the lazy-exit guard) without the person's yes, and asks once before the person's next message |
+| Finish the milestone, then pause | as Ask, and Claude is told with its next tool results to finish the milestone it is on and stop there |
+
+Nothing stops Claude in the middle of a tool call, and a turn under way is never cancelled.

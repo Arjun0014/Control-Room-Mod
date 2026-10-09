@@ -9,7 +9,10 @@
  *   CONTEXT  the reasoning window; starts over at each handoff
  *   CACHE    the prompt cache; starts over with each fresh context, lapses when idle
  *
- * Then what is happening now and what needs a look, the profile, and one
+ * Then what is happening now and what needs a look, the run's operations
+ * (only while something is in them: decisions to review, queued work, a
+ * watcher, agents, the budget; Activity → Operations has them in full), the
+ * profile, and one
  * card per remaining section in that section's accent, each system with its
  * switch and one line of state, and a quiet "Open ›" to the section itself,
  * so the page also teaches where everything lives.
@@ -24,6 +27,7 @@ import { PERMISSION_CATEGORIES } from '../../core/settings'
 import type { Kit } from '../kit'
 import { apart, cacheClock, callout, card, clip, emptyState, link, listItem, meterBar, pair, picker, row, stateLine, switchControl, textRuns, workTrack } from '../primitives'
 import { ACCENT, G } from '../theme'
+import { alertActions } from '../hud'
 import { cacheState, cacheSummary, lifetimeWords } from './cache'
 import type { PaneData } from './frame'
 
@@ -60,8 +64,44 @@ export function alertCallout(kit: Kit, data: PaneData): RenderElement | null {
       ],
     })
   }
-  return callout(kit, { key: 'alert', tone: 'bad', title: 'Machine under heavy load', text: alert.text })
+  if (alert.kind === 'load') return callout(kit, { key: 'alert', tone: 'bad', title: 'Machine under heavy load', text: alert.text })
+  // The orchestration layer's: the status bar's line, with the same actions.
+  const title = { watcher: 'Watcher due', held: 'Your message was not sent', budget: 'Run budget reached', suggest: 'Watcher suggestion' }[alert.kind]
+  return callout(kit, { key: 'alert', tone: alert.tone, title, text: alert.text, actions: alertActions(kit, alert).map(a => ({ ...a, key: `alert-${a.key}` })) })
 }
+
+/** The run's operations at a glance, only while something is in them; Activity → Operations has them in full. */
+function operationsCard(kit: Kit, data: PaneData): RenderElement | null {
+  const ops = data.hud.ops
+  if (ops === null) return null
+  const w = ops.watcher
+  return card(kit, {
+    key: 'operations',
+    title: 'Operations',
+    accent: ACCENT.activity,
+    link: { label: 'Open', onPress: kit.actions.openOps },
+    rows: k => [
+      ops.review === 0
+        ? null
+        : listItem(k, { key: 'ops-review', glyph: G.warn, tone: 'warn', text: `Review ${ops.review}`, detail: ops.blocking > 0 ? `${fmt.plural(ops.blocking, 'decision')} block${ops.blocking === 1 ? 's' : ''} the run` : 'Decisions Claude left for you', isBold: true }),
+      w === null
+        ? null
+        : listItem(k, {
+            key: 'ops-watcher',
+            glyph: G.wait,
+            tone: w.needs !== null ? 'accent' : 'info',
+            text: w.needs !== null ? `Watcher due · ${w.label}` : w.status === 'armed' ? `Watcher · wakes in ${w.left}` : `Watcher · ${w.label}`,
+            right: w.status === 'armed' ? w.at : undefined,
+            detail: w.needs ?? (w.status === 'armed' ? spacedWords([w.label, w.isHeldWarm ? 'cache held warm' : w.mode === 'fresh' ? 'wakes fresh' : null, ops.watchers > 1 ? `${ops.watchers} watchers` : null]) : 'Goes when this turn ends'),
+          }),
+      ops.queued === 0 ? null : listItem(k, { key: 'ops-queued', glyph: G.dot, tone: 'info', text: `Queued ${ops.queued}`, detail: ops.due > 0 ? `${ops.due} due at the next boundary` : 'Work for later' }),
+      ops.agents === 0 ? null : listItem(k, { key: 'ops-agents', glyph: G.run, tone: 'info', text: `Agents ${ops.agents} active` }),
+      ops.budget === null ? null : listItem(k, { key: 'ops-budget', glyph: ops.budget.isReached ? G.warn : G.dot, tone: ops.budget.tone === 'muted' ? 'muted' : ops.budget.tone, text: ops.budget.text }),
+    ],
+  })
+}
+
+const spacedWords = (parts: readonly (string | null)[]): string => parts.filter((p): p is string => p !== null && p !== '').join(' · ')
 
 function permissionSummary(p: Record<PermissionCategory, string>): string {
   const count = (state: string) => PERMISSION_CATEGORIES.filter(c => p[c] === state).length
@@ -228,6 +268,8 @@ export function overviewPage(kit: Kit, data: PaneData): RenderElement {
               }),
         ],
       })}
+
+      {operationsCard(kit, data)}
 
       {card(kit, {
         key: 'profile',

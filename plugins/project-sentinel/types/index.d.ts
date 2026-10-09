@@ -85,7 +85,24 @@ export type ControlRoomSettings = {
    * `stablePolicies`: while the cache is warm, keep Control Room's system-prompt section as it was
    * and tell Claude of setting changes as notes.
    */
-  cache: { keepWarm: boolean; maxIdleMinutes: number; minTokens: number; guardModelSwitch: boolean; stablePolicies: boolean }
+  cache: {
+    keepWarm: boolean
+    maxIdleMinutes: number
+    minTokens: number
+    guardModelSwitch: boolean
+    stablePolicies: boolean
+    /** Cold Resume Guard: ask before a message re-reads a large context whose prompt cache has surely lapsed. */
+    coldResume: boolean
+    /** The context, in tokens, from which a cold resume is asked about first. */
+    coldResumeTokens: number
+  }
+  /**
+   * The orchestration layer (Activity → Operations). `decisions`: offer Claude the
+   * `decision_request` tool, so a non-urgent choice waits in Needs review instead of
+   * interrupting. `watchers`: parking the run until a time. `scout`: after a turn, suggest a
+   * watcher when Claude evidently waits for a future result (or arm one for an explicit wait).
+   */
+  ops: { decisions: boolean; watchers: boolean; scout: WatcherScout }
   /**
    * `liveLoad`: machine-wide CPU and memory in the status bar (runs the sampler). `companion`: the
    * pixel companion on the status bar. `reducedMotion`: still drawings instead of animation.
@@ -94,9 +111,12 @@ export type ControlRoomSettings = {
   customProfiles: ControlRoomCustomProfile[]
 }
 
+/** Watcher suggestions after a turn: none, suggest one, or arm one when the wait is explicit. */
+export type WatcherScout = 'off' | 'suggest' | 'auto'
+
 export type ControlRoomSystems = Pick<
   ControlRoomSettings,
-  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress' | 'answers' | 'cache'
+  'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'focus' | 'resources' | 'permissions' | 'progress' | 'answers' | 'cache' | 'ops'
 >
 
 export type ControlRoomCustomProfile = { id: string; name: string; createdAt: number; systems: ControlRoomSystems }
@@ -112,7 +132,21 @@ export type Tone = 'normal' | 'muted' | 'good' | 'warn' | 'bad' | 'accent' | 'in
  * background job, a scheduled wake-up), blocked, handing off, the last turn's outcome, or the
  * whole plan done.
  */
-export type HudState = 'ready' | 'idle' | 'thinking' | 'working' | 'validating' | 'waitingUser' | 'waitingExternal' | 'blocked' | 'handoff' | 'done' | 'complete' | 'failing'
+export type HudState =
+  | 'ready'
+  | 'idle'
+  | 'thinking'
+  | 'working'
+  | 'validating'
+  | 'waitingUser'
+  | 'waitingExternal'
+  | 'blocked'
+  | 'handoff'
+  | 'done'
+  | 'complete'
+  | 'failing'
+  /** Parked by a watcher until it wakes the run. */
+  | 'sleeping'
 
 export type HudHeadline = {
   state: HudState
@@ -126,8 +160,8 @@ export type HudHeadline = {
 /** One stop on the work track: done, the one under way, being verified, waiting or blocked, to come. */
 export type TrackStop = 'done' | 'now' | 'verify' | 'held' | 'open'
 
-/** Something that needs a look, as a chip at the status bar's right ("Tests failing", "RAM 92%"). */
-export type HudChip = { key: string; text: string; tone: Tone }
+/** Something that needs a look, as a chip at the status bar's right ("Tests failing", "RAM 92%"); `opens` makes it a control that opens Activity → Operations. */
+export type HudChip = { key: string; text: string; tone: Tone; opens?: 'ops' }
 
 export type HudModel = {
   isVisible: boolean
@@ -148,7 +182,14 @@ export type HudModel = {
   agents: { running: number; limit: number | null; mode: string }
   guard: { isOn: boolean; continued: number }
   session: { run: number | null; index: number; handoffs: number }
-  alert: { kind: 'pending' | 'awaiting' | 'load'; text: string; tone: Tone } | null
+  /**
+   * A line of its own above the headline, with its actions, for what needs the person now: a
+   * handoff, the machine, a watcher due on a run that changed (or whose fresh wake is not safe), a
+   * watcher suggestion, the run's budget, a message the Cold Resume Guard held back.
+   */
+  alert: HudAlert | null
+  /** The orchestration layer at a glance (Activity → Operations); null while it holds nothing. */
+  ops: HudOps | null
   /** Run progress from Claude's own task list (milestones done of total), one stop per milestone; null until it keeps one. */
   work: { done: number; total: number; current: string | null; track: TrackStop[] } | null
   /** What Claude is doing right now, while a turn runs. */
@@ -176,6 +217,54 @@ export type HudModel = {
   companion: CompanionView | null
   /** The project's Git state in a line ("main · 3 uncommitted"), read in the terminal only; null elsewhere or outside a repository. */
   git: string | null
+}
+
+export type HudAlertKind = 'pending' | 'awaiting' | 'load' | 'watcher' | 'suggest' | 'budget' | 'held'
+
+export type HudAlert = {
+  kind: HudAlertKind
+  text: string
+  tone: Tone
+  /** What the line's buttons act on: a watcher's id, the suggestion's. */
+  ref?: string
+  /** A due watcher whose fresh wake is safe now (not Keep warm, the resume state healthy): Start fresh is offered. */
+  canFresh?: boolean
+  /** The suggestion carries a time of its own: Create watcher arms it there. */
+  hasTime?: boolean
+}
+
+/** The orchestration layer as the status bar and Overview show it: counts, and the watcher that holds the run. */
+export type HudOps = {
+  /** Decisions waiting for the person, and a message held back. */
+  review: number
+  /** Of those, the decisions that block the run's current milestone. */
+  blocking: number
+  /** Queued items not yet delivered, and those due now. */
+  queued: number
+  due: number
+  /** The armed watcher that wakes first; null with none. */
+  watcher: {
+    id: string
+    label: string
+    wakeAt: number
+    /** Its time in words ("14:00", "tomorrow 09:00") and the countdown ("1h 42m"), as published (each minute). */
+    at: string
+    left: string
+    isHeldWarm: boolean
+    mode: 'warm' | 'fresh' | null
+    status: string
+    /** Why it waits for the person, when it does. */
+    needs: string | null
+  } | null
+  /** The first decision that blocks the run, for the headline. */
+  blockingQuestion: string | null
+  watchers: number
+  /** The run is parked by that watcher: no turn runs, and it will wake the run. */
+  isSleeping: boolean
+  /** Agents running now, as Claude Code lists them. */
+  agents: number
+  /** The run budget's state, when one is set. */
+  budget: { text: string; tone: Tone; isReached: boolean } | null
 }
 
 /** What Kit, the optional companion, is doing: one of fifteen moods, from what the run is doing. */
@@ -254,6 +343,11 @@ export type HudCache = {
   isShown: boolean
   /** A turn is running: its requests keep the cache warm, so its time left is not worth a reading. */
   isInUse: boolean
+  /**
+   * While a watcher parks the run, what becomes of the cache, said instead of its time left: "held
+   * warm" (to the wake) or "no keep-alive" (a fresh wake), with a shorter word for a narrow bar.
+   */
+  parked?: { text: string; short: string }
 }
 
 export type CacheMissView = {
@@ -352,8 +446,8 @@ export type QuestHud = { level: number; xp: number; intoLevel: number; levelSpan
 
 export type TabId = 'overview' | 'context' | 'behavior' | 'guardrails' | 'activity' | 'setup'
 
-/** Activity's two views: the summary (run, turn, attention, checks, changes) and every tool call. */
-export type ActivitySub = 'summary' | 'raw'
+/** Activity's three views: the summary (run, turn, attention, checks, changes), Operations (the run over time), every tool call. */
+export type ActivitySub = 'summary' | 'ops' | 'raw'
 
 export type AutopilotView = {
   state: string
@@ -648,9 +742,204 @@ export type AutopilotRecord = {
   at: number
 }
 
+// ---------------------------------------------------------------------------
+// Operations: the run over time (Activity → Operations)
+
+/** When queued work goes to Claude: the next safe boundary, after this turn, after the current milestone, after the handoff. */
+export type QueueTarget = 'boundary' | 'turn' | 'milestone' | 'fresh'
+
+export type QueueItemView = {
+  id: string
+  text: string
+  target: QueueTarget
+  /** The target in words ("After the current milestone: Fix the renderer"). */
+  when: string
+  /** queued: waiting; due: goes at the next boundary; sending: on its way; unsure: sent before a reload; delivered; cancelled. */
+  status: 'queued' | 'due' | 'sending' | 'unsure' | 'delivered' | 'cancelled'
+  createdAt: number
+  deliveredAt: number | null
+}
+
+export type DecisionView = {
+  id: string
+  question: string
+  context: string | null
+  options: string[]
+  allowText: boolean
+  urgency: 'low' | 'normal' | 'high'
+  isBlocking: boolean
+  milestone: string | null
+  /** open: waits for the person; answered: waits to reach Claude; delivered; withdrawn. */
+  status: 'open' | 'answered' | 'sending' | 'unsure' | 'delivered' | 'withdrawn'
+  answer: string | null
+  createdAt: number
+  answeredAt: number | null
+  deliveredAt: number | null
+  /** How the answer reaches Claude, in words, while it waits to ("With Claude's next tool results"). */
+  route: string | null
+}
+
+export type WatchStrategy = 'smart' | 'warm' | 'fresh'
+
+export type WatcherView = {
+  id: string
+  label: string
+  createdAt: number
+  wakeAt: number
+  strategy: WatchStrategy
+  /** What Smart decided, and why ("Fresh · 6h wait · 742k context · resume state ready"). */
+  decided: { mode: 'warm' | 'fresh'; hold: boolean; reason: string } | null
+  /** armed; paused; due (waits for a turn's end, or for the person); stale (the run changed); waking; done; dismissed. */
+  status: 'armed' | 'paused' | 'due' | 'stale' | 'waking' | 'done' | 'dismissed'
+  milestone: string | null
+  /** Armed while a turn ran: the run's checkpoint is taken when that turn ends. */
+  isCheckpointPending: boolean
+  /** Why it will not wake by itself, when it will not ("This run changed since it was armed: 2 turns"). */
+  needs: string | null
+  outcome: string | null
+  source: 'person' | 'scout' | 'carried'
+}
+
+/** One of Claude Code's own scheduled wake-ups (ScheduleWakeup, CronCreate), shown beside the watchers, read only. */
+export type ExternalWakeView = { schedule: string; at: number | null; isRecurring: boolean }
+
+export type AgentRowView = {
+  id: string
+  name: string | null
+  type: string
+  description: string
+  /** As Claude Code reports it: pending, running, waiting, idle, completed, failed, killed. */
+  status: string
+  model: string | null
+  /** From its spawn, when this runtime saw it; null when not known (it began before a reload). */
+  isBackground: boolean | null
+  isFork: boolean
+  parentId: string | null
+  startedAt: number | null
+  endedAt: number | null
+  /** What it is doing now: its latest call ("Reading src/cache.ts"). */
+  activity: string | null
+  calls: number
+  /** The first line of its answer once it ended, or why it stopped. */
+  result: string | null
+  isFailed: boolean
+  canStop: boolean
+  canMessage: boolean
+}
+
+export type BudgetMetricView = { used: number | null; limit: number | null; tone: Tone; isPartial?: boolean }
+
+export type BudgetView = {
+  isSet: boolean
+  cost: BudgetMetricView
+  /** Wall-clock milliseconds since the run began. */
+  time: BudgetMetricView
+  handoffs: BudgetMetricView
+  atLimit: 'notify' | 'ask' | 'finish'
+  state: 'off' | 'ok' | 'near' | 'reached'
+  /** The limits reached, in words ("Cost $30.12 of $30"). */
+  reached: string[]
+  /** Automation held at the limit, waiting for the person: what it would have started. */
+  held: string | null
+}
+
+/** What a fresh context would get, and whether it is ready to (features/resume.ts). */
+export type ResumeView = {
+  isHealthy: boolean
+  /** Why a fresh start is not offered, in words ("The handoff notes are older than the latest milestones"). */
+  problems: string[]
+  run: number | null
+  objective: string | null
+  done: string[]
+  doneCount: number
+  total: number
+  current: string | null
+  /** What Claude will restore or read, each with whether it is there. */
+  reads: { label: string; isOk: boolean }[]
+  notes: { path: string; writtenAt: number | null }
+  queued: number
+  decisions: number
+  next: string | null
+}
+
+export type ColdResumeView = {
+  isOn: boolean
+  threshold: number
+  /** The cache has surely lapsed over a context at least this large: the next message is asked about. */
+  isArmed: boolean
+  tokens: number | null
+  cause: string | null
+  /** Claude Code's own estimate of re-caching it, when it gave one for this model; null otherwise. */
+  usd: number | null
+  priceNote: string | null
+  last: { at: number; choice: string } | null
+}
+
+/** A message the Cold Resume Guard kept because the prompt box could not take it back. */
+export type HeldPromptView = { text: string; at: number; hasAttachments: boolean }
+
+/** The Watcher Scout's suggestion: what it would wait for, when, why, and the question in words ("Check the leaderboard again in two hours?"). */
+export type SuggestionView = { id: string; label: string; wakeAt: number | null; reason: string; isExplicit: boolean; question: string }
+
+/** Open operations an ended run of this project left: offered here, never moved without a press. */
+export type ForeignOpsView = { runId: string; runNumber: number; watchers: number; queued: number; decisions: number; overdue: string | null }
+
+export type OpsView = {
+  settings: { decisions: boolean; watchers: boolean; scout: WatcherScout }
+  queue: QueueItemView[]
+  /** Delivered or cancelled lately, newest first (the last few). */
+  queueDone: QueueItemView[]
+  decisions: DecisionView[]
+  decisionsDone: DecisionView[]
+  watchers: WatcherView[]
+  watchersDone: WatcherView[]
+  externalWakes: ExternalWakeView[]
+  agents: AgentRowView[]
+  /** The main conversation, as the first row of Agents. */
+  main: { state: HudState; text: string }
+  budget: BudgetView
+  resume: ResumeView
+  cold: ColdResumeView
+  held: HeldPromptView | null
+  suggestion: SuggestionView | null
+  foreign: ForeignOpsView | null
+  /** What the layer did lately, newest first ("14:00 W-1 woke the run in this context"). */
+  log: { at: number; text: string }[]
+  isSleeping: boolean
+  /** A turn runs now: queued work waits for its boundary, a watcher due now waits for its end. */
+  isTurnRunning: boolean
+  /** The page's own state: the forms' choices and drafts, what is open (module memory, per session). */
+  ui: OpsUiView
+}
+
+export type OpsUiView = {
+  queueTarget: QueueTarget
+  /** The queued item being edited in place. */
+  editing: string | null
+  watchLabel: string
+  watchStrategy: WatchStrategy
+  /** An ambiguous wake time's readings, to pick one. */
+  choices: { at: number; label: string }[] | null
+  /** The last form's refusal, in words ("A watcher wakes within a week."). */
+  error: string | null
+  /** Rows with their details open. */
+  expanded: string[]
+  budgetOpen: boolean
+  /** The watcher whose time is being changed in place. */
+  rescheduling: string | null
+  /** The agent a message is being written to. */
+  messaging: string | null
+}
+
+/** The prompt cache's last request, kept in `$.state` so a reload of the plugin keeps knowing when it lapses. */
+export type CacheMemo = { sessionId: string; lastRequestAt: number; lastPrefix: number; model: string | null; ttl: '5m' | '1h' | null }
+
 declare module 'claude-code' {
   interface PluginState {
     'project-sentinel': {
+      ops: OpsView
+      /** The prompt cache's last request in this context: a reload keeps it (Cold Resume Guard, Keep warm under a watcher). */
+      cacheMemo: CacheMemo | null
       hud: HudModel
       pane: PaneModel
       resources: ResourcesView

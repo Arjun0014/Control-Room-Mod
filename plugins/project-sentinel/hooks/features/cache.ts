@@ -584,6 +584,11 @@ export function nextRefresh(
     maxIdleMs: number
     /** Why Autopilot makes a refresh pointless now (a handoff about to clear), else null. */
     standDown: string | null
+    /**
+     * A watcher holds the cache until then (its Keep warm strategy, or Smart's hold): refreshes go on
+     * to that time, past the idle limit, and past the five-minute cache's cap when the person chose it.
+     */
+    holdUntil?: number | null
   },
 ): RefreshPlan {
   if (!input.isOn) return { at: null, reason: 'Off' }
@@ -596,9 +601,11 @@ export function nextRefresh(
   const isShortCache = state.ttl?.value === '5m'
   const maxIdleMs = isShortCache ? Math.min(input.maxIdleMs, FIVE_MINUTE_IDLE_CAP_MS) : input.maxIdleMs
   const isCapped = maxIdleMs < input.maxIdleMs
-  const idleEnd = input.idleSince === null ? null : input.idleSince + maxIdleMs
+  const hold = input.holdUntil ?? null
+  const limitEnd = input.idleSince === null ? null : input.idleSince + maxIdleMs
+  const idleEnd = hold === null ? limitEnd : Math.max(limitEnd ?? 0, hold + 60_000)
   const why = isCapped ? ' (past that, refreshing the 5-minute cache costs more than rebuilding it)' : ''
-  if (idleEnd !== null && input.now >= idleEnd) return { at: null, reason: `Paused after ${durationWords(maxIdleMs)} idle${why}` }
+  if (idleEnd !== null && input.now >= idleEnd) return { at: null, reason: hold !== null && idleEnd > (limitEnd ?? 0) ? 'The watcher it held the cache for has woken' : `Paused after ${durationWords(maxIdleMs)} idle${why}` }
   const ttl = ttlMs(state)
   if (ttl === null) {
     // The TTL is unknown: one refresh at six idle minutes tells. A hit means the hour.
@@ -608,7 +615,7 @@ export function nextRefresh(
   const expiry = state.lastRequestAt + ttl
   if (input.now >= expiry) return { at: null, reason: 'The cache lapsed before a refresh' }
   const at = Math.max(input.now, expiry - leadMs(ttl))
-  if (idleEnd !== null && at > idleEnd) return { at: null, reason: `Paused at the ${durationWords(maxIdleMs)} idle limit${why}` }
+  if (idleEnd !== null && at > idleEnd) return { at: null, reason: hold !== null && idleEnd > (limitEnd ?? 0) ? 'Held until the watcher wakes: no refresh is needed before it' : `Paused at the ${durationWords(maxIdleMs)} idle limit${why}` }
   return { at, isProbe: false }
 }
 
@@ -701,6 +708,34 @@ export type CacheMemory = {
   verifiedAt: number | null
   /** Short model names ("opus-5-5") on which an effort change was followed by a miss. */
   effortRebuilds: string[]
+  /**
+   * Claude Code's own cache-write price per model, as its estimates gave it (`estimated_cache_write_usd`
+   * over `context_tokens`, at a model switch or a resume; the managed `modelPricing` or the list
+   * price): the Cold Resume Guard's dollar figure. Never a price of Project Sentinel's own.
+   */
+  writeRates: WriteRate[]
+}
+
+export type WriteRate = { model: string; ttl: TtlValue | null; usdPerMTok: number; pricing: 'configured' | 'catalog'; at: number }
+
+/** How long a remembered price is trusted: prices change rarely, but they do. */
+export const WRITE_RATE_MAX_AGE_MS = 30 * 24 * 60 * 60_000
+
+/**
+ * The rate Claude Code's estimate implies, kept per model and lifetime (a one-hour cache write costs
+ * more than a five-minute one). An estimate priced at an assumed default tier is not kept.
+ */
+export function withWriteRate(rates: readonly WriteRate[], input: { model: string; ttl: TtlValue | null; usd: number; tokens: number; pricing: string | undefined; at: number }): WriteRate[] {
+  if (!Number.isFinite(input.usd) || input.usd <= 0 || !Number.isFinite(input.tokens) || input.tokens < 1000 || input.model === '') return [...rates]
+  if (input.pricing !== undefined && input.pricing !== 'configured' && input.pricing !== 'catalog') return [...rates]
+  const rate: WriteRate = { model: input.model, ttl: input.ttl, usdPerMTok: (input.usd / input.tokens) * 1_000_000, pricing: input.pricing === 'configured' ? 'configured' : 'catalog', at: input.at }
+  return [...rates.filter(r => !(r.model === rate.model && r.ttl === rate.ttl)), rate].slice(-8)
+}
+
+/** The price to use for this model and lifetime, if Claude Code gave one lately: one for this lifetime, else one whose lifetime it did not say. */
+export function writeRateFor(rates: readonly WriteRate[], model: string, ttl: TtlValue | null, now: number): WriteRate | null {
+  const fresh = rates.filter(r => r.model === model && now - r.at <= WRITE_RATE_MAX_AGE_MS)
+  return fresh.find(r => r.ttl === ttl && ttl !== null) ?? fresh.find(r => r.ttl === null) ?? (ttl === null ? (fresh.at(-1) ?? null) : null)
 }
 
 export function memoryOf(raw: unknown): CacheMemory {
@@ -709,5 +744,12 @@ export function memoryOf(raw: unknown): CacheMemory {
   const src = r.ttlSource === 'engine' || r.ttlSource === 'observed' || r.ttlSource === 'probe' ? r.ttlSource : null
   const verified = r.verified === 'yes' || r.verified === 'no' ? r.verified : 'unknown'
   const rebuilds = Array.isArray(r.effortRebuilds) ? r.effortRebuilds.filter((m): m is string => typeof m === 'string' && m.length > 0 && m.length <= 80).slice(-12) : []
-  return { v: 1, ttl, ttlSource: ttl === null ? null : src, verified, verifiedAt: typeof r.verifiedAt === 'number' ? r.verifiedAt : null, effortRebuilds: rebuilds }
+  const rates: WriteRate[] = Array.isArray(r.writeRates)
+    ? r.writeRates
+        .filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x))
+        .filter(x => typeof x.model === 'string' && x.model !== '' && x.model.length <= 120 && typeof x.usdPerMTok === 'number' && Number.isFinite(x.usdPerMTok) && x.usdPerMTok > 0 && typeof x.at === 'number')
+        .map((x): WriteRate => ({ model: x.model as string, ttl: x.ttl === '5m' || x.ttl === '1h' ? x.ttl : null, usdPerMTok: x.usdPerMTok as number, pricing: x.pricing === 'configured' ? 'configured' : 'catalog', at: x.at as number }))
+        .slice(-8)
+    : []
+  return { v: 1, ttl, ttlSource: ttl === null ? null : src, verified, verifiedAt: typeof r.verifiedAt === 'number' ? r.verifiedAt : null, effortRebuilds: rebuilds, writeRates: rates }
 }

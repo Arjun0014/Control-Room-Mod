@@ -13,7 +13,7 @@
 
 import type { RenderElement } from 'claude-code'
 
-import type { ActivityView, ChainView, HudModel, PaneModel, PermissionsView, ResourcesView, TabId } from '../../../types'
+import type { ActivityView, ChainView, HudModel, OpsView, PaneModel, PermissionsView, ResourcesView, TabId } from '../../../types'
 import type { Kit } from '../kit'
 import { clip, navBar } from '../primitives'
 import { ACCENT, G } from '../theme'
@@ -34,12 +34,12 @@ export const TABS: readonly { id: TabId; label: string; accent: string }[] = [
 ]
 
 /** Which extra atoms a page draws from (the render hook reads only these). */
-export const TAB_NEEDS: Record<TabId, readonly ('resources' | 'chain' | 'activity' | 'permissions')[]> = {
-  overview: ['resources'],
-  context: ['chain'],
+export const TAB_NEEDS: Record<TabId, readonly ('resources' | 'chain' | 'activity' | 'permissions' | 'ops')[]> = {
+  overview: ['resources', 'ops'],
+  context: ['chain', 'ops'],
   behavior: [],
   guardrails: ['permissions', 'resources'],
-  activity: ['activity'],
+  activity: ['activity', 'ops'],
   setup: [],
 }
 
@@ -50,6 +50,8 @@ export type PaneData = {
   chain?: ChainView
   activity?: ActivityView
   permissions?: PermissionsView
+  /** The orchestration layer (Activity → Operations; Overview's card; Context's Cold Resume Guard and Ready to resume). */
+  ops?: OpsView
 }
 
 function header(kit: Kit, data: PaneData): RenderElement {
@@ -74,13 +76,13 @@ function page(kit: Kit, data: PaneData): RenderElement {
     case 'overview':
       return overviewPage(kit, data)
     case 'context':
-      return contextPage(kit, data.pane, data.hud, data.chain)
+      return contextPage(kit, data.pane, data.hud, data.chain, data.ops)
     case 'behavior':
       return behaviorPage(kit, data.pane)
     case 'guardrails':
       return guardrailsPage(kit, data.pane, data.permissions, data.resources)
     case 'activity':
-      return activityPage(kit, data.pane, data.activity)
+      return activityPage(kit, data.pane, data.activity, data.ops)
     case 'setup':
       return setupPage(kit, data.pane)
   }

@@ -21,6 +21,7 @@ import type {
   ResourceLevel,
   RouterStrategy,
   SubagentMode,
+  WatcherScout,
 } from '../../types'
 
 export type {
@@ -35,6 +36,7 @@ export type {
   ResourceLevel,
   RouterStrategy,
   SubagentMode,
+  WatcherScout,
 }
 
 export type Settings = ControlRoomSettings
@@ -64,6 +66,8 @@ export const MODEL_ALIASES: readonly ModelAlias[] = ['session', 'haiku', 'sonnet
 
 export const ANSWER_STYLES: readonly AnswerStyle[] = ['standard', 'brief', 'ste', 'mission', 'quest']
 
+export const WATCHER_SCOUTS: readonly WatcherScout[] = ['off', 'suggest', 'auto']
+
 export const SYSTEM_KEYS = [
   'autopilot',
   'frontier',
@@ -77,6 +81,7 @@ export const SYSTEM_KEYS = [
   'progress',
   'answers',
   'cache',
+  'ops',
 ] as const satisfies readonly (keyof SystemSettings)[]
 
 export const PERMISSION_STATES: readonly PermissionState[] = ['default', 'ask', 'deny']
@@ -155,7 +160,8 @@ export function defaultSystems(): SystemSettings {
     permissions: { ...DEFAULT_PERMISSIONS },
     progress: { milestones: true },
     answers: { style: 'standard' },
-    cache: { keepWarm: false, maxIdleMinutes: 120, minTokens: 20_000, guardModelSwitch: true, stablePolicies: true },
+    cache: { keepWarm: false, maxIdleMinutes: 120, minTokens: 20_000, guardModelSwitch: true, stablePolicies: true, coldResume: true, coldResumeTokens: 100_000 },
+    ops: { decisions: true, watchers: true, scout: 'suggest' },
   }
 }
 
@@ -212,6 +218,7 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
   const pr = isRecord(r.progress) ? r.progress : {}
   const an = isRecord(r.answers) ? r.answers : {}
   const ca = isRecord(r.cache) ? r.cache : {}
+  const op = isRecord(r.ops) ? r.ops : {}
 
   const permissions = {} as Record<PermissionCategory, PermissionState>
   for (const category of PERMISSION_CATEGORIES) permissions[category] = permissionStateOf(pe[category], base.permissions[category])
@@ -282,6 +289,13 @@ function normalizeSystems(raw: unknown, base: SystemSettings): SystemSettings {
       minTokens: num(ca.minTokens, base.cache.minTokens, 5_000, 1_000_000),
       guardModelSwitch: bool(ca.guardModelSwitch, base.cache.guardModelSwitch),
       stablePolicies: bool(ca.stablePolicies, base.cache.stablePolicies),
+      coldResume: bool(ca.coldResume, base.cache.coldResume),
+      coldResumeTokens: num(ca.coldResumeTokens, base.cache.coldResumeTokens, 20_000, 2_000_000),
+    },
+    ops: {
+      decisions: bool(op.decisions, base.ops.decisions),
+      watchers: bool(op.watchers, base.ops.watchers),
+      scout: pick(op.scout, WATCHER_SCOUTS, base.ops.scout),
     },
   }
 }
@@ -353,6 +367,7 @@ export function systemsOf(settings: Settings): SystemSettings {
     progress: settings.progress,
     answers: settings.answers,
     cache: settings.cache,
+    ops: settings.ops,
   }
 }
 

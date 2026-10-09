@@ -12,7 +12,8 @@ direct filesystem or network APIs; every action goes through Claude Code's plugi
 (`$`), which validates and logs it. It makes **no network requests** of its own and sends **no
 telemetry**. It hooks none of Claude Code's telemetry streams and collects no analytics. It never
 reads environment variables, secrets, or the contents of your project's files. It persists only
-its own settings, run records and what it learned about the prompt cache in Claude Code's
+its own settings, run records (with the run's operations: work you queued, decisions and your
+answers, watchers, a run budget) and what it learned about the prompt cache in Claude Code's
 per-plugin store. Two features ask Claude Code to send a request to your model, and both are
 visible in the panel: the guard's optional smart check, and **Keep warm** (off by default), which
 re-sends the conversation's last request so the prompt cache stays warm. Run
@@ -43,7 +44,10 @@ until you delete it. It is not directed at children. Questions: open an issue on
 | In the terminal only: whether the project is a Git repository (`$.session.repo`) and the output of `git status --porcelain=v1 --branch` | The branch, how far it is ahead or behind, and how many files are uncommitted, in Overview and `/cr status` | Memory only: the branch name and the counts. The file paths in the output are not kept |
 | From the tool calls above: which documentation files the handoff turn changed and the fresh context read, whether the notes and CLAUDE.md were written, which checks ran | Handoff Health and Continuity (Context → *Last handoff*) | In the run record (`lastHandoff`): at most two file names per item (more as a count) and the subject of the milestone under way, as the run's plan already holds it |
 | File *metadata* only (`stat`): the handoff file's modification time; the real path of a file Claude is about to edit | Verifying that the handoff was written; detecting edits outside the project, including through links | Nothing |
-| The running subagents list (type, status, description) | Subagent counts and limits | Memory only |
+| The session's agents as Claude Code lists them (`$.agent.list`: id, type, description, status, parent, name, a teammate's address); an agent's start as Claude Code reports it (`agent.spawn`: its model, whether it runs in the background or is a fork); its loop's tool calls (counted, and the latest one's label); its end (`turn.complete`: the first line of its answer, or why it stopped) | Subagent counts and limits; Activity → Operations → Agents | Memory only (an ended agent stays listed ten minutes) |
+| When a session is resumed (`classic.SessionStart`, source `resume` or `fork`): seconds since the last answer, the context's tokens, whether the prompt cache likely expired, Claude Code's estimate of re-caching it; at a model switch, that estimate and how it was priced (`configured`, `catalog` or `default`) | The Cold Resume Guard: whether the cache surely lapsed, and its dollar figure | The price per token per model (from a `configured` or `catalog` estimate only, at most 30 days old), in `cache.v1`; the rest in memory |
+| Claude's final message when a turn stops (already read for the guard) | The Watcher Scout: whether Claude said it will check back at a time (a fixed pattern match, no model call) | Memory only; a watcher armed from it keeps its label (a few of Claude's words, at most 80 characters) in the run record |
+| Your answers in Activity → Operations or `/cr decide`, the work you queue, the labels and times of watchers you arm, a run budget | The orchestration layer | In the run record (see [Data at rest](#data-at-rest)) |
 | When a turn stops (`classic.Stop`): the background jobs still running (their description, else their command, cut to 80 characters) and the scheduled wake-ups (their schedule and whether they recur), and whether Claude's final message ends with a question | The status bar's headline between turns: *Waiting for the test run*, *Waiting to check back · wakes at 06:12*, *Waiting for your answer* | Memory only, until the next turn (at most 8 of each) |
 | The names of registered slash commands | Only so as not to take `/cr` if something else uses it | Nothing |
 | Whether managed (organisation) policy settings exist (only whether any key is set) | Choosing how to deliver policies (system prompt, or prompt context where a managed guard skips user plugins' prompt sections) | Nothing |
@@ -76,20 +80,28 @@ It reads totals only: no per-process data, no process names, nothing about other
 | --- | --- |
 | Add a section to the system prompt (or, on managed machines, prompt context) with the active policies | Frontier Max, Release check, machine load, subagent limits or Autopilot are on, the `milestones` tool is offered ("Run progress": record the run's steps with it), or an answer style other than Standard is chosen (how to write messages to you, never code, files or commit messages; it stands down while you use one of Claude Code's own output styles) |
 | Offer Claude one tool, `milestones` (`mcp__project-sentinel__milestones`, `$.tool.register`). Its answer only records the list in the run plan; it reads and writes nothing else | Only where Claude Code offers no task list of its own (TodoWrite or the Task tools) and Behavior → *Run progress* is on (the default) |
-| Add short hidden notes to the conversation, which Claude reads at its next request | Autopilot pending, resource pressure, or you changed a setting mid-session (while *Keep policies stable* holds a warm cache, the note carries the policies now in force) |
+| Offer Claude one more tool, `decision_request` (`mcp__project-sentinel__decision_request`). Its answer only records Claude's question (at most 300 characters, its context at most 800, up to four options of 80) in the run record and tells Claude to carry on; a subagent's call is answered that the inbox is the main conversation's. Its description tells Claude never to route permission, safety or destructive-action confirmations through it | While the Decision Inbox is on (Activity → Operations → *Needs review*; on by default). Turned off mid-session, the tool stays until the session ends and answers that the inbox is off |
+| Add short notes for Claude, with the next batch of tool results (`classic.PostToolBatch`) or the next prompt's context; nothing is appended to the transcript | Autopilot pending, resource pressure, or you changed a setting mid-session (while *Keep policies stable* holds a warm cache, the note carries the policies now in force); work you queued for after a milestone that just completed; your answers to Claude's decisions while it works or with your next message; a run budget set to *Finish the milestone* reached mid-turn |
 | Keep its own system-prompt section as it was while the prompt cache is warm | *Keep policies stable* (on by default): a setting changed mid-context reaches Claude as a note instead of rebuilding the cache |
 | Ask Claude Code to re-send the main conversation's last request with one short message, `Control Room cache keep-alive (automatic, not from the user): reply with the single word ok and nothing else.` (`$.model.fork`). The request and its answer are never added to the transcript | Only with *Keep warm* on (off by default), while you are away, shortly before the cache would lapse, up to the idle limit you set. Each refresh costs tokens, mostly cache reads. The panel shows the next refresh and how many were made |
 | Ask you to confirm a model switch, with the reason (answers Claude Code's model-switch check with *ask*) | A switch you make that would re-send 100k or more warm tokens, while *Ask before a model switch* is on (the default). It never refuses one |
 | Run `git status --porcelain=v1 --branch --untracked-files=normal` (`$.process.run`, read-only, 10-second timeout) | In the terminal, inside a Git repository: at session start and after a turn, at most every 15 seconds |
 | Draw Kit with a surface module (`hooks/kit.client.tsx`), which runs on the surface's drawing thread (in the terminal, and in Desktop's own page) with no access to `$`: it gets only Kit's mood, a caption, the calm switches, the local hour, when the context began, and four counts or times (milestones done, a green finish, failed checks, a Keep warm refresh); a click on it is only a reaction; it posts only `{ fault }` if it cannot draw, which leaves Kit out | Only with the companion on (off by default). VS Code, which draws no surface module, gets a still image instead |
 | Submit prompts in the session: the handoff prompt, one corrective retry, the continuation prompt | Only with the Context Autopilot on, or when you ask for a handoff |
-| Add one block to a fresh context's first message (`prompt.context`, named `contextAutopilot`): the run and session numbers, the handoff notes' path, the run's milestones and its objective | Only once, in the fresh context after its own handoff |
-| Run `/clear`; run `/compact` as a fallback | Only after a handoff whose file was verified as freshly written (`/compact` only if `/clear` fails and the fallback is allowed) |
+| Submit the orchestration layer's prompts (`$.prompt.submit`), one at a time, only while nothing runs: work you queued (your words), your answers to Claude's decisions, a watcher's wake (its id, label, when it was armed, the milestone then), a fresh context's first prompt (why it is fresh, the notes' path, what to do; with the Cold Resume Guard's *Start fresh*, your message), *Write notes first* when you press it on a watcher | Only for what you set up: an item you queued reaching its boundary, an answer the run waits on (or *Send now*), a watcher you or its Scout armed reaching its time with the run still where it left it. At a run budget limit set to *Ask* or *Finish*, none goes without your yes |
+| Submit your own message unchanged, as yours (`$.prompt.submit` with `asUser`) | After the Cold Resume Guard's *Compact first*, once Claude Code has compacted; or when you press *Send now* on a message it kept |
+| Ask before a message is sent (`prompt.submit` answered with `drop`: the message does not enter; the reason is shown) | The Cold Resume Guard: before a message re-reads a context of at least its threshold (100k tokens by default) whose cache has surely lapsed, in Claude Code's question dialog (*Continue full session*, *Start fresh from resume state*, *Compact first*, *Cancel*); the Run Budget at a limit set to *Ask*. Never for a prompt typed while Claude works, never for its own prompts, never where no one can be asked |
+| Put a message back in the prompt box (`$.prompt.fill`) | The Cold Resume Guard's *Cancel*, and the Run Budget's *Not now*. Where the box cannot take it, the message is kept in memory only (Operations: *Put back*, *Send now*, *Discard*), never stored |
+| Add one block to a fresh context's first message (`prompt.context`, named `contextAutopilot`): the run and session numbers, the handoff notes' path, the run's milestones and its objective; for a fresh context the orchestration layer started, also why (a watcher's wake), the work you queued for it, and the decisions still open or answered | Only once, in a fresh context after its own handoff, a watcher's fresh wake or the Cold Resume Guard's *Start fresh* |
+| Run `/clear`; run `/compact` as a fallback | After a handoff whose file was verified as freshly written (`/compact` only if `/clear` fails and the fallback is allowed); for a watcher's fresh wake, only while the run is still at the watcher's checkpoint (no turn, no change of milestones or context since it was armed) and the resume state is healthy (milestones, handoff notes of 200 bytes or more written since the milestones last changed, no failed pickup since); when you choose *Start fresh* (healthy resume state only) or *Compact first* in the Cold Resume Guard |
+| Set timers (`$.clock.after`, `$.clock.every`) for watchers | While a watcher is armed: they live in Claude Code's process only, and die with it. No daemon, service or scheduled task is installed |
 | Set the reasoning effort or model of a request | Frontier Max (the maximum the model supports; never invented for models without effort), Model Router |
 | Refuse a tool call; or, before a call set to *Ask* goes on, ask you in Claude Code's question dialog (`$.ui.ask`, *Run it* / *Don't run it*) | Permission Policy and heavy-job gating (see the rules below). It never answers a permission check |
 | Hide, refuse or ask about a subagent | Subagent Control |
 | Continue a turn that stopped early, with a short message | No-Lazy-Exit Guard (capped per turn and per session) |
 | Stop a background job that Claude started | Only when you press Stop in Guardrails → Machine load |
+| Stop an agent (`TaskStop`, through `$.tool.call`), or send it a message (Claude Code's own `SendMessage` delivery, `$.session.send`) | Only when you press *Stop* or *Send* on that agent in Activity → Operations → Agents, offered only where Claude Code takes them (background agents and teammates). Claude Code's refusal is shown as it words it |
+| Keep in `$.state` (`ops`, `cacheMemo`) the Operations view and the cache's last request (when, its size, model and lifetime) | So a reload of the plugin keeps knowing when the cache lapses; gone when the session ends |
 | Draw UI: the status bar above the prompt, the panel, compact tool rows, spinner text, status line, toasts; scroll its own pane back to the top (`$.ui.scroll`) | Always (Focus view and the status bar can be turned off). The scroll happens when you change section or press *↑ Sections* |
 | Write a line to Claude Code's debug log (`$.ui.log` with `to: 'debug'`): each turn's start and end and whose turn it is (yours, the handoff, the continuation), each Autopilot step, and where the handoff notes stand. Never on screen: the log exists only when you start Claude Code with `--debug` or `--debug-file` | At those moments. A line holds no prompt or answer text: only turn ids, step names, the handoff file's path, its size and age |
 | Keep the Autopilot step under way in `$.state` (`autopilot`) | While a handoff is under way or waiting, so a reload of the plugin carries it on instead of starting a second one |
@@ -124,6 +136,12 @@ It reads totals only: no per-process data, no process names, nothing about other
 - It never terminates or modifies programs other than its own sampler, and never stops a task
   you did not ask it to stop.
 - It never bypasses organisation or managed restrictions.
+- It never defers, answers or reroutes a permission prompt, a confirmation Claude Code requires, or
+  its own *Ask* approvals into the Decision Inbox; an approval waiting for you holds every delivery
+  of the orchestration layer back.
+- It never clears a context a watcher did not leave untouched: a run that moved since the watcher
+  was armed is only reported (*Watcher due*), and nothing is sent or cleared until you choose.
+- It never prices a cold resume itself: the dollar figure is Claude Code's own estimate, or none.
 - It never estimates or invents costs ("—" means Claude Code did not report one).
 - It never claims or attempts an OS-level CPU or RAM quota.
 
@@ -142,6 +160,10 @@ It reads totals only: no per-process data, no process names, nothing about other
 - A Keep warm refresh that fails is tried again in two minutes while the cache can still be
   saved. If refreshes do not hold the cache, Keep warm says so and stops itself until you turn it
   on again.
+- A prompt of the orchestration layer that Claude Code refuses goes back to waiting and is logged;
+  one on its way when the plugin reloads reads *Sent before a reload* and is never sent again by
+  itself. A watcher whose time passed while Claude Code was closed waits for you when the session
+  is open again.
 - If `git status` fails or takes longer than 10 seconds, the Git line is left out. If Kit's module
   fails to draw, it says so and Kit is left out until the plugin reloads; the status bar draws
   without it.
@@ -166,7 +188,16 @@ plugin name and source (`project-sentinel_<source>-<id>.json`). Project Sentinel
   Fix orbitalSpeed") or a kind of check ("Tests pass").
 - `cache.v1`, once the prompt cache taught it something: the cache's lifetime (`5m` or `1h`) and
   how it was learned, Keep warm's verdict on itself and when it was reached, and the short names
-  of models on which an effort change rebuilt the cache (`opus-5-5`; at most 12).
+  of models on which an effort change rebuilt the cache (`opus-5-5`; at most 12), and Claude Code's
+  own cache-write price per model and lifetime, from its estimates (at most 8, kept 30 days).
+- In a run record, `ops` (1.6.0): the Mission Queue (your queued words, at most 4,000 characters
+  each, their targets and states), the Decision Inbox (Claude's questions with their context and
+  options, your answers, at most 2,000 characters, and when each was delivered), watchers (their
+  label, at most 80 characters, times, strategy, Smart's reason, and the run's fingerprint when
+  armed: the session id, a count of your turns and a digest of the milestones' keys and states),
+  the run budget (its limits and which were said), and the layer's log (its last 30 lines, such as
+  "W-1 woke the run in this context"). At most 30 open and 10 finished queue items, 20 open and 10
+  finished decisions, 10 open and 10 finished watchers.
 - In a run record, `lastHandoff` after a handoff: when it happened, from and to which session, and
   the Handoff Health and Continuity items with a short detail each, which may name up to two
   documentation files ("README.md, DESIGN.md +1"), the handoff file, a check's outcome ("Tests
@@ -176,8 +207,9 @@ plugin name and source (`project-sentinel_<source>-<id>.json`). Project Sentinel
   how many keys it copied. That old file (`control-room_<source>-<id>.json`) stays as it was;
   delete it once you no longer want Control Room's copy.
 
-Beyond that objective, the task subjects, those award lines and those handoff details, no prompt
-text, answer text, tool input, diff or file content is persisted. `/cr reset confirm` clears the
+Beyond that objective, the task subjects, those award lines, those handoff details and the
+operations you gave it (your queued words, decision questions and your answers, watcher labels),
+no prompt text, answer text, tool input, diff or file content is persisted. `/cr reset confirm` clears the
 settings; deleting the store file removes everything; uninstalling the plugin removes the plugin
 itself.
 

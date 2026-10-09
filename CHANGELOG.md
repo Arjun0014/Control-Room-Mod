@@ -6,6 +6,143 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and ver
 `plugins/project-sentinel/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/project-sentinel` checks this when tagging a release.
 
+## [Unreleased]
+
+## [1.6.0] - 2026-10-09
+
+Long-run orchestration: what happens next in a run, and who it waits for. One layer with one home,
+Activity → Operations, designed in [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md). Everything in it
+belongs to the run, so it survives `/clear`, handoffs, a reload of the plugin and a resumed session,
+and nothing of an ended run leaks into a new one. 430 tests.
+
+### Added
+
+- **Mission Queue.** Work you give Claude for later without interrupting it: *Add work for later*
+  in Operations, or `/cr queue <text>` (`--turn`, `--milestone`, `--handoff` choose when;
+  `/cr queue` alone opens the field). Each item goes only at its boundary: the next safe one (the
+  milestone under way completes or the turn ends), after this turn, after the current milestone
+  (with the next batch of tool results, never into the reasoning), or into the next fresh context.
+  Reorder, edit, deliver now or delete; delivered once (one on its way during a reload reads *Sent
+  before a reload*, never resent by itself). `/cr` stays a non-immediate command: a slash command's
+  echo and reply become part of the conversation (seen in the requests), so typed mid-turn it runs
+  when the turn ends.
+- **Decision Inbox.** Claude is offered `decision_request` for a choice that is yours and need not
+  stop the work (with its context, up to four options, free text, urgency, whether it blocks, its
+  milestone). It waits in *Needs review* with a button per option and a field for your words;
+  `/cr decisions`, `/cr decide D-2 [answer]`. The answer reaches Claude with its next tool results
+  while it works, as a prompt of its own when the run waits on it, else with your next message
+  (**Send now** sends it at once). A blocking decision takes the headline: *Needs you · 1
+  decision*. The tool's description keeps status updates, Claude's own choices and every
+  permission or safety confirmation out of it; permission prompts are never deferred.
+- **Watchers.** Park the run until a time, then wake Claude to check what it waited for:
+  Operations' form (`in 2h`, `at 14:00`, quick *In 30m · 1h · 2h · 4h*) or `/cr watch in 2h
+  S-002 result`. A strict time grammar: an ambiguous `at 2:30` is asked (both readings, in Claude
+  Code's dialog for `/cr watch`), never guessed; local time and a countdown everywhere. *Keep warm*
+  holds the conversation's cache to the wake, *Fresh* spends nothing and wakes in a fresh context
+  from the handoff notes, *Smart* chooses (and shows why: *Fresh · 6h wait · 742k context · resume
+  state ready*). **A watcher never clears a run that moved since it was armed**: it reads *Watcher
+  due · this run changed since it was armed* with Check now, Reschedule and Dismiss. Due while
+  Claude works, it waits for the turn's end; a fresh wake needs healthy resume state; a warm wake
+  whose cache went cold asks instead of re-reading it all. Watchers live in Claude Code's process
+  (no daemon); one due while it was closed waits for you when the session is open again. Claude
+  Code's own wake-ups are shown beside them, read only.
+- **Watcher Scout.** After a turn in which Claude evidently waits for a future result (a milestone
+  marked waiting, or its own sentence pairing a check with a time), the status bar asks: *Claude
+  seems to be waiting for a future result. Check the leaderboard again in two hours?* (**Create
+  watcher**, **Change time**, **Ignore**). Off, Suggest (default) or Arm explicit waits; no model is
+  asked.
+- **Sleeping.** While a watcher parks the run the headline reads *Sleeping until 14:00 · S-002
+  result* (with *cache held warm* or *fresh wake · no keep-alive*), the instruments add `WATCHER ◷
+  1h 42m` (on Desktop the Machine cell becomes a Watcher cell), and Kit curls up asleep, or tends
+  its fire while the cache is held.
+- **Cold Resume Guard.** Before a message is sent into a context of 100k tokens or more (Context →
+  *Warn above*) whose prompt cache has surely lapsed, Claude Code's dialog asks: *Continue full
+  session*, *Start fresh from resume state* (only with healthy resume state), *Compact first*
+  (reads it once, said so), *Cancel* (the message goes back to the prompt box, or is kept in
+  Operations where the box cannot take it). It says why the cache lapsed and gives dollars only
+  from Claude Code's own estimate for that model (`estimated_cache_write_usd` at a model switch or a
+  resume, remembered per model); tokens otherwise. Never mid-turn, never headless, never for a cache
+  that may still be warm.
+- **Ready to resume (Resume Preview).** Context shows what a fresh context would get: the run and
+  objective, milestones done and under way, what it reads (✓/✗), what it carries (queued work, open
+  decisions), the next action, or why a fresh start is not offered. The Cold Resume Guard's question
+  and fresh wakes use it; `/cr resume` prints it.
+- **Agent Command Center.** Operations → Agents shows what Claude Code reports (status, type,
+  elapsed time, what each is doing, model, result or failure, parent), with **Stop** (`TaskStop`)
+  and **Message** (Claude Code's `SendMessage` delivery) only where Claude Code takes them. No cost
+  per agent (none is reported), nothing alive unless Claude Code lists it. `/cr agents` with no
+  argument lists them; with one it is still the subagent policy. Guardrails links to it.
+- **Run Budget.** Optional limits on cost (as reported), wall-clock time and handoffs; said once at
+  80%; at a limit: notify only, ask before Project Sentinel starts more work by itself, or have
+  Claude finish the milestone and pause. Never mid-tool, never cancelling a turn. `/cr budget`.
+- **The status bar** gains chips that open Operations, each only while it matters: `Review 2`
+  (amber), `Watcher 1h 42m`, `Queued 3` (while Claude works), the budget near or at a limit; and the
+  alert line's new questions (a watcher that waits for you, a kept message, the budget, a
+  suggestion). Overview gains an Operations card only while something is in it.
+- **Ended runs never leak**: a new run of the same project is told once what an ended one left
+  (watchers, queued work, open decisions) and **Bring them here** moves it; nothing moves by itself.
+
+### Fixed
+
+- **A run written at once could be overwritten by an older copy.** A change saved immediately
+  (now every change of the run's operations) left a debounced write of the same run waiting with
+  the copy taken before it; that write then put the older copy back. A watcher armed just after a
+  turn was lost from the store, and so after a restart (found by the new persistence tests;
+  verified to fail without the fix). An immediate write now supersedes the waiting one.
+- Kit sleeps or tends its fire while a watcher parks the run even in a context with no turn yet,
+  ahead of the fresh context's walk-in.
+- **"Some saved settings were invalid" for settings that were only incomplete.** Since 1.4.0,
+  stored settings with no permissions group (written by hand or by a tool) were reported as repaired
+  at each start until a setting was changed, though nothing in them was invalid: the check for a
+  saved Allow added the missing group, and the comparison read that as a change. A missing group now
+  takes its defaults quietly (seen in a live test; regression test fails without the fix).
+
+### Development
+
+- Tests: `ops.test.ts` (the model: time grammar, queue boundaries, decisions, watchers and
+  checkpoints, Smart, budget, the stored record, resume health and preview, Scout, agents),
+  `operations.test.ts` (the Runtime over the in-memory host and its manual clock: every flow, stale
+  protection, fresh wakes, the cache going cold before a warm wake, reloads and restarts, the Cold
+  Resume Guard's every answer, agents, budget, ended runs), `opsui.test.ts` (engine-driven:
+  Operations on terminal, desktop and mobile with its controls pressed, the chips and the sleeping
+  bar, Kit's Desktop tree through the page's check, every `/cr` command, the `prompt.submit` drop,
+  the decision tool). The fake host and the engine world answer agents, questions and prompt drops.
+- The Operations debug trace (`ops: Q-1 queued`, `ops: W-1 due, but the run changed since it was
+  armed …`, `ops: the fresh context carries …`, `cold resume: cancelled …`) makes live runs readable
+  step by step.
+- `tools/desktop-preview` draws an `Input` (its text or placeholder) and a Button's own children (a
+  chip's mark and words in its tone), as the app does; before, a field was left out and a chip drawn
+  as its bare label.
+
+### Verified live
+
+Claude Code 2.1.295, Sonnet 5.5, a renamed copy of the plugin (its own store), every request through
+the recording proxy (fingerprints and token counts only), each step read from the debug trace.
+
+- **Mission Queue.** `/cr queue --turn …` while idle: `Queued Q-1 · Due: goes now.`, then a turn of
+  its own that did the work. Typed during a turn running `sleep 12`: Claude Code ran the command when
+  that turn ended (the turn's own requests carry no echo of it), and Q-2 went once, after it.
+- **Decision Inbox.** Claude called `decision_request` (a blocking question with two options) and
+  ended its turn; `/cr decisions` listed D-1; `/cr decide D-1 Spaces` answered it, the answer went as
+  a prompt of its own, and Claude acted on it.
+- **Watchers.** A Smart watcher a minute out woke the run in its context at its time. A second one
+  stood down because a turn ran after it was armed (`due, but the run changed since it was armed …
+  nothing sent, nothing cleared`; no request at its time). A third was due while Claude Code was
+  closed: resumed later, it read *was due 1 minute ago (Claude Code was not running): it waits for
+  you*, and nothing was sent. A Fresh watcher, after Claude had written milestones and notes: Scout
+  suggested a watcher from the waiting milestone, `/cr resume` showed the run ready, and at the wake
+  `/clear` ran, the fresh session's first message carried the wake, and the fresh context finished
+  the check.
+- **Cold Resume Guard**, in a real console on a session resumed three hours after its last answer
+  (90k tokens, Keep warm off): typing a message brought Claude Code's own dialog, with the cause and
+  Claude Code's estimate (about $0.36), and nothing was sent while it asked. *Cancel* dropped the
+  message and put it back in the prompt box; no request went. Sent again, *Continue full session*
+  sent it (the one request re-wrote 129k tokens; Claude Code's cost rose $0.52, so its estimate reads
+  as a lower bound; Troubleshooting says so).
+- Not tried live: the Agent Command Center's Stop and Message, the run budget at its limits, *Compact
+  first* and *Start fresh* from the Cold Resume Guard, and Operations in Claude Desktop. The Runtime
+  and engine suites cover each of them.
+
 ## [1.5.1] - 2026-10-09
 
 ### Fixed

@@ -153,7 +153,8 @@ state (`app/headline.ts`), so it never says one thing while another is true:
 | handoff | `↻` orange | Autopilot's step: writing the notes, starting fresh, resuming |
 | waiting for a result | `◷` blue | a background job, a scheduled wake-up, a milestone marked *waiting*: `Waiting for the test run · 2 more running`, `Waiting to check back · wakes at 06:12` |
 | blocked | `⊘` amber | `Blocked:` what only the person can give |
-| waiting for you | `◆` orange | Claude asked something, a handoff waits to start fresh, or a call set to *Ask* waits for your answer (`Waiting for you to approve: git push`, the command beside it) |
+| waiting for you | `◆` orange | Claude asked something, a handoff waits to start fresh, a call set to *Ask* waits for your answer (`Waiting for you to approve: git push`, the command beside it), a decision Claude left blocks the run (`Needs you · 1 decision`, its question beside it), or a watcher waits for you (`Watcher due: S-002 result`, why beside it) |
+| sleeping | `◷` blue, a crescent on Desktop | a watcher parks the run: `Sleeping until 14:00 · S-002 result`, with `cache held warm`, `fresh wake · no keep-alive` or `Smart decides at the wake` beside it |
 | done, complete | `✓` green | what the last turn did in counted words; `All 6 milestones done` |
 | failing | `✗` amber | the same, after a turn that left a check failing; the words stay plain, the mark and a chip carry the color |
 | ready | `○` dim | before the first turn: the run's objective as Claude stated it, else `Ready` |
@@ -165,7 +166,12 @@ progress.
 name (`✗ Lint failing`, red; not counted again as an issue), calls that need a look
 (`▲ 2 issues`), the guard keeping Claude going, a busy machine in the terminal (`▲ RAM 92%`, amber
 near a ceiling, red at it; Desktop has its Machine cell instead), running agents, the Quest log's
-level. Then the **Control Room** button: in the
+level. The orchestration layer adds four, each only while it has something to say, each a control
+that opens Activity → Operations: `▲ Review 2` (amber: decisions waiting for the person; when one
+blocks the run the headline says it instead), the run budget near or at a limit, `◷ Watcher 1h 42m`
+(a watcher armed while the run is not asleep: Claude works, or the person does), and `● Queued 3`
+(queued work due when the turn ends, shown only while Claude works). There is no constant count:
+an empty queue, no watcher and no budget draw nothing. Then the **Control Room** button: in the
 terminal a filled chip in the theme's quiet gray, brand orange while the panel is open; on
 Desktop the native primary button, the panel open or closed (the secondary one, gray on the bar's
 gray, read as a tag rather than a button).
@@ -189,9 +195,17 @@ gray, read as a tag rather than a button).
   (`CPU ▮ 34%  RAM ▮ 85%`), amber near a ceiling and red at it; in a narrower band the caption reads
   `CPU · RAM` and the labels go, and in a compact one the bars go too.
 - **Run** is the whole run's cost on the right edge, which a fresh context never resets.
+- **Watcher**, only while a watcher parks the run: `WATCHER ◷ 1h 42m`, the time to its wake (the
+  headline says until when, and why). On Desktop it takes the Machine cell's place, a crescent and
+  `1h 42m · 14:00`: nothing runs, so the machine is not the story.
 
-Settings (a profile, the threshold) are never shown. A handoff that needs the person takes a line
-of its own above, with **Hand off now** and **Later**, or **Start fresh**.
+Settings (a profile, the threshold) are never shown. What needs the person takes a line of its own
+above, one at a time, the most pressing first, with its buttons: a handoff (**Hand off now** and
+**Later**, or **Start fresh**), the machine at its limit, a watcher that waits for the person
+(**Check now**, **Start fresh** when that is safe, **In 30m**, **Dismiss**), a message the Cold
+Resume Guard kept (**Put back**, **Send now**, **Discard**), the run budget holding automation
+(**Continue anyway**, **Budget ›**), the Watcher Scout's suggestion (**Create watcher**, **Change
+time**, **Ignore**). None of them while a turn runs.
 
 **Quiet grays are theme colors, not dim text.** Terminals draw dim text very differently (one
 draws it as plain gray), and a dim block reads as a slab. The empty part of a graphic and the
@@ -299,7 +313,11 @@ each handoff) and **Cache** (its state after a dot that empties as its time runs
 holds and Keep warm's switch; starts over with each fresh context and lapses when left idle).
 Each card's footnote says how it starts over, which is the one thing that tells the three apart.
 Then **Now** (the status bar's headline in full, with its state's mark, and what needs a look; the
-machine's readings sit with Guardrails), the profile, and one card per remaining section.
+machine's readings sit with Guardrails), an **Operations** card only while something is in it
+(`Review 1` with whether it blocks the run, `Watcher · wakes in 1h 42m` with its time and what it
+waits for, `Queued 2`, `Agents 1 active`, the budget), linking to Activity → Operations, the
+profile, and one card per remaining section. Overview shows only live summaries: nothing of the
+layer while it is empty.
 
 ## The prompt cache
 
@@ -314,6 +332,14 @@ that the expiry, the hit ratio and the causes are derived from the tokens Claude
 and under it, wrapping, its kind (*Preventable*, *Expected*, *Unexplained*) and what would avoid
 the next one. Only a costly rebuild that could have been avoided, or one that keeps happening
 with nothing changed, raises its voice (amber, and a toast); compaction is expected and dim.
+
+**Cold Resume Guard** follows the cache: its switch with whether it would ask now and why
+(`Armed: the cache lapsed over 616k tokens, so your next message is asked about first`), *Warn
+above* as a stepper, why the cache lapsed, the price (Claude Code's own estimate, or `Tokens only`)
+and the last answer. **Ready to resume** says what a fresh context would get (the run and its
+objective, the milestones done and under way, what it reads with a `✓` or `✗` each, what it
+carries, the next action) and, when it is not ready, why. While Autopilot waits for the person to
+start the fresh context, it sits right under the handoff card, where that choice is made.
 
 **Last handoff**, after one: what the handoff left for the fresh context and what the fresh
 context picked up, each a `✓`, `✗` or a dim `○` (not needed), with a score (`5 of 6`). It is
@@ -344,7 +370,39 @@ Activity is the run in detail, signal before noise. Its summary reads top to bot
    build folders, `.claude`, the handoff notes, anything outside the project) fold into one row. A
    file with no reported diff says `diff unavailable`, never `+0 −0`.
 
-Every tool call, newest first, is the secondary view (*All tool calls*).
+**Operations** is the second view (*Summary · Operations · All tool calls*; its label carries a
+count while something waits for the person), the run over time, leading with what needs the
+person:
+
+1. Callouts, only while they apply: an ended run of this project that left open work (**Bring them
+   here**, **Not now**), a message the Cold Resume Guard kept, the Scout's suggestion, a watcher that
+   waits for the person.
+2. **Needs review**: each decision with its id, milestone and whether it blocks; its context; a
+   button per option and a field for free text; **Not needed**. An answered one says how it will
+   reach Claude (`Goes with Claude's next tool results`, `Goes with your next message (or Send
+   now)`). Its footnote says permission prompts stay Claude Code's own.
+3. **Mission Queue**: *Add work for later* (one field, under its label at every width: the terminal
+   draws a field as wide as its text, which beside the label squeezed it into a column of single
+   words) and *Deliver* (next safe boundary, after this
+   turn, after the current milestone, after the handoff), then the items in order with when each
+   goes, ↑ ↓, **Edit**, **Deliver now**, **Delete**; the last few delivered.
+4. **Watchers**: each with its local time and countdown, its strategy and what Smart chose
+   (*Details* opens the reason, the checkpoint, where it came from), **Wake now**, **Edit**
+   (reschedule, strategy), **Pause**, **Delete**; Claude Code's own wake-ups beside them, dim and
+   read only. Then the form: *Waiting for*, *Wake* (`in 2h`, `at 14:00`, or **In 30m** · **1h** ·
+   **2h** · **4h**; an ambiguous time offers both readings), *Resume* (Smart, Keep warm, Fresh); the
+   switches; the footnote that watchers live in Claude Code's process.
+5. **Agents**: the main conversation first (the headline's words), then each agent as Claude Code
+   lists it: status and elapsed time, what it is doing or its result, **Stop** and **Message** only
+   where Claude Code takes them, *Details* (type, model, background or not, calls, parent).
+   *What Claude may start ›* goes to Guardrails, whose Subagents card links back (*See what is
+   running ›*).
+6. **Run budget**: one quiet row (*No budget for this run · Set a budget ›*) until one is set; then
+   a meter per limit, the limits' fields and stepper, *At a limit*, **Continue anyway** at a limit.
+
+An empty card is one line; a row's details open in place; every form field is one line.
+
+Every tool call, newest first, is the third view (*All tool calls*).
 
 Context draws the run's sessions as columns, each its peak context against the handoff line, once
 a run has two or more: the sawtooth of a long run, at a glance.

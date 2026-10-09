@@ -24,7 +24,7 @@ import type {
   TurnStepResult,
 } from 'claude-code'
 
-import type { PermissionLogEntry, TabId } from '../../types'
+import type { PermissionLogEntry, QueueTarget, TabId, WatchStrategy } from '../../types'
 import { COMMAND, LIMITS, MIN_ENGINE, PANE_ID, PANE_TITLE, SHORT_COMMAND, STORE_ENTRIES } from '../constants'
 import { type Effective, POLICY_SECTION_ID, effective, policySections, policyText } from '../core/policy'
 import { applyProfile, findProfile, profileLabel } from '../core/profiles'
@@ -37,6 +37,7 @@ import * as Autopilot from '../features/autopilot'
 import * as Chain from '../features/chain'
 import { type GitState, parseStatus } from '../features/git'
 import * as Handoff from '../features/handoff'
+import * as Ops from '../features/ops'
 import * as Plan from '../features/plan'
 import * as Quest from '../features/quest'
 import { VALIDATION_LABEL, summarize } from '../features/validation'
@@ -57,11 +58,14 @@ import { Debounced, findRunBySession, loadHistory, loadIndex, loadSettings, next
 import { CARRIED_MARK, type CarriedMarker, carriedWrites, configDirFromEnv, configDirOf, isFormerHud, readFormerStore } from './formerStore'
 import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
+import { type FreshPurpose, Operations } from './operations'
+import { headlineOf } from './headline'
 import { PolicyLedger, policyRenderOf, recordLine } from './ledger'
 import { type NoteKind, NoteBox } from './notes'
 import { Publisher } from './publisher'
 import * as CacheModel from '../features/cache'
 import { endsWithQuestion } from './headline'
+import type { HudHeadline } from '../../types'
 import * as fmt from '../core/format'
 
 type TurnKind = Autopilot.TurnKind
@@ -142,13 +146,26 @@ export class Runtime {
 
   ui = {
     tab: 'overview' as TabId,
-    activitySub: 'summary' as 'summary' | 'raw',
+    activitySub: 'summary' as 'summary' | 'ops' | 'raw',
     showGenerated: false,
     selectedPath: null as string | null,
     expanded: new Set<string>(),
     isPaneOpen: false,
     openPicker: null as string | null,
     showAllChanges: false,
+    /** Activity → Operations: the forms' choices and drafts, and what is open. */
+    ops: {
+      queueTarget: 'boundary' as QueueTarget,
+      editing: null as string | null,
+      watchLabel: '',
+      watchStrategy: 'smart' as WatchStrategy,
+      choices: null as { at: number; label: string }[] | null,
+      error: null as string | null,
+      expanded: [] as string[],
+      budgetOpen: false,
+      rescheduling: null as string | null,
+      messaging: null as string | null,
+    },
   }
   notes: string[] = []
   /** Categories whose saved Allow read as Default at this load (Guardrails says so for the session). */
@@ -172,6 +189,8 @@ export class Runtime {
 
   /** The prompt cache: telemetry, the miss doctor, Keep warm and stable policies. */
   readonly cache: CacheGuardian
+  /** The orchestration layer: the Mission Queue, the Decision Inbox, Watchers, the Run Budget, the Cold Resume Guard, agents. */
+  readonly ops: Operations
   /** The project's Git state, for the terminal (Desktop shows Git itself); null outside a repository or before the first look. */
   git: GitState | null = null
   /** The repository root, once looked up (null: not a repository). */
@@ -232,10 +251,12 @@ export class Runtime {
       isTurnRunning: () => this.turn.isRunning,
       contextTokens: () => this.usage.tokens ?? 0,
       standDown: () => this.keepWarmStandDown(),
-      changed: () => this.publisher.mark('hud', 'pane'),
+      changed: () => this.onCacheChanged(),
       missed: miss => this.onCacheMiss(miss),
       verdict: (verdict, reason) => this.onKeepWarmVerdict(verdict, reason),
+      hold: () => this.ops.hold(),
     })
+    this.ops = new Operations(this)
   }
 
   // -------------------------------------------------------------------------
@@ -269,6 +290,21 @@ export class Runtime {
     return isPastThreshold ? 'Past the handoff point: the next turn hands off to a fresh context' : 'A handoff will start a fresh context, so this cache is about to be discarded'
   }
 
+  /** The last request the cache memo holds (`$.state`), so a write goes only when it moved. */
+  private memoAt: number | null = null
+
+  /** The cache changed: redraw, and keep its last request where a reload of the plugin finds it. */
+  private onCacheChanged(): void {
+    this.publisher.mark('hud', 'pane', 'ops')
+    const at = this.cache.state.lastRequestAt
+    const host = this.host
+    if (host === null || at === this.memoAt) return
+    this.memoAt = at
+    void host.saveCacheMemo(this.cache.memoOf(this.sessionId)).catch(() => {
+      this.memoAt = null
+    })
+  }
+
   private onCacheMiss(miss: CacheModel.CacheMiss): void {
     this.publisher.mark('hud', 'pane')
     const host = this.host
@@ -290,8 +326,10 @@ export class Runtime {
    * Before a model switch the person makes: with a large warm cache, Claude
    * Code is asked to confirm, with what the switch re-sends uncached.
    */
-  onPreModelSwitch(e: { from_model: string; to_model: string; source: string; context_tokens: number; prompt_cache_warm: boolean; cache_ttl: '5m' | '1h'; estimated_cache_write_usd: number }): string | null {
+  onPreModelSwitch(e: { from_model: string; to_model: string; source: string; context_tokens: number; prompt_cache_warm: boolean; cache_ttl: '5m' | '1h'; estimated_cache_write_usd: number; pricing?: string }): string | null {
     if (e.cache_ttl === '5m' || e.cache_ttl === '1h') this.cache.noteTtl(e.cache_ttl)
+    // Claude Code's own price for re-caching on the model switched to: the Cold Resume Guard's figure.
+    this.cache.noteWriteRate({ model: e.to_model, ttl: e.cache_ttl === '5m' || e.cache_ttl === '1h' ? e.cache_ttl : null, usd: e.estimated_cache_write_usd, tokens: e.context_tokens, pricing: e.pricing })
     const s = this.settings.cache
     if (!s.guardModelSwitch || !e.prompt_cache_warm || e.from_model === e.to_model || e.context_tokens < LIMITS.guardSwitchTokens) return null
     if (e.source !== 'command' && e.source !== 'picker') return null
@@ -300,8 +338,11 @@ export class Runtime {
     return `Control Room: this re-sends ${fmt.tokens(e.context_tokens)} cached tokens uncached${cost}. A fresh context avoids it.`
   }
 
-  onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h'; source: string }): void {
+  onPostModelSwitch(e: { from_model: string; to_model: string; cache_ttl: '5m' | '1h'; source: string; context_tokens?: number; estimated_cache_write_usd?: number; pricing?: string }): void {
     const by = e.source === 'auto' || e.source === 'resume' ? 'engine' : 'person'
+    if (e.estimated_cache_write_usd !== undefined && e.context_tokens !== undefined) {
+      this.cache.noteWriteRate({ model: e.to_model, ttl: e.cache_ttl === '5m' || e.cache_ttl === '1h' ? e.cache_ttl : null, usd: e.estimated_cache_write_usd, tokens: e.context_tokens, pricing: e.pricing })
+    }
     if (e.cache_ttl === '5m' || e.cache_ttl === '1h') this.cache.noteModelSwitch({ from: e.from_model, to: e.to_model, ttl: e.cache_ttl, now: this.clock(), by })
     if (e.to_model !== '') this.sessionModel = e.to_model
   }
@@ -400,6 +441,7 @@ export class Runtime {
 
     await this.registerCommands()
     await this.offerMilestones()
+    await this.offerDecisions()
     // Managed settings seat Anthropic's sec-default guard, which continues prompt.compose past
     // user-installed mods; policies then ride the prompt as context instead.
     const policy = await host.settings('policy').catch(() => ({}))
@@ -407,9 +449,14 @@ export class Runtime {
     await this.attachRun()
     await this.cache.load()
     await this.restorePolicyMemo()
+    const memo = await host.loadCacheMemo().catch(() => null)
+    if (memo !== null) this.cache.restoreMemo(memo, this.sessionId)
     await this.refreshUsage(true)
     this.reconfigure({ isStartup: true })
     await this.recoverAutopilot()
+    await this.ops.onLoad()
+    // Agents a runtime before this one saw start (a reload) are read from Claude Code again.
+    void this.refreshAgents()
     void this.refreshHistory()
     void this.refreshGit()
     this.publisher.markAll()
@@ -467,6 +514,23 @@ export class Runtime {
     this.publisher.mark('pane')
   }
 
+  /** The decision tool's full name once offered to Claude; null while it is not. */
+  decisionsTool: string | null = null
+
+  /**
+   * The Decision Inbox: Claude is offered `decision_request` (Behavior → Decisions, on by default),
+   * so a non-urgent choice that is the person's waits in Needs review. Offered once per session; turned
+   * off mid-session, the tool stays until the session ends and answers that the inbox is off.
+   */
+  async offerDecisions(): Promise<void> {
+    const host = this.host
+    if (host === null || !this.settings.ops.decisions || this.decisionsTool !== null) return
+    this.decisionsTool = await host
+      .registerTool({ name: prompts.DECISION_TOOL.name, description: prompts.DECISION_TOOL.description, inputSchema: prompts.DECISION_TOOL.inputSchema as unknown as Record<string, unknown> })
+      .catch(() => null)
+    this.publisher.mark('pane', 'ops')
+  }
+
   /** The milestones tool's answer: the run plan updated from the whole list. A subagent's list is its own. */
   recordMilestones(input: Record<string, unknown>, agentId: string | undefined): string {
     if (!this.settings.progress.milestones) return 'Milestone tracking is off in Control Room; there is no need to call this tool.'
@@ -491,9 +555,12 @@ export class Runtime {
   /** A new run plan from Claude's task list: kept with the run, and in the Quest log, newly finished milestones pay. */
   private setPlan(plan: Plan.Plan): void {
     if (this.run === null || plan === this.plan()) return
-    const before = Plan.progressOf(this.plan())
-    const wasDone = new Set(this.plan().tasks.filter(t => t.status === 'completed').map(t => t.key))
+    const previous = this.plan()
+    const before = Plan.progressOf(previous)
+    const wasDone = new Set(previous.tasks.filter(t => t.status === 'completed').map(t => t.key))
     this.run = { ...this.run, plan }
+    // A milestone done mid-turn is a boundary for work queued after it.
+    this.ops.onPlanChanged(previous, plan)
     const after = this.progress()
     if (this.turn.isRunning && (this.turn.kind === 'handoff' || this.turn.kind === 'retry')) this.handoffTurn.isPlanUpdated = true
     for (const t of plan.tasks) {
@@ -551,7 +618,7 @@ export class Runtime {
       await host.registerCommand({
         name: COMMAND,
         description: 'Open Control Room: context, behavior, guardrails, activity and setup',
-        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|cache|diagnostics|frontier|focus|style <name>|resources <level>|agents <mode>]',
+        argumentHint: '[status|queue <text>|watch in 2h <what>|watchers|decisions|decide <id>|budget|resume|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|cache|agents [mode]|help]',
       })
       this.commandsRegistered.add(COMMAND)
     } catch (error) {
@@ -579,7 +646,7 @@ export class Runtime {
     const now = await host.now()
     const existing = await findRunBySession(host, this.sessionId)
     if (existing !== null) {
-      this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan), lastHandoff: Handoff.handoffRecordOf(existing.lastHandoff) }
+      this.run = { ...existing, status: 'active', plan: Plan.planOf(existing.plan), lastHandoff: Handoff.handoffRecordOf(existing.lastHandoff), ops: Ops.opsOf(existing.ops) }
       // Milestones done before this runtime attached are no turn's doing.
       this.turnStartDone = this.progress().done
       return
@@ -587,7 +654,7 @@ export class Runtime {
     const resumedFrom = this.startSource?.source === 'resume' ? this.startSource.sessionId : null
     const previous = resumedFrom === null ? null : await findRunBySession(host, resumedFrom)
     if (previous !== null) {
-      this.run = Chain.rollOver({ ...previous, plan: Plan.planOf(previous.plan) }, { end: 'resume', endNote: 'resumed', nextId: this.sessionId, nextStart: 'resume', now })
+      this.run = Chain.rollOver({ ...previous, plan: Plan.planOf(previous.plan), ops: Ops.opsOf(previous.ops) }, { end: 'resume', endNote: 'resumed', nextId: this.sessionId, nextStart: 'resume', now })
     } else {
       this.run = Chain.newRun({
         id: Chain.runIdOf(now, Math.random()),
@@ -635,17 +702,28 @@ export class Runtime {
     const host = this.host
     if (host === null) return
     this.history = await loadHistory(host, this.run?.id ?? null).catch(() => [])
+    this.ops.findForeign()
     this.publisher.mark('chain')
   }
 
+  /** Writes a run other than this session's (an ended run whose operations were brought here). */
+  async saveOtherRun(run: Chain.Run): Promise<void> {
+    const host = this.host
+    if (host !== null && run.id !== this.run?.id) await saveRun(host, run).catch(() => undefined)
+  }
+
   persistRun(isNow = false): void {
-    if (this.run === null) return
+    const run = this.run
+    if (run === null) return
     if (isNow) {
+      // A write of the run now supersedes a later one waiting with an older copy of it (which would
+      // otherwise put that copy back: a watcher armed just after a turn, lost at the next restart).
+      this.saveRunLater.drop(pending => pending.id === run.id)
       const host = this.host
-      if (host !== null) void saveRun(host, this.run).catch(() => undefined)
+      if (host !== null) void saveRun(host, run).catch(() => undefined)
       return
     }
-    this.saveRunLater.schedule(this.run)
+    this.saveRunLater.schedule(run)
   }
 
   /**
@@ -664,25 +742,41 @@ export class Runtime {
   }
 
   /** classic.SessionStart: a session begins (startup, resume, compact) or a fresh context after /clear. */
-  async onClassicSessionStart(input: { source: string; sessionId: string; model?: string; transcriptPath?: string }): Promise<void> {
+  async onClassicSessionStart(input: {
+    source: string
+    sessionId: string
+    model?: string
+    transcriptPath?: string
+    /** resume/fork: Claude Code's word on the cache: seconds since the last answer, the context, whether it likely expired, its estimate of re-caching. */
+    secondsSince?: number
+    contextTokens?: number
+    isCacheExpired?: boolean
+    usd?: number
+  }): Promise<void> {
     await this.ensureLoaded()
     await this.carryAtSessionStart(input.transcriptPath)
     if (input.source !== 'clear') {
       this.startSource = { source: input.source, sessionId: input.sessionId }
       if (input.source === 'compact') this.publisher.mark('chain', 'hud')
+      if (input.source === 'resume' || input.source === 'fork') {
+        this.ops.noteResumed({ secondsSince: input.secondsSince, tokens: input.contextTokens, isExpired: input.isCacheExpired, usd: input.usd, model: input.model })
+      }
       return
     }
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
     const wasOurs = this.isOwnClear || this.autopilot.state === 'clearing'
-    this.trace(`fresh session ${input.sessionId} after /clear (${wasOurs ? "Control Room's handoff" : 'cleared by the person'})`)
+    const purpose = wasOurs ? this.freshPurpose : null
+    this.trace(`fresh session ${input.sessionId} after /clear (${purpose !== null ? `Project Sentinel's ${purpose.endNote}` : wasOurs ? "Control Room's handoff" : 'cleared by the person'})`)
     if (wasOurs) this.onOwnClearSeen?.()
     if (this.run !== null) {
       this.run = Chain.rollOver(this.run, {
         end: wasOurs ? 'handoff' : 'clear',
-        endNote: wasOurs
-          ? `handoff at ${this.autopilot.triggeredTokens === null ? 'manual request' : `${Math.round(this.autopilot.triggeredTokens / 1000)}k tokens`}`
-          : 'cleared by you',
+        endNote: purpose !== null
+          ? purpose.endNote
+          : wasOurs
+            ? `handoff at ${this.autopilot.triggeredTokens === null ? 'manual request' : `${Math.round(this.autopilot.triggeredTokens / 1000)}k tokens`}`
+            : 'cleared by you',
         nextId: input.sessionId,
         nextStart: wasOurs ? 'handoff' : 'clear',
         now,
@@ -719,14 +813,18 @@ export class Runtime {
     }
     const policies = this.policies().map(s => s.name)
     const sessionNumber = this.run === null ? 1 : (Chain.currentSession(this.run)?.index ?? 1)
-    this.freshContext = prompts.continuationContext({
+    const base = prompts.continuationContext({
       runNumber: this.run?.number ?? null,
       sessionNumber,
       handoffPath: this.handoffPath(),
       policies,
       milestones: this.plan().tasks.map(t => ({ subject: t.subject, status: t.status, detail: t.detail })).slice(-30),
       objective: this.run?.objectiveBy === 'claude' ? this.run.objective : null,
+      cause: purpose?.cause,
     })
+    // What the run carries into it: the wake, work queued for a fresh context, answers and open decisions.
+    const extras = this.ops.onFreshContext(purpose)
+    this.freshContext = extras === null ? base : `${base} ${extras}`
     // The fresh conversation is empty, so asking for its context blocks again costs nothing.
     this.host?.invalidatePromptContext()
   }
@@ -837,6 +935,7 @@ export class Runtime {
     this.monitor.stop()
     this.agents.poll?.cancel()
     this.cache.stop()
+    this.ops.stop()
     this.companionTicker?.cancel()
     this.companionTicker = null
     if (this.run !== null) {
@@ -1157,6 +1256,22 @@ export class Runtime {
       return
     }
     this.trace('autopilot: running /clear')
+    const cleared = await this.clearOwn()
+    if (!cleared.ok) {
+      this.stepAutopilot({ kind: 'clearFailed', error: cleared.error })
+      return
+    }
+    this.stepAutopilot({ kind: 'clearDone', now: await host.now() })
+  }
+
+  /**
+   * Project Sentinel's own /clear. The fresh session is waited for (its `classic.SessionStart{clear}`,
+   * or a changed session id), so it is recognised as ours: the context that ended is recorded, the
+   * fresh context seeded, and what follows goes into it.
+   */
+  private async clearOwn(): Promise<{ ok: true } | { ok: false; error: string }> {
+    const host = this.host
+    if (host === null) return { ok: false, error: 'not bound' }
     const before = await host.sessionId().catch(() => null)
     let isSeen = false
     const seen = new Promise<void>(resolve => {
@@ -1174,18 +1289,63 @@ export class Runtime {
       await host.clearContext()
     } catch (error) {
       settle()
-      this.stepAutopilot({ kind: 'clearFailed', error: error instanceof Error ? clean(error.message, 160) : String(error) })
-      return
+      return { ok: false, error: error instanceof Error ? clean(error.message, 160) : String(error) }
     }
     if (!isSeen) await Promise.race([seen, new Promise<void>(resolve => host.after(LIMITS.clearSettleMs, resolve))])
     settle()
     // Without the fresh session's start, a new session id still proves the clear happened.
     const after = isSeen ? null : await host.sessionId().catch(() => null)
-    if (!isSeen && (after === null || after === before)) {
-      this.stepAutopilot({ kind: 'clearFailed', error: 'the context was not cleared' })
-      return
+    if (!isSeen && (after === null || after === before)) return { ok: false, error: 'the context was not cleared' }
+    return { ok: true }
+  }
+
+  /** Why the fresh context Project Sentinel is starting outside a handoff exists (a fresh wake, the Cold Resume Guard); null otherwise. */
+  freshPurpose: FreshPurpose | null = null
+
+  /** True from a fresh start's /clear until its first prompt has gone. */
+  isFreshStarting = false
+
+  /**
+   * A fresh context outside a handoff: a watcher's fresh wake, or the Cold Resume Guard's Start fresh.
+   * The resume state was checked healthy by the caller. Never while a turn runs or a handoff is under
+   * way; nothing is cleared when the clear is refused.
+   */
+  async freshStart(purpose: FreshPurpose): Promise<{ ok: true } | { ok: false; error: string }> {
+    const host = this.host
+    const ap = this.settings.autopilot.enabled ? this.autopilot.state : 'off'
+    if (host === null) return { ok: false, error: 'not bound' }
+    if (this.turn.isRunning) return { ok: false, error: 'a turn is running' }
+    if (ap !== 'off' && ap !== 'armed') return { ok: false, error: 'a handoff is under way' }
+    this.isFreshStarting = true
+    this.freshPurpose = purpose
+    this.trace(`ops: running /clear for a ${purpose.endNote}`)
+    const cleared = await this.clearOwn()
+    this.freshPurpose = null
+    if (!cleared.ok) {
+      this.isFreshStarting = false
+      this.trace(`ops: the clear for a ${purpose.endNote} failed: ${cleared.error}`)
+      return cleared
     }
-    this.stepAutopilot({ kind: 'clearDone', now: await host.now() })
+    // The fresh context gets Autopilot's room to work, as after a handoff.
+    if (this.settings.autopilot.enabled) this.stepAutopilot({ kind: 'externalClear' })
+    const text = prompts.freshResumePrompt({ sessionNumber: this.run === null ? 1 : (Chain.currentSession(this.run)?.index ?? 1), handoffPath: this.handoffPath(), why: purpose.why, then: purpose.then })
+    host.after(400, () => {
+      void host
+        .submit(text)
+        .then(r => {
+          this.trace(r.drop !== undefined ? `ops: the fresh resume prompt was dropped: ${r.drop}` : `ops: the fresh context's first prompt went (${purpose.endNote})`)
+        })
+        .catch(error => this.trace(`ops: the fresh resume prompt failed: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => {
+          this.isFreshStarting = false
+        })
+    })
+    return { ok: true }
+  }
+
+  /** The status bar's headline, as the panel's Agents card names the main conversation. */
+  hudHeadline(): HudHeadline {
+    return headlineOf(this, Date.now(), null)
   }
 
   private async runCompact(): Promise<void> {
@@ -1259,6 +1419,8 @@ export class Runtime {
     for (const note of this.notesBox.take('prompt', now)) context.push(this.delivered(note.kind, note.text, 'prompt'))
     const load = this.pressureNote(now)
     if (load !== null) context.push(this.delivered('pressure', load, 'prompt'))
+    // Answers from the Decision Inbox that did not block ride whichever prompt goes next.
+    context.push(...this.ops.onPromptSubmit(origin, text))
     if (isOwn) return context
     const isComposeMissing = !this.compose.isReached && (this.composeObserved || this.compose.isLikelyBypassed)
     if (isComposeMissing && !this.compose.deliveredFallback) {
@@ -1302,6 +1464,7 @@ export class Runtime {
       this.cache.isHeldNoteSent = !text.includes('apply again as written')
     }
     if (kind === 'pressure') this.resourceStats.noticesSent += 1
+    if (kind === 'queue' || kind === 'answers') this.ops.onNoteDelivered(kind)
     this.trace(`note: ${kind} delivered with the ${channel === 'tool-batch' ? 'batch of tool results' : 'prompt'} (${text.length} chars)`)
     this.publisher.mark('pane', 'resources')
     return text
@@ -1411,7 +1574,8 @@ export class Runtime {
     this.turnStartDone = this.progress().done
     if (kind === 'handoff') this.handoffTurn = { fromTurn: this.activity.turn.index, isPlanUpdated: false }
     this.questGreen.clear()
-    this.publisher.mark('hud', 'pane', 'activity', 'spinner')
+    this.ops.onTurnStart()
+    this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'ops')
     this.trace(`turn ${input.turnId} started (${kind})`)
     // The handoff and the continuation move on when their own turns begin, not when their prompts were sent.
     if (kind === 'handoff' || kind === 'continuation' || (kind === 'person' && this.autopilot.state === 'resuming')) {
@@ -1478,7 +1642,10 @@ export class Runtime {
         this.publisher.mark('pane')
       }
     }
-    if (e.agentId !== undefined) return
+    if (e.agentId !== undefined) {
+      if (result.usage !== null) this.ops.noteAgentModel(e.agentId, result.usage.model)
+      return
+    }
     const record = this.ledger.stepEnded(`${e.turnId}:${e.index}`, { sessionId: this.sessionId, frontierOn: this.settings.frontier.enabled })
     if (record !== null) {
       this.trace(`policy: ${recordLine(record)}`)
@@ -1512,6 +1679,7 @@ export class Runtime {
 
   async onTurnComplete(input: { agentId: string | undefined; reason: 'answer' | 'aborted' | 'refusal' | 'error'; answer: string }): Promise<void> {
     if (input.agentId !== undefined) {
+      this.ops.noteAgentEnd(input.agentId, input.reason, input.answer)
       void this.refreshAgents()
       return
     }
@@ -1551,7 +1719,9 @@ export class Runtime {
     this.checkContinuity()
     void this.refreshGit()
     this.persistRun()
-    this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain')
+    // The run's boundary: queued work, answers and a due watcher go out from here, one at a time.
+    this.ops.onTurnEnd({ reason: input.reason, kind: turnKind })
+    this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain', 'ops')
   }
 
   onMeasure(input: Pick<SessionUsage, 'context' | 'cost'>): void {
@@ -1583,6 +1753,8 @@ export class Runtime {
     this.cache.noteCompact(this.clock())
     this.publisher.mark('hud', 'chain')
     if (isHandoffCompact) this.stepAutopilot({ kind: 'compactDone', now: Date.now() })
+    // A compaction the Cold Resume Guard asked for: the message it held goes now.
+    if (!isHandoffCompact && trigger !== 'auto') this.ops.onCompacted()
   }
 
   // -------------------------------------------------------------------------
@@ -1638,6 +1810,7 @@ export class Runtime {
     // itself (or was stopped some other way) leaves the list kept from the tool results.
     const running = new Set(input.background.map(b => b.id))
     for (const id of [...this.activity.background.keys()]) if (!running.has(id)) this.activity.backgroundEnded(id)
+    this.ops.noteStop(input.lastMessage)
     this.lastStop = {
       background: input.background.map(b => ({ id: b.id, description: clean(b.description || b.command || `a ${b.type} task`, 80) })).slice(0, 8),
       wakeups: input.wakeups.map(w => ({ schedule: w.schedule, recurring: w.recurring })).slice(0, 8),
@@ -1650,7 +1823,7 @@ export class Runtime {
       if (this.settings.guard.enabled) this.trace(`guard: stands down (${eff.guard.reason ?? 'inactive'})`)
       return null
     }
-    if (this.turn.kind !== 'person' && this.turn.kind !== 'continuation') {
+    if (!['person', 'continuation', 'queued', 'answer', 'wake', 'resume'].includes(this.turn.kind)) {
       this.trace(`guard: stands down for the ${this.turn.kind} turn`)
       return null
     }
@@ -1954,7 +2127,7 @@ export class Runtime {
       this.agents.poll.cancel()
       this.agents.poll = null
     }
-    this.publisher.mark('pane', 'hud', 'spinner')
+    this.publisher.mark('pane', 'hud', 'spinner', 'ops')
   }
 
   // -------------------------------------------------------------------------
@@ -2033,6 +2206,7 @@ export class Runtime {
       // New ceilings: what Claude was told about the load is measured against them afresh.
       this.pressureTold = 'ok'
     }
+    if (!before.ops.decisions && this.settings.ops.decisions) void this.offerDecisions()
     if (before.progress.milestones !== this.settings.progress.milestones) {
       void this.offerMilestones()
       if (this.milestonesTool !== null) changes.push(`milestone tracking is now ${this.settings.progress.milestones ? 'on' : 'off'}`)
@@ -2112,6 +2286,27 @@ export class Runtime {
       return 'closed'
     }
     return (await this.openPane(true)) ? 'opened' : 'waiting'
+  }
+
+  /**
+   * Activity → Operations, opened (from a status bar chip or alert, or `/cr queue`, `/cr watch`,
+   * `/cr decisions`, `/cr agents`), with `focusKey`'s field focused. False where no panel can be
+   * shown (a headless run): the caller answers in words instead.
+   */
+  async openOps(focusKey?: string): Promise<boolean> {
+    const isChange = this.ui.tab !== 'activity' || this.ui.activitySub !== 'ops'
+    this.ui.tab = 'activity'
+    this.ui.activitySub = 'ops'
+    this.ui.openPicker = null
+    this.publisher.mark('pane', 'ops')
+    const host = this.host
+    if (host === null) return false
+    void this.refreshAgents()
+    const isOpen = (await host.panes().catch(() => [])).some(p => p.id === PANE_ID)
+    const isShown = isOpen || (await this.openPane(true))
+    if (isOpen && isChange) void host.scrollPaneToTop().catch(() => undefined)
+    if (isShown && focusKey !== undefined) host.after(300, () => void host.focusPane(focusKey).catch(() => false))
+    return isShown
   }
 
   setTab(tab: TabId): void {

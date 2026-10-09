@@ -15,7 +15,10 @@ import type {
   MissionView,
   ChainView,
   FocusModel,
+  HudAlert,
   HudModel,
+  HudOps,
+  OpsView,
   PaneModel,
   PermissionsView,
   QuestView,
@@ -44,6 +47,7 @@ import { type ValidationSummary, summarize } from '../features/validation'
 import { answerStyleLabel } from '../core/answers'
 import { LONG_CALL_MS, chipsOf, headlineOf, runNowOf, trackOf } from './headline'
 import type { Runtime } from './runtime'
+import { suggestionWords } from '../features/scout'
 
 function contextTone(rt: Runtime): Tone {
   const tokens = rt.usage.tokens
@@ -223,6 +227,29 @@ const nowLine = (rt: Runtime) => nowOf({ isTurnRunning: rt.turn.isRunning, runni
 // ---------------------------------------------------------------------------
 // Projections
 
+/**
+ * The line above the headline, for what needs the person now: a handoff, the machine, then the
+ * orchestration layer (a watcher due that waits for them, a message the Cold Resume Guard kept, the
+ * budget holding automation, a watcher suggestion). One at a time, the most pressing.
+ */
+function alertOf(rt: Runtime, ops: HudOps | null): HudAlert | null {
+  const s = rt.settings
+  if (rt.autopilot.state === 'awaiting') return { kind: 'awaiting', text: rt.autopilot.note, tone: awaitingTone(rt) }
+  if (rt.monitor.pressure.level === 'critical' && s.resources.level !== 'off') return { kind: 'load', text: 'Your machine is under heavy load. Claude was asked to ease off.', tone: 'bad' }
+  if (rt.autopilot.state === 'pending') return { kind: 'pending', text: 'Finishing this step, then handing off', tone: 'warn' }
+  if (rt.turn.isRunning) return null
+  const w = ops?.watcher ?? null
+  if (w !== null && (w.status === 'due' || w.status === 'stale') && w.needs !== null) {
+    const strategy = rt.ops.current().watchers.find(x => x.id === w.id)?.strategy ?? 'warm'
+    return { kind: 'watcher', text: `Watcher due: ${w.label} · ${w.needs}`, tone: 'accent', ref: w.id, canFresh: strategy !== 'warm' && rt.ops.resumeHealth().isHealthy }
+  }
+  if (rt.ops.held !== null) return { kind: 'held', text: 'Your message was not sent: it is kept in Control Room', tone: 'accent' }
+  if (rt.ops.budgetHeld !== null) return { kind: 'budget', text: `Run budget reached: ${rt.ops.budgetHeld} waits for you`, tone: 'warn' }
+  const sug = rt.ops.suggestion
+  if (sug !== null) return { kind: 'suggest', text: `Claude seems to be waiting for a future result. ${suggestionWords(sug, rt.clock())}`, tone: 'info', ref: sug.id, hasTime: sug.when !== null && sug.when.kind === 'at' }
+  return null
+}
+
 export function hudOf(rt: Runtime): HudModel {
   const tokens = rt.usage.tokens ?? null
   const window = rt.usage.window ?? null
@@ -230,10 +257,8 @@ export function hudOf(rt: Runtime): HudModel {
   const totals = rt.run === null ? null : Chain.totals(rt.run, Date.now())
   const ap = autopilotStatus(rt)
   const s = rt.settings
-  let alert: HudModel['alert'] = null
-  if (rt.autopilot.state === 'awaiting') alert = { kind: 'awaiting', text: rt.autopilot.note, tone: awaitingTone(rt) }
-  else if (rt.monitor.pressure.level === 'critical' && s.resources.level !== 'off') alert = { kind: 'load', text: 'Your machine is under heavy load. Claude was asked to ease off.', tone: 'bad' }
-  else if (rt.autopilot.state === 'pending') alert = { kind: 'pending', text: 'Finishing this step, then handing off', tone: 'warn' }
+  const ops = rt.ops.hud()
+  const alert = alertOf(rt, ops)
   const now = Date.now()
   const validation = validationNow(rt, now)
   const activity = hudActivityOf(rt, now)
@@ -247,7 +272,7 @@ export function hudOf(rt: Runtime): HudModel {
   return {
     isVisible: s.ui.hud === 'band' || s.ui.hud === 'both',
     headline: headlineOf(rt, now, summary),
-    chips: chipsOf({ failing, attention, guard, load, agents, quest }),
+    chips: chipsOf({ failing, attention, guard, load, agents, quest, ops, isWorking: rt.turn.isRunning }),
     isPaneOpen: rt.ui.isPaneOpen,
     ctx: { tokens, window, pct, threshold: s.autopilot.enabled ? handoffPoint(rt.autopilot) : null, tone: contextTone(rt) },
     cost: { usd: rt.usage.costUsd ?? null, runUsd: totals?.costUsd ?? null, isRunPartial: totals?.isCostPartial ?? false },
@@ -259,6 +284,7 @@ export function hudOf(rt: Runtime): HudModel {
     guard,
     session: { run: rt.run?.number ?? null, index: rt.run === null ? 1 : (Chain.currentSession(rt.run)?.index ?? 1), handoffs: totals?.handoffs ?? 0 },
     alert,
+    ops,
     work: workOf(rt),
     now: nowLine(rt),
     failing,
@@ -266,12 +292,26 @@ export function hudOf(rt: Runtime): HudModel {
     activity,
     checks: validation.map(v => ({ label: v.label, status: v.status })),
     quest,
-    cache: rt.cache.hud(rt.clock(), rt.turn.isRunning),
+    cache: sleepingCache(rt.cache.hud(rt.clock(), rt.turn.isRunning), ops),
     objective: rt.run?.objective ?? null,
     isAnimated: !s.ui.reducedMotion,
     companion: companionOf(rt, now, validation),
     git: rt.git === null ? null : gitLine(rt.git),
   }
+}
+
+/** While a watcher parks the run, the cache says what becomes of it: held warm to the wake, or left to lapse for a fresh one. */
+function sleepingCache(cache: HudModel['cache'], ops: HudOps | null): HudModel['cache'] {
+  const w = ops?.watcher ?? null
+  if (cache === null || ops === null || !ops.isSleeping || w === null || cache.recentMiss !== null) return cache
+  if (w.isHeldWarm && cache.warmth === 'warm') return { ...cache, parked: { text: 'held warm', short: 'held' }, tone: 'normal', isShown: true }
+  if (w.mode === 'fresh') return { ...cache, parked: { text: 'no keep-alive', short: 'lapses' }, tone: 'muted', isShown: true }
+  return cache
+}
+
+/** The orchestration layer's view, for Activity → Operations, Overview and Context. */
+export function opsOf(rt: Runtime): OpsView {
+  return rt.ops.view()
 }
 
 /** Kit's mood from what Claude is doing, and what its surface module needs; null while the companion is off or has failed to draw. */
@@ -291,6 +331,7 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   const isCpuBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad')
   const isBusy = isCpuBusy || (load !== null && load.ramTone === 'bad')
   const cache = rt.cache.hud(rt.clock(), rt.turn.isRunning)
+  const opsHud = rt.ops.hud()
   const isGreen = (thisTurn.length > 0 && thisTurn.every(r => r.status === 'passed')) || (p.total > 0 && p.done === p.total && p.done > rt.turnStartDone)
   const mood = moodOf({
     now,
@@ -305,7 +346,10 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
     hasTurned: turn.index > 0,
     contextStartedAt: rt.contextStartedAt,
     contextShare: ref === null || rt.usage.tokens === undefined ? null : rt.usage.tokens / ref,
-    isKeepingWarm: s.cache.keepWarm && rt.cache.plan.at !== null,
+    isKeepingWarm: (s.cache.keepWarm || rt.ops.hold() !== null) && rt.cache.plan.at !== null,
+    // The orchestration layer: decisions to review look to the person; a parked run sleeps (or tends a held cache).
+    isNeedingYou: (opsHud?.review ?? 0) > 0 || (opsHud?.watcher?.needs ?? null) !== null,
+    sleep: opsHud?.isSleeping === true ? (opsHud.watcher?.isHeldWarm === true ? 'warm' : 'parked') : null,
     isWaiting: rt.lastStop !== null && (rt.lastStop.background.length > 0 || rt.lastStop.wakeups.length > 0 || rt.lastStop.isQuestion) || p.blocked.length > 0 || p.waiting.length > 0,
     isBusy,
     isCacheNear: cache !== null && cache.tone === 'warn' && cache.recentMiss === null,
@@ -402,9 +446,17 @@ export function statusLineOf(hud: HudModel): string {
   const isHigh = (t: Tone) => t === 'warn' || t === 'bad'
   const parts = [`◆ Context ${pct(hud.ctx.pct)}`]
   if (hud.work !== null) parts.push(`Work ${hud.work.done}/${hud.work.total}`)
-  if (hud.cache !== null) parts.push(`Cache ${hud.cache.text}`)
+  if (hud.cache !== null) parts.push(`Cache ${hud.cache.parked?.text ?? hud.cache.text}`)
   if (hud.autopilot.isOn && hud.autopilot.state !== 'off' && hud.autopilot.state !== 'armed') parts.push(hud.autopilot.text)
   if (hud.now !== null) parts.push(hud.now.text)
+  // The orchestration layer, only while it matters: the run asleep, decisions to review, the budget.
+  const ops = hud.ops
+  const w = ops?.watcher ?? null
+  if (ops !== null && ops.isSleeping && w !== null && w.status === 'armed') parts.push(`Sleeping until ${w.at} · ${w.label} (${w.left})`)
+  else if (w !== null && w.needs !== null) parts.push(`Watcher due: ${w.label}`)
+  else if (w !== null && w.status === 'armed') parts.push(`Watcher ${w.left}`)
+  if (ops !== null && ops.review > 0) parts.push(ops.blocking > 0 ? `Needs you · ${fmt.plural(ops.blocking, 'decision')}` : `Review ${ops.review}`)
+  if (ops?.budget != null && ops.budget.tone !== 'muted') parts.push(ops.budget.text)
   if (hud.failing.length > 0) parts.push(`${hud.failing.join(', ')} failing`)
   if (hud.attention > 0) parts.push(`${fmt.plural(hud.attention, 'issue')}`)
   if (hud.load !== null && isHigh(hud.load.cpuTone)) parts.push(`CPU ${pct(hud.load.cpu)}`)

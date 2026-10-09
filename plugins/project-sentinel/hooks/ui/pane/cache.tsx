@@ -10,7 +10,7 @@
 
 import type { RenderElement } from 'claude-code'
 
-import type { CacheMissView, CacheView, Tone } from '../../../types'
+import type { CacheMissView, CacheView, ColdResumeView, Tone } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
 import { apart, card, listItem, meterBar, note, pair, row, spaced, stepper, switchControl, textRuns } from '../primitives'
@@ -198,6 +198,63 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
     )
   }
   return out
+}
+
+/** The sizes the Cold Resume Guard's threshold steps through, in tokens. */
+const COLD_STEPS = [20_000, 50_000, 100_000, 150_000, 200_000, 300_000, 400_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000] as const
+
+/**
+ * The Cold Resume Guard: before a message re-reads a large context whose cache has surely lapsed,
+ * Project Sentinel asks first. The card says whether it would ask now, why the cache lapsed, and
+ * what re-reading costs: dollars only from Claude Code's own estimate, tokens otherwise.
+ */
+export function coldResumeCard(kit: Kit, cold: ColdResumeView, cache: CacheView, settings: { coldResume: boolean; coldResumeTokens: number }): RenderElement {
+  const u = kit.actions.update
+  const at = settings.coldResumeTokens
+  const lower = [...COLD_STEPS].reverse().find(n => n < at)
+  const higher = COLD_STEPS.find(n => n > at)
+  const tokens = cold.tokens
+  const state: { text: string; tone: Tone } = !settings.coldResume
+    ? { text: 'Off: a cold resume re-reads the context without asking', tone: 'muted' }
+    : cold.isArmed
+      ? { text: `Armed: the cache lapsed over ${fmt.tokens(tokens ?? 0)} tokens, so your next message is asked about first`, tone: 'warn' }
+      : cache.warmth === 'warm'
+        ? { text: 'The cache is warm: nothing to ask', tone: 'muted' }
+        : tokens !== null && tokens < at && cache.warmth !== 'none'
+          ? { text: `${fmt.tokens(tokens)} of context: under the ${fmt.tokens(at)} it asks above`, tone: 'muted' }
+          : { text: 'Asks only when the cache has surely lapsed', tone: 'muted' }
+  const price = cold.usd !== null ? `About ${fmt.cost(cold.usd)} to re-cache, ${cold.priceNote ?? "Claude Code's estimate"}` : cold.isArmed ? 'Tokens only: Claude Code has given no price for this model in this session' : null
+  return card(kit, {
+    key: 'cold-resume',
+    title: 'Cold Resume Guard',
+    accent: ACCENT.context,
+    aside: settings.coldResume ? `Asks above ${fmt.tokens(at)}` : 'Off',
+    footer: 'Asks in Claude Code’s own dialog before the message goes: Continue, Start fresh (only when Ready to resume is ready), Compact first (it reads the context once), or Cancel (your message comes back). Never while Claude works.',
+    rows: k => [
+      row(k, {
+        key: 'cold-on',
+        label: 'Ask before a cold resume',
+        subtitle: state.text,
+        subtitleTone: state.tone,
+        control: switchControl(k, { key: 'cold-on', isOn: settings.coldResume, onPress: () => u(d => void (d.cache.coldResume = !d.cache.coldResume)) }),
+      }),
+      settings.coldResume &&
+        row(k, {
+          key: 'cold-at',
+          label: 'Warn above',
+          subtitle: 'Tokens of earlier context a message would re-read',
+          control: stepper(k, {
+            key: 'cold-at',
+            display: fmt.tokens(at),
+            onDecrease: lower === undefined ? undefined : () => u(d => void (d.cache.coldResumeTokens = lower)),
+            onIncrease: higher === undefined ? undefined : () => u(d => void (d.cache.coldResumeTokens = higher)),
+          }),
+        }),
+      cold.cause === null || !cold.isArmed ? null : note(k, `Why: ${cold.cause}.`, 'cold-cause'),
+      price === null ? null : note(k, price, 'cold-price'),
+      cold.last === null ? null : note(k, `Last asked ${fmt.clock(cold.last.at)}: ${cold.last.choice}`, 'cold-last'),
+    ],
+  })
 }
 
 /** What the cache holds, in a line, for Overview's lifecycle card: its state is the line above it, said once. */

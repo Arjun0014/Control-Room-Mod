@@ -15,6 +15,7 @@ import { VERSION } from '../constants'
 import * as Chain from '../features/chain'
 import type { Runtime } from './runtime'
 import { recordLine } from './ledger'
+import { opsCommand } from './opsCommands'
 import { cacheState, keepWarmProof, keepWarmStatus } from '../ui/pane/cache'
 import { frontierDeliveryText } from '../ui/pane/behavior'
 import { hudOf, paneOf, profileOf, runLabelOf, statusOf } from './views'
@@ -29,12 +30,20 @@ const HELP = [
   '  /cr fresh                 start the fresh context when a handoff is waiting',
   '  /cr frontier|guard|qa|focus on|off',
   '  /cr resources off|low|medium|high|60/80',
-  '  /cr agents unlimited|off|ask|<n>',
+  '  /cr agents                what is running (Activity → Operations) · /cr agents unlimited|off|ask|<n>: what Claude may start',
   '  /cr router off|balanced|performance|economy|custom',
   '  /cr style standard|brief|ste|mission|quest   how Claude writes to you',
   '  /cr cache                 the prompt cache: lifetime, Keep warm, recent rebuilds',
   '  /cr cache keep on|off · idle 2h · stable on|off · guard on|off',
   '  /cr diagnostics           evidence: each request\'s policies and effort, notes to Claude, Keep warm checks',
+  'Operations: the run over time (Activity → Operations)',
+  '  /cr queue <text>          work for Claude at the next safe boundary (--turn, --milestone or --handoff first to choose)',
+  '  /cr queue [list]          open the queue to add work, or list it · /cr queue now|cancel <id>',
+  '  /cr watch in 2h <what>    park the run until a time, then wake Claude to check · at 14:00 · tomorrow at 9am · --warm|--fresh',
+  '  /cr watchers              the watchers · /cr watch now|pause|resume|cancel <id>',
+  '  /cr decisions             what Claude left for you to decide · /cr decide <id> [answer]',
+  '  /cr budget [$30|6h|handoffs 5|notify|ask|finish|off|continue]   an optional run budget',
+  '  /cr resume                what a fresh context would get now (Ready to resume)',
   '  /cr hud band|status|both|off',
   '  /cr companion on|off      Kit, a small companion on the status bar · /cr motion on|off',
   '  /cr reset confirm         back to Normal (custom profiles are kept)',
@@ -157,6 +166,9 @@ export function diagnosticsText(rt: Runtime): string {
 export async function handleCommand(rt: Runtime, args: string): Promise<CommandRunResult> {
   const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const [verb, a1, a2] = words
+  // The orchestration layer's (queue, watch, decisions, budget, resume; agents with no argument).
+  const ops = await opsCommand(rt, args, words)
+  if (ops !== null) return ops
 
   switch (verb) {
     case undefined: {

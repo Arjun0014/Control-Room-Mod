@@ -17,7 +17,7 @@ import type {
   TextProps,
 } from 'claude-code'
 
-import type { ActivitySub, ControlRoomSettings, TabId } from '../../types'
+import type { ActivitySub, ControlRoomSettings, QueueTarget, TabId, WatchStrategy } from '../../types'
 
 export type Ui = {
   Box: ElementConstructor<BoxProps>
@@ -59,6 +59,61 @@ export type Actions = {
   toggleFocus: () => void
   resetSettings: () => void
   copy: (text: string, surface: RenderSurface) => void
+  /** Activity → Operations: opens the panel there (from the status bar's chips and alerts). */
+  openOps: () => void
+  /** Opens or closes a row's details (a watcher, a queued item, an agent, a decision). */
+  toggleOpsRow: (id: string) => void
+  // Mission Queue
+  queueAdd: (text: string) => void
+  setQueueTarget: (target: QueueTarget) => void
+  editQueue: (id: string | null) => void
+  queueEdit: (id: string, text: string) => void
+  queueRetarget: (id: string, target: QueueTarget) => void
+  queueMove: (id: string, delta: -1 | 1) => void
+  queueNow: (id: string) => void
+  queueCancel: (id: string) => void
+  // Decision Inbox
+  answer: (id: string, text: string) => void
+  answerNow: (id: string) => void
+  withdraw: (id: string) => void
+  // Watchers
+  watchLabel: (label: string) => void
+  setWatchStrategy: (strategy: WatchStrategy) => void
+  /** Arms a watcher from the form: its label draft, this time ("in 2h", "at 14:00"), its strategy. */
+  watchAdd: (when: string) => void
+  watchPick: (at: number) => void
+  watchWake: (id: string) => void
+  watchCheck: (id: string) => void
+  watchFresh: (id: string) => void
+  watchSnooze: (id: string, minutes: number) => void
+  watchReschedule: (id: string, when: string) => void
+  editWatch: (id: string | null) => void
+  watchPause: (id: string) => void
+  watchResume: (id: string) => void
+  watchDismiss: (id: string) => void
+  watchStrategy: (id: string, strategy: WatchStrategy) => void
+  watchNotes: (id: string) => void
+  suggestTake: () => void
+  suggestAt: (when: string) => void
+  suggestIgnore: () => void
+  // The Cold Resume Guard's held message
+  heldPutBack: () => void
+  heldSend: () => void
+  heldDiscard: () => void
+  // Run Budget
+  budgetOpen: (isOpen: boolean) => void
+  budgetCost: (text: string) => void
+  budgetTime: (text: string) => void
+  budgetHandoffs: (delta: number) => void
+  budgetAtLimit: (atLimit: 'notify' | 'ask' | 'finish') => void
+  budgetClear: () => void
+  budgetApprove: () => void
+  // An ended run's operations, and agents
+  foreignBring: () => void
+  foreignDismiss: () => void
+  agentStop: (id: string) => void
+  editMessage: (id: string | null) => void
+  agentMessage: (id: string, text: string) => void
 }
 
 export type Kit = {

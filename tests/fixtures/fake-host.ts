@@ -28,6 +28,8 @@ export function fakeHost(
     /** What `sysctl -n kern.memorystatus_level` writes on macOS ('63' by default: 37% in use). */
     memoryLevel?: string
     handoffMtime?: () => number | null
+    /** The handoff notes' size in bytes (100 by default: too small to be healthy resume state). */
+    handoffSize?: () => number
     files?: Record<string, string>
     /** When each of `files` was last written (1 when not given). */
     fileTimes?: Record<string, number>
@@ -66,10 +68,26 @@ export function fakeHost(
     isStandbyNoted: false,
     /** `$.state`'s policy memo: the section the system prompt carries, kept across a reload. */
     policyMemo: null as { sessionId: string; text: string } | null,
+    /** `$.state`'s cache memo: the cache's last request, kept across a reload. */
+    cacheMemo: null as import('../../types').CacheMemo | null,
+    /** What went back into the prompt box (the Cold Resume Guard's Cancel), and the person's words submitted as theirs. */
+    filled: [] as string[],
+    submittedAsUser: [] as string[],
+    /** Messages sent to agents, and the pane fields focused. */
+    sentToAgents: [] as { agentId: string; text: string }[],
+    focused: [] as string[],
+    /** Claude Code's question dialog: each question asked, with its options and header. */
+    asked: [] as { question: string; options: readonly string[]; header?: string }[],
+    /** The agents TaskStop was asked to stop. */
+    stopped: [] as string[],
+    /** The debug trace's lines (`ops: …`, `cold resume: …`). */
+    traces: [] as string[],
   }
   const live = {
     usage: { startedAt: 0, context: { tokens: 10_000, window: 1_000_000, percent: 1 }, rateLimits: [], cost: { usd: 0.5 } } as SessionUsage,
     sessionId: 'S1',
+    /** Whether the prompt box takes text back (the terminal's does; an SDK host has none). */
+    isPromptBox: true,
     /** The tools the session offers: no task list tool by default, as in Claude Code 2.1.29x. */
     tools: ['Bash', 'Read', 'Edit', 'Write'] as string[],
     /** What a fork reads from the cache: the whole prompt by default (a hit). */
@@ -79,6 +97,16 @@ export function fakeHost(
     gitStatus: '## main...origin/main\n',
     /** `$.session.compact` refuses, as in a headless or SDK session (Desktop's host protocol). */
     isCompactTurnOnly: false,
+    /**
+     * How the person answers Claude Code's question dialog: an option's words, a function of the
+     * question, or null (dismissed, or a headless run: it rejects). Undefined: 'Deny', as before.
+     */
+    answer: undefined as string | null | ((question: string, options: readonly string[]) => string | null) | undefined,
+    /** What Claude Code's agent list reports, and what TaskStop answers. */
+    agents: [] as import('claude-code').AgentInfo[],
+    stopResult: { result: 'stopped' } as import('claude-code').ToolCallResult,
+    /** What `$.prompt.submit` answers: a drop reason keeps the prompt out. */
+    submitDrop: null as string | null,
   }
   const schedule = (ms: number, fn: () => void, every: number | null) => {
     const t = { id: ++seq, at: time + ms, every, fn, isCancelled: false }
@@ -107,7 +135,23 @@ export function fakeHost(
     },
     submit: async text => {
       kept.submitted.push(text)
+      return live.submitDrop === null ? { text } : { drop: live.submitDrop }
+    },
+    submitAsUser: async text => {
+      kept.submittedAsUser.push(text)
       return { text }
+    },
+    fillPrompt: async text => {
+      kept.filled.push(text)
+      return { isFilled: live.isPromptBox }
+    },
+    sendToAgent: async (agentId, text) => {
+      kept.sentToAgents.push({ agentId, text })
+      return { isDelivered: true }
+    },
+    focusPane: async key => {
+      kept.focused.push(key)
+      return true
     },
     clearContext: async () => {
       kept.commands.push('clear')
@@ -119,13 +163,16 @@ export function fakeHost(
     },
     registerCommand: async () => undefined,
     listCommands: async () => [],
-    listAgents: async () => [],
+    listAgents: async () => live.agents,
     listTools: async () => live.tools.map(name => ({ name, description: '', mcp: false })),
     registerTool: async spec => {
       kept.registeredTools.push(spec.name)
       return `mcp__project-sentinel__${spec.name}`
     },
-    stopTask: async () => ({ result: 'stopped' }),
+    stopTask: async id => {
+      kept.stopped.push(id)
+      return live.stopResult
+    },
     classify: async () => 'premature',
     fork: async () => {
       kept.forks.push(time)
@@ -133,11 +180,18 @@ export function fakeHost(
     },
     toast: text => void kept.toasts.push(text),
     status: text => void kept.statuses.push(text),
+    trace: text => void kept.traces.push(text),
     open: async () => ({ isPlaced: true }),
     close: async () => undefined,
     panes: async () => [],
     scrollPaneToTop: async () => void (kept.scrolledToTop += 1),
-    ask: async () => 'Deny',
+    ask: async (question, options, header) => {
+      kept.asked.push({ question, options, header })
+      const a = typeof live.answer === 'function' ? live.answer(question, options) : live.answer
+      if (a === undefined) return 'Deny'
+      if (a === null) throw new Error('dismissed')
+      return a
+    },
     checkTool: async () => ({ decision: 'allow' as const }),
     copy: async () => true,
     readText: async path => options.files?.[path] ?? '',
@@ -145,7 +199,7 @@ export function fakeHost(
       if (path.endsWith('NEXT_SESSION_PROMPT.md')) {
         const m = options.handoffMtime?.() ?? time + 1
         if (m === null) throw new Error('ENOENT')
-        return { kind: 'file', size: 100, mtimeMs: m, isLink: false }
+        return { kind: 'file', size: options.handoffSize?.() ?? 100, mtimeMs: m, isLink: false }
       }
       if (options.files?.[path] !== undefined) return { kind: 'file', size: options.files[path]!.length, mtimeMs: options.fileTimes?.[path] ?? 1, isLink: false }
       return { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: path }
@@ -192,10 +246,13 @@ export function fakeHost(
     publishPermissions: async v => void (kept.published.permissions = v),
     publishFocus: async v => void (kept.published.focus = v),
     publishSpinner: async v => void (kept.published.spinner = v),
+    publishOps: async v => void (kept.published.ops = v),
     saveAutopilotRecord: async record => void (kept.autopilotRecord = record === null ? null : JSON.parse(JSON.stringify(record))),
     loadAutopilotRecord: async () => kept.autopilotRecord,
     savePolicyMemo: async memo => void (kept.policyMemo = memo === null ? null : { ...memo }),
     loadPolicyMemo: async () => kept.policyMemo,
+    saveCacheMemo: async memo => void (kept.cacheMemo = memo === null ? null : { ...memo }),
+    loadCacheMemo: async () => kept.cacheMemo,
     invalidateDescribes: () => undefined,
     invalidatePromptContext: () => undefined,
   }

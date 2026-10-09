@@ -42,7 +42,9 @@ export function withAllowRemoved(raw: unknown): { value: unknown; allowRemoved: 
     }
     return out
   }
-  const value: Record<string, unknown> = { ...raw, permissions: fix(raw.permissions) }
+  // Only a stored group is fixed: adding one that was missing would read as a repair.
+  const value: Record<string, unknown> = { ...raw }
+  if ('permissions' in raw) value.permissions = fix(raw.permissions)
   if (Array.isArray(raw.customProfiles)) {
     value.customProfiles = raw.customProfiles.map(p =>
       isRecord(p) && isRecord(p.systems) ? { ...p, systems: { ...p.systems, permissions: fix(p.systems.permissions) } } : p,
@@ -135,5 +137,16 @@ export class Debounced<T> {
     this.timer?.cancel()
     this.timer = null
     await this.write(host, value).catch(() => undefined)
+  }
+
+  /**
+   * Forgets the waiting value when `isSuperseded` says a newer one is being written now: the pending
+   * value is a copy taken when it was scheduled, and writing it later would put the older copy back.
+   */
+  drop(isSuperseded: (pending: T) => boolean): void {
+    if (this.pending === undefined || !isSuperseded(this.pending)) return
+    this.pending = undefined
+    this.timer?.cancel()
+    this.timer = null
   }
 }

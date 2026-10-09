@@ -220,7 +220,14 @@ const OWN_PROMPT = {
   handoff: 'Context Autopilot — final handoff for this context window',
   retry: 'Control Room could not find an updated',
   continuation: 'Context Autopilot continuation (session ',
+  wake: 'Project Sentinel watcher wake (',
+  resume: 'Project Sentinel fresh resume (session ',
+  queued: 'Mission Queue · ',
+  answer: 'Decision Inbox · ',
+  park: 'Project Sentinel · park the run (',
 } as const
+
+export type OwnPromptKind = keyof typeof OWN_PROMPT
 
 /**
  * How Claude Code frames a prompt a plugin submits, ahead of its text: "The project-sentinel plugin
@@ -235,10 +242,10 @@ const PLUGIN_FRAME = /^The [^\n]{1,120} plugin sent a message:[ \t]*/
  * a plugin's prompt is looked past: the prompt may start any of the first
  * three lines, so a frame worded otherwise still never stalls a handoff.
  */
-export function ownPromptKind(text: string): keyof typeof OWN_PROMPT | null {
+export function ownPromptKind(text: string): OwnPromptKind | null {
   for (const line of text.trimStart().split(/\r?\n/, 3)) {
     const t = line.replace(PLUGIN_FRAME, '').trimStart()
-    for (const kind of ['handoff', 'retry', 'continuation'] as const) if (t.startsWith(OWN_PROMPT[kind])) return kind
+    for (const kind of Object.keys(OWN_PROMPT) as OwnPromptKind[]) if (t.startsWith(OWN_PROMPT[kind])) return kind
   }
   return null
 }
@@ -310,10 +317,12 @@ export function continuationContext(input: {
   milestones?: readonly { subject: string; status: string; detail?: string | null }[]
   /** The run's objective as Claude stated it, kept across contexts. */
   objective?: string | null
+  /** Why the previous context was cleared, when it was not a handoff ("for a watcher's fresh wake"). */
+  cause?: string
 }): string {
   const run = input.runNumber === null ? '' : ` (Control Room run #${input.runNumber}, session ${input.sessionNumber})`
   const lines = [
-    `Control Room · Context Autopilot: this is a fresh context continuing earlier work${run}. The previous context was cleared on purpose after a handoff.`,
+    `Control Room · Context Autopilot: this is a fresh context continuing earlier work${run}. The previous context was cleared on purpose ${input.cause ?? 'after a handoff'}.`,
     `The handoff notes are in ${input.handoffPath}. Read them and the project documentation they point to before acting.`,
   ]
   if (input.policies.length > 0) lines.push(`Active Control Room policies remain in force: ${input.policies.join(', ')}.`)
@@ -347,6 +356,128 @@ export function continuationPrompt(input: { handoffPath: string; sessionNumber: 
     'Then continue the work autonomously from where the previous session left off.',
     'If the handoff records a decision that genuinely needs the user, ask for it instead of guessing; otherwise keep going.',
   ].join(' ')
+}
+
+// ---------------------------------------------------------------------------
+// Operations: the Decision Inbox's tool, queued work, answers, watcher wakes, fresh resumes, the budget.
+
+/** The tool Claude is offered for a decision that is the person's to make (Behavior → Decisions). */
+export const DECISION_TOOL = {
+  name: 'decision_request',
+  description: [
+    "Leave the user a decision that is genuinely theirs to make, without stopping the work: it waits in their Decision Inbox (Project Sentinel → Needs review), and their answer reaches you with a later message or with tool results.",
+    'Use it for a real user-owned choice that need not interrupt them now: which of two approaches or visual directions, whether to delete generated artifacts, whether to publish once CI passes, which experiment configuration to run next.',
+    'Do not use it for status updates or progress reports, for choices you can make yourself from the task and the project, or for permission, safety or destructive-action confirmations (Claude Code asks those itself; never route them here).',
+    'Set blocking when the current milestone cannot go on without the answer: then finish what you can without it and end your turn with a short summary. Otherwise keep working on what does not depend on it.',
+    'Give 2 to 4 short options when the choice is between known alternatives, and allowText when a free-text answer fits.',
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: 'The decision, as one question ending in a question mark ("Which GPU configuration should S-004 use?").' },
+      context: { type: 'string', description: 'Why it matters and what each option means, in a sentence or two.' },
+      options: { type: 'array', items: { type: 'string' }, maxItems: 4, description: '2 to 4 short option labels, when the choice is between known alternatives.' },
+      allowText: { type: 'boolean', description: 'Whether a free-text answer fits (always true when no options are given).' },
+      blocking: { type: 'boolean', description: 'True when the current milestone cannot go on without the answer.' },
+      urgency: { type: 'string', enum: ['low', 'normal', 'high'] },
+      milestone: { type: 'string', description: 'The milestone the decision belongs to, under its title in your milestones.' },
+    },
+    required: ['question'],
+  },
+} as const
+
+/** What the decision tool answers Claude: where the question went and what to do meanwhile. */
+export function decisionRecorded(input: { id: string; isBlocking: boolean; isRepeat: boolean }): string {
+  const where = `${input.isRepeat ? `Already in the user's Decision Inbox as ${input.id}` : `Recorded as ${input.id} in the user's Decision Inbox`}. Their answer will reach you with a later message (or with tool results while you work).`
+  return input.isBlocking
+    ? `${where} It blocks the current milestone: finish what you can without it, then end your turn with a short summary; the run waits for the user.`
+    : `${where} It does not block: carry on with the work that does not depend on it.`
+}
+
+const quoted = (text: string, max = 3000): string => {
+  const t = text.trim()
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+/** Queued work delivered as a prompt of its own, at a boundary the user chose: their words, in order. */
+export function queuedPrompt(items: readonly { id: string; text: string; createdAt: number; when: string }[]): string {
+  if (items.length === 1) {
+    const q = items[0]!
+    return `${OWN_PROMPT.queued}${q.id}, queued by the user at ${fmt.clock(q.createdAt)} for ${q.when.toLowerCase()}. Do this now:\n\n${quoted(q.text)}`
+  }
+  const list = items.map((q, i) => `${i + 1}. (${q.id}, queued at ${fmt.clock(q.createdAt)})\n${quoted(q.text, 1500)}`).join('\n\n')
+  return `${OWN_PROMPT.queued}${items.length} items the user queued for now, in their order. Do them in turn:\n\n${list}`
+}
+
+/** Queued work due at a milestone that just completed, mid-turn: with the next batch of tool results. */
+export function queuedNote(items: readonly { id: string; text: string; createdAt: number }[]): string {
+  const list = items.map(q => `(${q.id}, queued at ${fmt.clock(q.createdAt)}) ${quoted(q.text, 1500)}`).join('\n')
+  return [
+    `Project Sentinel · Mission Queue: the user queued work for after the milestone you just completed${items.length === 1 ? '' : ' (in their order)'}:`,
+    list,
+    'Take it up next, before you start the next milestone, unless it depends on work still to be done; then carry on with the plan.',
+  ].join('\n')
+}
+
+/** Answers from the Decision Inbox: their questions, the user's words. */
+const answersText = (items: readonly { id: string; question: string; answer: string; milestone: string | null }[]): string =>
+  items.map(d => `${d.id}${d.milestone === null ? '' : ` (milestone "${d.milestone}")`}: ${d.question} → ${quoted(d.answer, 2000)}`).join('\n')
+
+/** Answers delivered as a prompt of their own (the run waited on them). */
+export function answersPrompt(items: readonly { id: string; question: string; answer: string; milestone: string | null }[]): string {
+  return `${OWN_PROMPT.answer}the user answered ${items.length === 1 ? 'your decision' : `${items.length} of your decisions`}:\n${answersText(items)}\n\nContinue the work with ${items.length === 1 ? 'this answer' : 'these answers'}.`
+}
+
+/** Answers delivered with tool results or with a prompt: context, not a turn of their own. */
+export function answersNote(items: readonly { id: string; question: string; answer: string; milestone: string | null }[]): string {
+  return `Project Sentinel · Decision Inbox: the user answered:\n${answersText(items)}`
+}
+
+/** A watcher woke the run in its own context: what it waited for, and to carry on. */
+export function wakePrompt(input: { id: string; label: string; armedAt: number; milestone: string | null; lateMs: number; queued: number }): string {
+  const late = input.lateMs > 5 * 60_000 ? ` It was due ${fmt.duration(input.lateMs)} ago (Claude Code was not running then).` : ''
+  const milestone = input.milestone === null ? '' : ` The milestone under way was "${input.milestone}".`
+  const queued = input.queued > 0 ? ` The user queued ${input.queued === 1 ? 'one item' : `${input.queued} items`} meanwhile; it follows when this turn ends.` : ''
+  return `${OWN_PROMPT.wake}${input.id}): the run was parked at ${fmt.clock(input.armedAt)} waiting for ${input.label}.${late}${milestone} Check it now and continue the work from where it was parked. If it is not ready yet, say so and mark the milestone waiting again with its blocker; the user can set another watcher.${queued}`
+}
+
+/** The first prompt of a fresh context Project Sentinel started outside a handoff: a watcher's fresh wake, or the Cold Resume Guard. */
+export function freshResumePrompt(input: { sessionNumber: number; handoffPath: string; why: string; then: string }): string {
+  return [
+    `${OWN_PROMPT.resume}${input.sessionNumber}): ${input.why}`,
+    `Start by reading \`${input.handoffPath}\` and the project documentation it refers to, then verify the current state of the work.`,
+    input.then,
+    'If something genuinely needs the user, ask for it (the Decision Inbox for a non-urgent choice); otherwise keep going.',
+  ].join(' ')
+}
+
+/** What a fresh context Project Sentinel started carries beside the run's milestones: the wake, queued work for it, open decisions. */
+export function freshExtras(input: {
+  why: string | null
+  queued: readonly { id: string; text: string; createdAt: number }[]
+  decisions: readonly { id: string; question: string; answer: string | null }[]
+}): string | null {
+  const parts: string[] = []
+  if (input.why !== null) parts.push(input.why)
+  if (input.queued.length > 0) {
+    parts.push(`The user queued this work for the fresh context, in order: ${input.queued.map(q => `(${q.id}, ${fmt.clock(q.createdAt)}) ${quoted(q.text, 1200)}`).join(' · ')}. Take it up after you have read in.`)
+  }
+  const open = input.decisions.filter(d => d.answer === null)
+  const answered = input.decisions.filter(d => d.answer !== null)
+  if (answered.length > 0) parts.push(`The user answered earlier decisions: ${answered.map(d => `${d.id}: ${d.question} → ${quoted(d.answer ?? '', 600)}`).join(' · ')}.`)
+  if (open.length > 0) parts.push(`Still waiting in the user's Decision Inbox: ${open.map(d => `${d.id}: ${d.question}`).join(' · ')}. Do not ask them again; their answers will come.`)
+  return parts.length === 0 ? null : parts.join(' ')
+}
+
+/** Before a fresh park: notes first, so the fresh wake has them (the person asked for it). */
+export function parkPrompt(input: { id: string; label: string; wakeAt: number; handoffFile: string; planTool: string | null }): string {
+  const tool = input.planTool === null ? '' : ` record the run's milestones (${input.planTool.startsWith('mcp__') ? `\`${input.planTool}\`` : input.planTool}), marking the one that waits as waiting with what it waits for, and`
+  return `${OWN_PROMPT.park}${input.id}): the user is parking this run until ${fmt.clock(input.wakeAt)}, waiting for ${input.label}, and it will wake in a fresh context. Do not continue the work now. Before the park:${tool} update \`${input.handoffFile}\` at the project root with what the fresh context needs to check ${input.label} and carry on. Then end your turn with one line.`
+}
+
+/** The run budget reached, mid-turn: finish the milestone, then stop (Finish the milestone, then pause). */
+export function budgetNote(reached: readonly string[]): string {
+  return `Project Sentinel · Run budget reached (${reached.join('; ')}). Finish the milestone you are on and leave the work in a clean, consistent state, then end your turn with a short summary and wait for the user. Do not start the next milestone.`
 }
 
 // ---------------------------------------------------------------------------

@@ -9,9 +9,9 @@ import type { Host } from '../host'
 import type { Runtime } from './runtime'
 import * as Views from './views'
 
-export type ViewKey = 'hud' | 'pane' | 'resources' | 'chain' | 'activity' | 'permissions' | 'focus' | 'spinner'
+export type ViewKey = 'hud' | 'pane' | 'resources' | 'chain' | 'activity' | 'permissions' | 'focus' | 'spinner' | 'ops'
 
-const ALL: readonly ViewKey[] = ['hud', 'pane', 'resources', 'chain', 'activity', 'permissions', 'focus', 'spinner']
+const ALL: readonly ViewKey[] = ['hud', 'pane', 'resources', 'chain', 'activity', 'permissions', 'focus', 'spinner', 'ops']
 
 export class Publisher {
   private dirty = new Set<ViewKey>()
@@ -100,6 +100,10 @@ export class Publisher {
       case 'spinner':
         value = Views.spinnerOf(rt)
         send = host.publishSpinner
+        break
+      case 'ops':
+        value = Views.opsOf(rt)
+        send = host.publishOps
         break
     }
     const json = JSON.stringify(value)

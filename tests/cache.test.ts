@@ -253,8 +253,8 @@ describe('prompt cache', () => {
   })
 
   test('what is remembered across sessions is validated', () => {
-    expect(memoryOf({ ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5', 7] })).toEqual({ v: 1, ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5'] })
-    expect(memoryOf('garbage')).toEqual({ v: 1, ttl: null, ttlSource: null, verified: 'unknown', verifiedAt: null, effortRebuilds: [] })
+    expect(memoryOf({ ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5', 7] })).toEqual({ v: 1, ttl: '1h', ttlSource: 'engine', verified: 'yes', verifiedAt: 5, effortRebuilds: ['opus-5-5'], writeRates: [] })
+    expect(memoryOf('garbage')).toEqual({ v: 1, ttl: null, ttlSource: null, verified: 'unknown', verifiedAt: null, effortRebuilds: [], writeRates: [] })
   })
 
   test('while a turn runs, the cache is never called lapsed on time alone, unless a five-minute lifetime is known', () => {

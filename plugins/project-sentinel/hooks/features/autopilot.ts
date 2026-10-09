@@ -61,7 +61,14 @@ export type Autopilot = {
  * continuation, another (no typed prompt), or unknown (it began before a
  * reload of the plugin, so its start was never seen).
  */
-export type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'other' | 'unknown'
+export type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'other' | 'unknown' | OpsTurnKind
+
+/**
+ * Project Sentinel's own turns outside a handoff (app/operations.ts): a watcher's wake, a fresh
+ * resume's first turn, queued work or answers it delivered, the turn that writes notes before a
+ * fresh park. Autopilot moves on none of them.
+ */
+export type OpsTurnKind = 'wake' | 'resume' | 'queued' | 'answer' | 'park'
 
 /** A turn that may be the handoff's: its own, or one whose start a reload hid (the handoff carried on across it). */
 const isHandoffTurn = (turn: TurnKind): boolean => turn === 'handoff' || turn === 'retry' || turn === 'unknown'

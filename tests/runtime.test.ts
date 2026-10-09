@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { ToolCallResult } from 'claude-code'
 
 import type { ResourcesView } from '../types'
+import { withAllowRemoved } from '../hooks/app/persist'
 import { Runtime } from '../hooks/app/runtime'
 import * as Views from '../hooks/app/views'
 import { defaultSettings, systemsOf } from '../hooks/core/settings'
@@ -326,6 +327,18 @@ describe('runtime', () => {
     expect(rt.notes.join(' ')).toContain('reset to safe defaults')
   })
 
+  test('stored settings that leave groups out are not a repair: what is missing takes its default, quietly', async () => {
+    const f = fakeHost()
+    f.kept.store['settings.v1'] = { version: 1, profile: 'normal', cache: { keepWarm: false, coldResume: true }, ui: { companion: true }, ops: { scout: 'suggest' } }
+    const rt = new Runtime()
+    rt.bind(f.host)
+    await rt.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    expect(rt.settings.ui.companion).toBe(true)
+    expect(rt.settings.permissions).toEqual(defaultSettings().permissions)
+    expect(rt.notes.join(' ')).not.toContain('reset to safe defaults')
+    expect(withAllowRemoved({ ui: {} }).value).toEqual({ ui: {} })
+  })
+
   test('a saved Allow reads as Default, in the settings and custom profiles alike, is named once and saved so', async () => {
     const f = fakeHost()
     const custom = { id: 'fast', name: 'Fast', createdAt: 1, systems: { ...systemsOf(defaultSettings()), permissions: { ...defaultSettings().permissions, delete: 'allow', install: 'allow' } } }
@@ -451,7 +464,8 @@ describe('runtime', () => {
 
   test('without a task list in Claude Code, Claude gets the milestones tool and a policy; with one, nothing is added', async () => {
     const { rt, kept } = await started(() => undefined)
-    expect(kept.registeredTools).toEqual(['milestones'])
+    // The Decision Inbox's tool is offered beside it (Behavior → Decisions, on by default).
+    expect(kept.registeredTools).toEqual(['milestones', 'decision_request'])
     expect(rt.planSource).toBe('milestones')
     expect(rt.policies().map(s => s.name)).toContain('Run progress')
     const answer = rt.recordMilestones({ milestones: [{ title: 'Fix the parser', status: 'completed' }, { title: 'Add tests', status: 'in_progress', doing: 'Adding tests' }] }, undefined)
@@ -466,7 +480,7 @@ describe('runtime', () => {
     const withTasks = new Runtime()
     withTasks.bind(f.host)
     await withTasks.onSessionStart({ cwd: '/work', surface: 'terminal', isInteractive: true })
-    expect(f.kept.registeredTools).toEqual([])
+    expect(f.kept.registeredTools).toEqual(['decision_request'])
     expect(withTasks.planSource).toBe('tasks')
     expect(withTasks.policies().map(s => s.name)).not.toContain('Run progress')
   })

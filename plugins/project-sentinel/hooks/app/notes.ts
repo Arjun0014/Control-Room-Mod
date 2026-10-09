@@ -28,7 +28,7 @@
  */
 
 /** What a note is about. A newer note of the same kind replaces a waiting one. */
-export type NoteKind = 'policies' | 'pressure' | 'resources' | 'autopilot' | 'settings'
+export type NoteKind = 'policies' | 'pressure' | 'resources' | 'autopilot' | 'settings' | 'queue' | 'answers' | 'budget'
 
 export type Note = {
   kind: NoteKind

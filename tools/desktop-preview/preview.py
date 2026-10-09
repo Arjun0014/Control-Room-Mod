@@ -8,7 +8,8 @@ surface in several states and prints each drawn element tree), and renders those
 with the CSS Desktop's own renderer gives them (read from the app's bundle, 2.26454): a Box is a
 flex box whose widths, column gaps and horizontal spacing are `ch`, whose heights are `lh` and whose
 row gaps and vertical spacing are half a line each; a Text wraps unless it truncates; a Button is
-the app's button; a Select its field button; an Svg an image of its given size.
+the app's button; a Select its field button; an Input a field with its text or placeholder; an Svg an
+image of its given size.
 
     python tools/desktop-preview/preview.py [--out DIR] [--state NAME]
 
@@ -140,8 +141,9 @@ def text_style(p):
     return ';'.join(s)
 
 
-def button(p):
-    label = html.escape(str(p.get('label', '')))
+def button(p, kids=()):
+    # Children of strings and Text (a chip: its mark in its tone, then its words) are drawn in the label's place.
+    label = ''.join(render(c) for c in kids) if kids else html.escape(str(p.get('label', '')))
     if p.get('plain'):
         dim = f";color:{DARK['dim']}" if p.get('dimColor') else ''
         return f'<button class="plain" style="{dim[1:]}">{label}</button>'
@@ -155,6 +157,15 @@ def select(p):
     shown = next((o.get('label') or o.get('value') for o in options if o.get('value') == value), options[0].get('label') if options else '')
     caret = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" fill="none" stroke="#9B9A97" stroke-width="1.5"/></svg>'
     return f'<span class="field"><button class="select"><span>{html.escape(str(shown))}</span>{caret}</button></span>'
+
+
+def text_input(p):
+    """An `Input` as drawn without focus: its label, then the field with its text, or its placeholder
+    dim (the submit word shows only while it has focus). The field's look is a close guess."""
+    label = f'<span style="color:{DARK["dim"]}">{html.escape(str(p["label"]))}</span>' if p.get('label') else ''
+    value = str(p.get('value') or '')
+    shown = html.escape(value) if value else f'<span style="color:{DARK["dim"]}">{html.escape(str(p.get("placeholder", "")))}</span>'
+    return f'<span class="field input">{label}<span class="text">{shown}</span></span>'
 
 
 def module_fault(n):
@@ -197,9 +208,11 @@ def render(n):
     if t == 'Text':
         return f'<span style="{text_style(p)}">' + ''.join(render(c) for c in kids) + '</span>'
     if t == 'Button':
-        return button(p)
+        return button(p, kids)
     if t == 'Select':
         return select(p)
+    if t == 'Input':
+        return text_input(p)
     if t == 'Svg':
         size = ''.join(f';{k}:{p[k]}px' for k in ('width', 'height') if num(p.get(k)))
         return f'<img src="data:image/svg+xml;charset=utf-8,{urllib.parse.quote(p.get("source", ""))}" alt="{html.escape(str(p.get("alt", "")))}" style="display:block;max-width:100%;border:0{size}">'
@@ -218,6 +231,8 @@ CSS = (
     'button.plain{min-height:1lh;padding:0 4px;border-radius:4px}'
     '.field{display:inline-flex;align-items:center;min-width:0;max-width:100%;position:relative}'
     '[data-row]>span,[data-row]>b,[data-row]>a,[data-row]>button,[data-row]>form,[data-row]>img,[data-row]>.field{align-self:center}'
+    '.input{gap:8px;width:100%}'
+    '.input>.text{flex:1 1 auto;min-width:0;height:30px;padding:0 10px;border-radius:6px;background:#1F1E1D;box-shadow:inset 0 0 0 1px #4A4A47;display:flex;align-items:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}'
     'button.select{justify-content:space-between;height:30px;padding:0 6px 0 10px;border-radius:6px;background:#2B2A28;box-shadow:inset 0 0 0 1px #4A4A47}'
 )
 
@@ -225,7 +240,7 @@ CSS = (
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(HERE, 'out'))
-    ap.add_argument('--state', default=None, help='only the states that start with this (ready, working-no-plan, working, done-failing, away, kit (and Kit through a turn: kit-idle, kit-thinking, kit-finished, kit-touched), or a pane page: pane-overview, pane-guardrails, pane-activity)')
+    ap.add_argument('--state', default=None, help='only the states that start with this (ready, working-no-plan, working, done-failing, away, kit (and Kit through a turn: kit-idle, kit-thinking, kit-finished, kit-touched), or a pane page: pane-overview, pane-guardrails, pane-activity; Operations: ops-review, sleeping, pane-operations)')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     parts = []

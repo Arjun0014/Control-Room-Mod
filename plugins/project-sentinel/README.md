@@ -5,8 +5,11 @@ Project Sentinel keeps long Claude Code runs on track. It adds a calm status bar
 and cost), the **Control Room** panel beside the conversation, and a set of switches you turn on
 when you want them: **Context Autopilot** hands a run over to a fresh context before the current
 one fills up, **Cache Guardian** keeps the prompt cache in view (and, if you ask, warm while you
-are away), **permission categories** ask before or refuse risky kinds of calls, and **Kit** is an
-optional pixel companion that shows what Claude is doing. It works in the terminal and in Claude
+are away), **permission categories** ask before or refuse risky kinds of calls, **Operations**
+orchestrates the run over time (work you queue for later, decisions Claude leaves for you,
+**watchers** that park the run until a result is due and wake it, a guard before a lapsed cache is
+re-read, the agents running, an optional run budget), and **Kit** is an optional pixel companion
+that shows what Claude is doing. It works in the terminal and in Claude
 Desktop's Code tab, needs Claude Code 2.1.289 or newer, and was called Control Room before 1.4.0.
 
 Everything stays on your machine. Project Sentinel sends nothing anywhere itself; the only
@@ -35,7 +38,14 @@ requests that leave are Claude Code's own model requests, as listed under
    Shortly before the prompt cache would lapse, Project Sentinel re-sends the last request so the
    next one reads from the cache instead of rebuilding it. Off by default; it stops after two idle
    hours.
-5. **Meet Kit:** `/cr companion on`. Kit paces while Claude thinks, types while it works, reads
+5. **Queue work, and let a run sleep until a result is due.** `/cr queue Update the README with the
+   findings` gives Claude work for later: it goes when the current turn ends (or the milestone
+   under way completes), never into the turn. `/cr watch in 2h S-002 result` parks the run and, two
+   hours later, wakes Claude to check the result, in this context or in a fresh one from the
+   handoff notes. If the run moved on meanwhile, the watcher only asks you. Claude can also leave
+   you a decision (Activity → Operations → *Needs review*) and keep working; `/cr decide D-1`
+   answers it.
+6. **Meet Kit:** `/cr companion on`. Kit paces while Claude thinks, types while it works, reads
    while it searches, celebrates a green finish and walks off with the notes at a handoff, and
    wanders the whole status bar in between. Pat its head, boop its nose or pet it: it reacts to
    where you touch it. `/cr motion off` holds it still.
@@ -50,9 +60,11 @@ of a plugin like this one.
 
 ### Prompts it submits, and what is in them
 
-Only Context Autopilot (off by default) submits prompts, at most three per handoff, each as if you
-had typed it, to the model your session already uses. They carry the text below and nothing read
-from your files or copied from the conversation:
+Prompts go to the model your session already uses, each as if you had typed it, only when nothing
+is running, one at a time. They carry the text below, your own words where named, and nothing read
+from your files or copied from the conversation.
+
+Context Autopilot (off by default), at most three per handoff:
 
 - **The handoff prompt.** How full the context is (tokens used of the window), the run and session
   numbers, and the request: verify the work; update the run's milestones (with its `milestones`
@@ -66,19 +78,53 @@ from your files or copied from the conversation:
   names of the policies that are on, the milestones' titles and states, and the run's objective
   (in Claude's words, or your latest request's).
 
-It also adds short notes to the conversation for Claude to read, each beginning *Control Room ·*:
+Operations, only for something you set up (work you queued, a decision you answered, a watcher you
+or its Scout armed, a fresh start you chose):
+
+- **Queued work** (*Mission Queue ·*): the words you queued, with when you queued them, at the
+  boundary you chose.
+- **Answers** (*Decision Inbox ·*): Claude's question and your answer, when the run waits on it or
+  you press *Send now* (otherwise they ride your next message as context).
+- **A watcher's wake** (*Project Sentinel watcher wake*): the watcher's id, what it waits for (its
+  label), when it was armed, the milestone under way then, asking Claude to check and continue.
+- **A fresh context's first prompt** (*Project Sentinel fresh resume*), after a `/clear` for a
+  watcher's fresh wake or the Cold Resume Guard's *Start fresh*: why it is fresh, the notes file's
+  path, what to do next (with *Start fresh*, your message, so it is not lost). Its first message
+  carries the same `contextAutopilot` block, plus the watcher's wake, work queued for the fresh
+  context and the decisions still open or answered.
+- **Write notes first**, only when you press it on a watcher: asks Claude to record its milestones
+  and update the notes before a fresh park.
+- **Your own message, unchanged**, when the Cold Resume Guard compacted first or you pressed *Send
+  now* on a message it kept.
+
+It also adds short notes for Claude to read, with the next batch of tool results or your next
+message (never appended to the transcript), each beginning *Control Room ·* or *Project Sentinel ·*:
 that a handoff is near, that machine load is high (and later back to normal), that you changed a
-setting, or that a policy was held or restored.
+setting, that a policy was held or restored, work you queued for after the milestone just completed,
+your answers to its decisions, and, with a run budget set to *Finish the milestone*, that the budget
+is reached.
 
 ### Commands it runs
 
-Only `/clear`, at a Context Autopilot handoff, once the notes file is written (or Claude Code's
-compaction instead, if you chose it). No other command.
+Only `/clear`, and Claude Code's compaction (`/compact` where a session compacts only inside a
+turn): at a Context Autopilot handoff, once the notes file is written (compaction if you chose
+it); at a watcher's fresh wake, only while the run is still where the watcher left it and the
+handoff notes are newer than its milestones; and when you choose *Start fresh* or *Compact first*
+in the Cold Resume Guard. No other command.
 
-### Tools it calls
+### Tools it calls, and messages to agents
 
-Only `TaskStop`, for a background job Claude started, when you press **Stop** on that job in
-Guardrails → Machine load. No other tool.
+Only `TaskStop`, when you press **Stop** on a background job Claude started (Guardrails → Machine
+load) or on an agent (Activity → Operations → Agents). When you write to an agent there and press
+**Send**, the text goes to that agent through Claude Code's own `SendMessage` delivery. No other tool.
+
+### Dialogs and the prompt box
+
+It asks in Claude Code's own question dialog: a call set to **Ask**; before a message re-reads a
+large conversation whose prompt cache has lapsed (the Cold Resume Guard); before your next message
+once a run budget set to *Ask* is reached; `/cr decide`; and a watcher time that reads two ways.
+Where no one can be asked (a headless run) it does not ask. The Cold Resume Guard's *Cancel* puts
+your message back in the prompt box (`$.prompt.fill`).
 
 ### What its tool-call hook does with the calls it sees
 
@@ -100,12 +146,18 @@ Code's own verdict, a check that runs nothing. The command patterns in its sourc
 piped into a shell, a token sent to a remote host) are there to recognise such commands so it can
 ask or refuse; it never runs them.
 
-### The one tool it answers itself
+### The tools it answers itself
 
-`milestones` (`mcp__project-sentinel__milestones`) is its own tool, offered to Claude only where
-Claude Code has no task list of its own. Its hook answers the call by recording the run's
-milestones (their titles and states) in memory and in the plugin's store. It answers no other tool
-in that tool's place.
+- `milestones` (`mcp__project-sentinel__milestones`), offered to Claude only where Claude Code has
+  no task list of its own. Its hook answers the call by recording the run's milestones (their
+  titles and states) in memory and in the plugin's store.
+- `decision_request` (`mcp__project-sentinel__decision_request`), offered while the Decision Inbox
+  is on (the default). Its hook answers the call by recording Claude's question (with its context,
+  up to four options, whether it blocks, its milestone) for you, and tells Claude to carry on. Its
+  description tells Claude not to use it for status updates, for choices Claude can make itself, or
+  for permission, safety or destructive-action confirmations, which stay Claude Code's own.
+
+It answers no other tool in that tool's place.
 
 ### Subagents
 
@@ -139,7 +191,12 @@ On a Windows installed in a language other than English the counters have other 
 The session's usage and model from Claude Code; your prompts and tool calls in memory, to show
 activity and progress; file status (never contents) of the handoff notes and of paths Claude
 edits, to place them inside or outside the project; Claude Code's managed policy settings, to know
-whether its policy section can be added; and the output of the programs above. In a session that
+whether its policy section can be added; Claude Code's list of the session's agents (id, type,
+description, status, parent, name); what Claude Code says of a resumed session's cache (seconds
+since the last answer, context size, whether the cache likely expired, its own estimate of
+re-caching) and its estimate at a model switch; Claude's last message as a turn ends, in memory,
+for the Watcher Scout to see whether Claude said it will check back at a time; and the output of
+the programs above. In a session that
 still runs Control Room it reads Control Room's status bar, and stands by until the session
 restarts.
 
@@ -177,8 +234,13 @@ raises effort.
 
 In Claude Code's own plugin store on your machine: your settings, run records (the objective, in
 Claude's words or your latest request's, milestone titles and states, session and handoff counts,
-token and cost totals, the project folder), the Quest log's XP and the cache's lifetime once
-learned. Delete the store file to remove them.
+token and cost totals, the project folder) and, with them, the run's operations: work you queued
+(in your words), Claude's decision questions with their context and options and your answers,
+watchers (what each waits for, when it wakes, its strategy, and the run's fingerprint when it was
+armed: a turn count and a digest of the milestones), the run budget, and a short log of what the
+layer did; the Quest log's XP; the cache's lifetime once learned, and Claude Code's own cache-write
+price per model from its estimates. In the session's own state (gone when the session ends): when
+the cache was last written. Delete the store file to remove them.
 
 ### Files it ships
 

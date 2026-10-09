@@ -44,6 +44,10 @@ export type MoodInput = {
   isCacheNear?: boolean
   /** Keep warm refreshed the cache in the last minute. */
   isRefreshing?: boolean
+  /** Decisions wait in Needs review, or a watcher waits for the person. */
+  isNeedingYou?: boolean
+  /** A watcher parks the run: `warm` while it holds the cache, `parked` for a fresh wake or none held. */
+  sleep?: 'warm' | 'parked' | null
 }
 
 const HANDOFF_STATES = new Set(['requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming'])
@@ -62,9 +66,14 @@ export function moodOf(m: MoodInput): Mood {
     if (m.toolKind === 'read' || m.toolKind === 'search' || m.toolKind === 'web') return 'search'
     return 'work'
   }
+  if (m.hasTurned && m.isFailing) return 'worried'
+  // Something waits for the person (a decision, a watcher due): Kit looks to them.
+  if (m.isNeedingYou === true) return 'waiting'
+  // Parked by a watcher: tending the fire while the cache is held, else curled up asleep.
+  if (m.sleep === 'warm') return 'tend'
+  if (m.sleep === 'parked') return 'sleep'
   // A fresh context: Kit walks back in.
   if (!m.hasTurned) return m.contextStartedAt !== null && m.now - m.contextStartedAt < FRESH_MS ? 'wake' : 'idle'
-  if (m.isFailing) return 'worried'
   if (m.isWaiting === true) return 'waiting'
   const idle = m.turnEndedAt === null ? 0 : m.now - m.turnEndedAt
   if (m.isGreen && idle < 90_000) return 'celebrate'

@@ -15,12 +15,13 @@
  *   waitingUser      Claude asked the person something, or a handoff waits for them
  *   complete         every milestone done
  *   done / failing   the last turn's outcome, in counted words
+ *   sleeping         a watcher parks the run until its time (Activity → Operations)
  *   ready            nothing has happened in this context yet
  *
  * Pure: a projection of the Runtime, like the other views.
  */
 
-import type { HudChip, HudHeadline, HudModel, Tone, TrackStop } from '../../types'
+import type { HudChip, HudHeadline, HudModel, HudOps, Tone, TrackStop } from '../../types'
 import * as fmt from '../core/format'
 import { clean } from '../core/text'
 import { doingOf } from '../features/digest'
@@ -111,6 +112,17 @@ export function headlineOf(rt: Runtime, now: number, summary: { text: string; du
 
   // Between turns: what the run waits for, if anything, comes before what the last turn did.
   if (ap === 'awaiting') return { state: 'waitingUser', text: 'Waiting for you to start the fresh context', detail: null, tone: 'accent' }
+  // The orchestration layer: a decision that blocks the run, a watcher that waits for the person, the run asleep.
+  const ops = rt.ops.hud()
+  if (ops !== null) {
+    if (ops.blocking > 0) return { state: 'waitingUser', text: `Needs you · ${fmt.plural(ops.blocking, 'decision')}`, detail: ops.blockingQuestion === null ? null : clean(ops.blockingQuestion, 100), tone: 'accent' }
+    const w = ops.watcher
+    if (w !== null && (w.status === 'due' || w.status === 'stale') && w.needs !== null) return { state: 'waitingUser', text: `Watcher due: ${w.label}`, detail: w.needs, tone: 'accent' }
+    if (w !== null && ops.isSleeping) {
+      const how = w.isHeldWarm ? 'cache held warm' : w.mode === 'fresh' ? 'fresh wake · no keep-alive' : w.mode === null ? 'Smart decides at the wake' : 'wakes in this context'
+      return { state: 'sleeping', text: `Sleeping until ${w.at} · ${w.label}`, detail: how, tone: 'info' }
+    }
+  }
   const stop = rt.lastStop
   if (stop !== null && stop.background.length > 0) {
     const first = stop.background[0]!
@@ -150,17 +162,28 @@ export function runNowOf(rt: Runtime, now: number): { state: HudHeadline['state'
   return { state: line.state, text: line.detail === null || line.state === 'complete' ? line.text : `${line.text} · ${line.detail}` }
 }
 
-/** What needs a look, most pressing first: failing checks, calls with trouble, the guard, the machine, agents, the level. */
-export function chipsOf(hud: Pick<HudModel, 'failing' | 'attention' | 'guard' | 'load' | 'agents' | 'quest'>): HudChip[] {
+/**
+ * What needs a look, most pressing first: failing checks, calls with trouble, decisions to review,
+ * the guard, the machine, the budget, a watcher, queued work due, agents, the level. The
+ * orchestration layer's chips open Activity → Operations; each shows only while it matters.
+ */
+export function chipsOf(hud: Pick<HudModel, 'failing' | 'attention' | 'guard' | 'load' | 'agents' | 'quest'> & { ops?: HudOps | null; isWorking?: boolean }): HudChip[] {
   const chips: HudChip[] = []
+  const ops = hud.ops ?? null
   if (hud.failing.length > 0) chips.push({ key: 'failing', text: `${hud.failing.join(', ')} failing`, tone: 'bad' })
   if (hud.attention > 0) chips.push({ key: 'attention', text: fmt.plural(hud.attention, 'issue'), tone: 'warn' })
+  // Decisions to review: the headline says it when one blocks the run.
+  if (ops !== null && ops.review > 0 && (ops.blocking === 0 || hud.isWorking === true)) chips.push({ key: 'review', text: `Review ${ops.review}`, tone: 'warn', opens: 'ops' })
   if (hud.guard.isOn && hud.guard.continued > 0) chips.push({ key: 'guard', text: `Kept going ×${hud.guard.continued}`, tone: 'warn' })
   const load = hud.load
   const isHigh = (t: Tone) => t === 'warn' || t === 'bad'
   if (load !== null && isHigh(load.cpuTone)) chips.push({ key: 'cpu', text: `CPU ${Math.round(load.cpu ?? 0)}%`, tone: load.cpuTone })
   if (load !== null && isHigh(load.ramTone)) chips.push({ key: 'ram', text: `RAM ${Math.round(load.ram ?? 0)}%`, tone: load.ramTone })
-  if (hud.agents.running > 0) chips.push({ key: 'agents', text: hud.agents.limit === null ? fmt.plural(hud.agents.running, 'agent') : `${hud.agents.running} of ${hud.agents.limit} agents`, tone: 'info' })
+  if (ops?.budget != null && ops.budget.tone !== 'muted') chips.push({ key: 'budget', text: ops.budget.text, tone: ops.budget.tone, opens: 'ops' })
+  // A watcher armed while the run is not asleep (Claude works, or the person does): its countdown.
+  if (ops?.watcher != null && !ops.isSleeping && ops.watcher.status === 'armed') chips.push({ key: 'watcher', text: `Watcher ${ops.watcher.left}`, tone: 'info', opens: 'ops' })
+  if (ops != null && ops.due > 0 && hud.isWorking === true) chips.push({ key: 'queued', text: `Queued ${ops.due}`, tone: 'info', opens: 'ops' })
+  if (hud.agents.running > 0) chips.push({ key: 'agents', text: hud.agents.limit === null ? fmt.plural(hud.agents.running, 'agent') : `${hud.agents.running} of ${hud.agents.limit} agents`, tone: 'info', opens: 'ops' })
   if (hud.quest !== null) chips.push({ key: 'quest', text: `Lv ${hud.quest.level}`, tone: 'accent' })
   return chips
 }

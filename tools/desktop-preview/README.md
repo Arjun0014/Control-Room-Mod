@@ -16,8 +16,10 @@ the app's bundle, Claude Desktop 2.26454):
   takes the app's padding before its `paddingX`;
 - a row box that sets no `alignItems` centers its texts, buttons, images and pickers on the row;
 - a `Text` wraps unless it truncates;
-- a `Button` is the app's button, a `Select` its picker (as wide as its value), an `Svg` an image of
-  its given size;
+- a `Button` is the app's button (its children of strings and `Text`, a chip's mark and words, drawn
+  in the label's place), a `Select` its picker (as wide as its value), an `Input` a field
+  as wide as its place showing its text or its placeholder (its submit word shows only while it has
+  focus, so it is not drawn; the field's look is a guess), an `Svg` an image of its given size;
 - a surface module's tree (Kit's region) is drawn only if it passes the page's own check, where an
   `Svg` needs a `width` and a `height`; otherwise the preview shows the app's fault line instead, as
   the app does.

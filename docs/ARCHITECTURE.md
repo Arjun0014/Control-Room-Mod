@@ -107,6 +107,9 @@ plugins/project-sentinel/
                                   with its state) and its chips (what needs a look)
     publisher.ts                  coalesced, diffed writes of those projections to $.state (+ status line)
     commands.ts / actions.ts      /cr sub-commands; the panel's actions
+    opsCommands.ts                /cr queue, watch, watchers, decisions, decide, budget, resume, agents
+    operations.ts                 the orchestration layer at work (§10): boundaries, deliveries, timers,
+                                  the Cold Resume Guard, the budget gate, agents' controls, its views
     persist.ts                    store reads/writes (settings, runs, index), debouncing, pruning
     monitor.ts                    resource sampler lifecycle (spawn, parse, restart, stop)
     cacheGuardian.ts              Cache Guardian: request telemetry, Keep warm's timer and fork, its
@@ -135,12 +138,19 @@ plugins/project-sentinel/
     companion.ts                  Kit: its mood from the status bar's state, and the props for its module
     git.ts                        `git status --porcelain=v1 --branch` parsed into a line
     prompts.ts                    every text Project Sentinel gives Claude (answer-style policies included)
+    ops.ts                        the orchestration layer's model (pure): queue, decisions, watchers and
+                                  their checkpoints, Smart's choice, the budget, the stored record
+    when.ts                       the watcher time grammar (`in 2h`, `at 14:00`, ambiguity), countdowns
+    resume.ts                     resume health and the Resume Preview
+    scout.ts                      the Watcher Scout (an explicit wait read from milestones or Claude's words)
+    agents.ts                     the Agent Command Center's facts, merged with Claude Code's agent list
     permissions/                  shell tokenizer, category classifier, decisions + invariants
     resources/                    samplers + parsers (Windows/macOS/Linux), pressure, heavy commands
   hooks/ui/                       design system (primitives.tsx, theme.ts, kit.ts: the view kit, not
                                   the companion), status bar (hud.tsx), Focus view rows,
-                                  pane/ (frame + overview, context with cache and handoff, behavior,
-                                  guardrails, activity, setup)
+                                  pane/ (frame + overview, context with cache, Cold Resume Guard and
+                                  handoff with Ready to resume, behavior, guardrails, activity with
+                                  operations, setup)
   types/index.d.ts                settings schema + PluginState contract (render view models)
 
 tests/                            claude plugin test suites + fixtures (fake host, engine world),
@@ -161,16 +171,21 @@ sites redraw. No feature module touches `$`.
 | Run plan and objective | inside the run record (`plan`, `objective`) | `/clear`, reload, restart | Claude's milestones as its task tools left them; the objective as Claude stated it, else the person's latest substantial request |
 | Quest log | `$.store` `quest.v1`, and the run record's `quest` | everything | lifetime XP, achievements with when each was earned, the last 8 awards; per run, its XP and the milestones already paid for |
 | Prompt cache memory | `$.store` `cache.v1` | everything | the cache lifetime learned (`5m` or `1h`) and how; Keep warm's verdict on itself and when; the short model names on which an effort change was seen to rebuild the cache (at most 12) |
+| Run operations | the run record's `ops` (1.6.0) | `/clear`, handoffs, reload, restart, a resumed session | the Mission Queue, the Decision Inbox, watchers with their checkpoints, the run budget, the layer's log (§10) |
+| Cache memo | `$.state` `cacheMemo` | hot reload only | the cache's last request (when, its size, model, lifetime), so a reload keeps knowing when it lapses |
 | Last handoff | the run record's `lastHandoff` | `/clear`, reload, restart | when, from and to which session, how (clear, compact, manual), Handoff Health's checks, the milestone under way then, the plan's count, and Continuity's checks once the fresh context's first turn ended |
 | Handoff in flight | `$.state` `autopilot` (`{ record }`) | hot reload only (gone after restart or `/clear`) | the Autopilot step under way, when it began, retries, a snooze: what a reload needs to carry the handoff on instead of starting a second one |
 | Live session | module memory (`Runtime`) | `/clear` (module stays loaded) | context, cost, autopilot machine, guard counters, activity, changes, resources, agents, learned model ids; this context's cache state (requests, misses, Keep warm's refreshes; reset at a fresh context); the Git state |
-| View models | `$.state` atoms `hud`, `pane`, `resources`, `chain`, `activity`, `permissions`, `focus`, `spinner` | hot reload (re-published after `/clear`) | render-ready projections only |
+| View models | `$.state` atoms `hud`, `pane`, `resources`, `chain`, `activity`, `permissions`, `focus`, `spinner`, `ops` | hot reload (re-published after `/clear`) | render-ready projections only |
 
 On hot reload `session.start` fires again: settings and run are re-read from
 `$.store`, live figures from `$.session.usage()`; nothing important lives
 only in a render projection. Settings writes are whole-object, debounced;
 run writes are per-run keys (no cross-session clobbering of the index's
-contents beyond the id list).
+contents beyond the id list). A run written at once (`persistRun(true)`: every change of its
+operations) drops a debounced write still waiting with an older copy of it, which would otherwise
+put that copy back (found in 1.6.0's tests: a watcher armed just after a turn was lost to the turn's
+later write).
 
 ## 5. Explicit priority system
 
@@ -475,7 +490,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (313 tests in 23 files, run on 2.1.295, and in CI on the latest
+* `claude plugin test` (430 tests in 26 files, run on 2.1.295, and in CI on the latest
   Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux). The
   tests live in the repository's `tests/`, outside the plugin folder (which
   Anthropic's directory scans, and which ships only the plugin);
@@ -570,5 +585,95 @@ only. Unknown future events/props → passed through untouched.
   `tools/desktop-preview` at 64 to 175 columns (its image fills the band)
   and measured with `tools/test/kitbench.mjs`. A clean install from the
   directory marketplace into a throwaway configuration.
+* 1.6.0's orchestration layer: pure suites (`ops.test.ts`: the time
+  grammar, the queue's boundaries, decisions, watchers and checkpoints,
+  Smart, the budget, the stored record, resume health and the preview, the
+  Scout, the agent rows), a Runtime suite over the in-memory host with its
+  manual clock (`operations.test.ts`: queue, decisions, watchers including
+  stale protection, fresh wakes, a cold cache before a warm wake, reloads
+  and restarts, the Cold Resume Guard's every choice, agents, the budget,
+  ended runs), and engine-driven suites (`opsui.test.ts`: Operations on
+  `terminal`, `desktop` and `mobile` with its controls pressed, Overview's
+  card, Context's cards, the chips and the sleeping status bar, Kit's
+  Client tree through the Desktop page's check, every `/cr` command, the
+  `prompt.submit` drop and the decision tool). Live results are in the
+  changelog.
 * Not yet done: the answer styles with a real model, and live sampling on
   macOS and Linux.
+
+## 10. The orchestration layer
+
+The design record is [ORCHESTRATION.md](ORCHESTRATION.md): what each part is and what it may do by
+itself. This section is how it is built.
+
+**Where it lives.** `features/ops.ts` is the model, plain data kept in the run record (`run.ops`,
+validated by `opsOf` on every read, so a hand-edited or older record never breaks a load).
+`app/operations.ts` (`Operations`, `rt.ops`) moves it: the Runtime calls it at each boundary and it
+asks the Runtime for the run, the context and the engine. Its views are `view()` (the `ops` atom,
+Activity → Operations, Overview's card, Context's two cards) and `hud()` (the status bar's slice:
+review, blocking, queued, due, the holding watcher, sleeping, agents, budget; null while empty, so
+the bar draws nothing of it).
+
+**Boundaries.** Nothing is delivered on a timer inside a turn, and nothing is appended to the
+transcript (1.5.0's rule):
+
+| Boundary | Hook | What goes |
+| --- | --- | --- |
+| a turn ends | `turn.complete` → `onTurnEnd` | one prompt of Project Sentinel's own: a due watcher's wake, else answers the run waits on, else due queued work (in order); 700 ms later, through `deliverNext` |
+| a milestone completes mid-turn | the milestones tool or task list → `setPlan` → `onPlanChanged` | queued work for after it (and for the next safe boundary), as a note with the next batch of tool results (`classic.PostToolBatch`) |
+| an answer while Claude works | `answer` | the answers, as a note with the next batch of tool results |
+| a fresh context Project Sentinel started | `classic.SessionStart{clear}` → `onFreshContext` | work queued for after the handoff, answers and open decisions, and a watcher's reason, in the `contextAutopilot` block of its first message |
+| the person's prompt | `prompt.submit` → `onPromptSubmit` | answers that did not block, as that prompt's context |
+| a watcher's time | `$.clock.after` (and a 30 s tick) → `onTime` | the watcher is marked due; it acts at the next boundary when the session is free |
+
+*Free* (`isFree`) means: no turn running, Autopilot idle or armed, no prompt of its own in flight
+(one whose turn never began stops blocking after two minutes), no approval waiting
+(`pendingApprovals`), no background work that brings the turn back, no fresh start or compaction
+under way. A prompt is marked delivered when `$.prompt.submit` resolves without a drop; a drop puts
+it back to due and logs why; one in flight when the runtime ends reads `unsure` at the next load and
+is never sent again by itself.
+
+**Checkpoints.** A watcher keeps the run's fingerprint when it parked it: the session id, a count of
+the person's turns (`personTurns`, counted at each turn's end: the person's own, and Project
+Sentinel's when the person forced them with *Deliver now* or *Send now*) and a digest of the
+milestones' keys and states (`planKey`). Armed mid-turn, it takes the checkpoint at that turn's end.
+After a turn of Project Sentinel's own with no turn of the person's since, the checkpoint is taken
+again (the run is parked where that turn left it). At the wake, `changedSince` compares: any
+difference makes it `stale`, and only the person moves it on (Check now sends the wake into this
+context; nothing clears).
+
+**Wakes.** A warm wake submits the wake prompt. A fresh wake needs healthy resume state
+(`features/resume.ts`: milestones, notes of 200 bytes or more written no earlier than ten minutes
+before the milestones last changed, no failed pickup since) and goes through `Runtime.freshStart`:
+the same `/clear` as a handoff (`clearOwn`, which waits for the fresh session's start or a changed
+session id and fails without either), the run rolled over with the purpose's end note, the fresh
+context's block, then the fresh resume prompt. Smart (`smartChoice`) decides at arming (shown) and
+again at the wake; a warm hold makes Keep warm refresh past its idle limit and the five-minute cap
+to the wake (`nextRefresh`'s `holdUntil`). A warm wake over a cache that went cold asks, unless
+Smart and healthy resume state allow a fresh wake.
+
+**The Cold Resume Guard** runs first in `prompt.submit`, before the budget's question and before
+any context is added. It returns `{ drop }` for every choice but *Continue*, so nothing has entered
+when it asks; *Cancel* (and a dismissed dialog) puts the text back with `$.prompt.fill` after
+400 ms, or keeps it in memory where the host has no box. *Start fresh* and *Compact first* carry the
+message into the fresh or compacted context (`freshStart`'s prompt; `submitAsUser` after
+`session.compact`). Its state (`coldState`) is cold only when the cache's expiry is known and
+passed, an hour passed with no known lifetime, or Claude Code's resume facts say so; its price is
+`cache.v1`'s `writeRates` (Claude Code's `estimated_cache_write_usd ÷ context_tokens` per model and
+lifetime, `configured` or `catalog` pricing only).
+
+**The budget** (`checkBudget`) reads the run's totals (cost as reported, wall-clock time by the
+runtime's clock, handoffs) after each turn and each tick. `mayAutomate` gates every turn Project
+Sentinel would start by itself; `budgetGuard` asks once before the person's message; `Finish the
+milestone` adds a note with the next tool results. It never cancels anything.
+
+**Agents** (`features/agents.ts`) merge Claude Code's list (`$.agent.list`, read at load, at a
+spawn, at an agent's end, on Operations opening and every 5 s while one runs) with what this runtime
+saw (`agent.spawn`'s answer, the agent loop's `turn.step` model and tool calls, its
+`turn.complete`). Stop is `$.tool.call({ tool: 'TaskStop', task_id })`, Message is
+`$.session.send({ to: { agentId } })`; both offered only for background agents and teammates.
+
+**Ended runs.** A run ended by `session.end` keeps its operations inert: its timers stopped with the
+process, and a new run never reads them. `findForeign` offers the newest ended run of the same
+project root that left open operations; `bringForeign` copies them (watchers re-armed from now,
+overdue ones due) and marks the originals moved, so they are offered once.

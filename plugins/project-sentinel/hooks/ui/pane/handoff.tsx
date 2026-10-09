@@ -1,15 +1,17 @@
 /**
  * The latest handoff, in Context: what it left behind for the fresh context
  * (Handoff Health) and what the fresh context picked up (Continuity), each
- * item counted from the tool calls Control Room saw.
+ * item counted from the tool calls Control Room saw. And Ready to resume: what
+ * a fresh context would get now (the Resume Preview), and whether it is safe to
+ * start one (docs/ORCHESTRATION.md, Resume state).
  */
 
 import type { RenderElement } from 'claude-code'
 
-import type { HandoffCheckView, HandoffView, Tone } from '../../../types'
+import type { HandoffCheckView, HandoffView, ResumeView, Tone } from '../../../types'
 import * as fmt from '../../core/format'
 import type { Kit } from '../kit'
-import { card, listItem, note, pair } from '../primitives'
+import { card, field, listItem, note, pair } from '../primitives'
 import { ACCENT, G } from '../theme'
 
 const LOOK: Record<HandoffCheckView['state'], { glyph: string; tone: Tone }> = {
@@ -34,6 +36,37 @@ function checkItem(kit: Kit, prefix: string, c: HandoffCheckView): RenderElement
     right: c.detail,
     rightTone: c.state === 'missing' ? 'warn' : 'muted',
     isDim: c.state === 'none',
+  })
+}
+
+/**
+ * Ready to resume: what a fresh context gets (the run, its milestones, what it reads, what it
+ * carries, what it does next), and why a fresh start is not offered when it is not. Project
+ * Sentinel starts one for Autopilot's handoff, a watcher's fresh wake and the Cold Resume Guard's
+ * Start fresh; the last two only while this reads Ready.
+ */
+export function resumeCard(kit: Kit, view: ResumeView, isAwaiting: boolean): RenderElement {
+  const { Text } = kit.ui
+  const carries = [view.queued > 0 ? fmt.plural(view.queued, 'queued item') : '', view.decisions > 0 ? fmt.plural(view.decisions, 'open decision') : ''].filter(Boolean).join(' · ')
+  return card(kit, {
+    key: 'resume',
+    title: 'Ready to resume',
+    accent: ACCENT.context,
+    aside: view.isHealthy ? 'Ready' : 'Not ready',
+    footer: isAwaiting
+      ? 'What the fresh context gets when you start it.'
+      : 'What a fresh context would get now. A watcher’s fresh wake and the Cold Resume Guard’s Start fresh are offered only while this is ready.',
+    rows: k => [
+      view.objective === null && view.run === null
+        ? null
+        : field(k, { key: 'resume-run', label: 'Run', content: <Text wrap="truncate-end">{[view.run === null ? null : `Run ${view.run}`, view.objective].filter(Boolean).join(' · ')}</Text> }),
+      field(k, { key: 'resume-done', label: 'Done', content: <Text wrap="truncate-end">{view.total === 0 ? 'No milestones' : `${view.doneCount} of ${fmt.plural(view.total, 'milestone')}`}</Text> }),
+      view.current === null ? null : field(k, { key: 'resume-now', label: 'Under way', content: <Text wrap="truncate-end">{view.current}</Text> }),
+      ...view.reads.map((r, i) => listItem(k, { key: `resume-read-${i}`, glyph: r.isOk ? G.ok : G.fail, tone: r.isOk ? 'good' : 'warn', text: r.label })),
+      carries === '' ? null : field(k, { key: 'resume-carries', label: 'Carries', content: <Text wrap="truncate-end">{carries}</Text> }),
+      view.next === null ? null : field(k, { key: 'resume-next', label: 'Next', content: <Text wrap="truncate-end">{view.next}</Text> }),
+      ...view.problems.map((p, i) => note(k, `${G.warn} ${p}`, `resume-problem-${i}`, 'warn')),
+    ],
   })
 }
 

@@ -180,6 +180,11 @@ const LABELS: Record<string, string> = {
   'cache.minTokens': 'Keep warm from',
   'cache.guardModelSwitch': 'Ask before a model switch',
   'cache.stablePolicies': 'Keep policies stable',
+  'cache.coldResume': 'Ask before a cold resume',
+  'cache.coldResumeTokens': 'Cold resume from',
+  'ops.decisions': 'Decision Inbox',
+  'ops.watchers': 'Watchers',
+  'ops.scout': 'Watcher suggestions',
 }
 
 for (const category of PERMISSION_CATEGORIES) {
@@ -194,6 +199,7 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   'focus.tools': { compact: 'One line', hidden: 'Hidden' },
   'resources.enforcement': { inform: 'Just tell Claude', limit: 'Hold extra heavy jobs', strict: 'Hold all heavy jobs' },
   'answers.style': { standard: 'Standard', brief: 'Brief', ste: 'Plain technical', mission: 'Mission control', quest: 'Quest log' },
+  'ops.scout': { off: 'Off', suggest: 'Suggest', auto: 'Arm explicit waits' },
 }
 
 const UNITS: Record<string, (n: number) => string> = {
@@ -204,6 +210,7 @@ const UNITS: Record<string, (n: number) => string> = {
   'resources.intervalSec': n => `${n} s`,
   'cache.maxIdleMinutes': n => (n % 60 === 0 ? `${n / 60} h` : `${n} min`),
   'cache.minTokens': n => fmtTokens(n),
+  'cache.coldResumeTokens': n => fmtTokens(n),
 }
 
 /** A stored value as the panel shows it: "On", "Maximum", "70%", "700k". */

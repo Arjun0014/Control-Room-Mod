@@ -363,6 +363,7 @@ export const STATE_MARK: Record<HudState, { glyph: string; tone: Tone }> = {
   done: { glyph: '✓', tone: 'good' },
   complete: { glyph: '✓', tone: 'good' },
   failing: { glyph: '✗', tone: 'warn' },
+  sleeping: { glyph: '◷', tone: 'info' },
 }
 
 /** The same marks drawn as 16-pixel icons. */
@@ -403,6 +404,10 @@ export function svgStateIcon(state: HudState, lineHeight = 16): string {
     case 'ready':
     case 'idle':
       body = ring('none')
+      break
+    case 'sleeping':
+      // A crescent: the run sleeps until its watcher wakes it.
+      body = `<path d="M10.6 2.6 A5.8 5.8 0 1 0 13.6 10.4 A4.6 4.6 0 0 1 10.6 2.6 Z" fill="${c}" fill-opacity="0.2" stroke="${c}" stroke-width="1.5" stroke-linejoin="round"/>`
       break
   }
   // Centred in a canvas one text line tall, so lined up with the top of a block it sits on that line.

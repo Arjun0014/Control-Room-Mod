@@ -48,7 +48,10 @@ export function world(
       rateLimits: [],
       cost: { usd: 1.25 },
     } as SessionUsage,
-    askAnswer: 'Deny',
+    /** How the person answers Claude Code's question dialog: the words, or a function of the question and its options. */
+    askAnswer: 'Deny' as string | ((question: string, options: readonly string[]) => string),
+    /** What Claude Code's agent list reports. */
+    agents: [] as import('claude-code').AgentInfo[],
     isHandoffWritten: options.isHandoffWritten ?? true,
   }
 
@@ -96,7 +99,7 @@ export function world(
   // The context blocks of a conversation's first message, as the engine computed them.
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
 
-  on('agent.list', () => ({ value: [] }))
+  on('agent.list', () => ({ value: live.agents }))
   on('model.classify', () => ({ value: 'premature' }))
   on('settings.read', () => ({ value: {} }))
 
@@ -164,7 +167,8 @@ export function world(
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e) => {
     const question = e.questions[0]?.question ?? ''
     kept.asked.push(question)
-    return { result: { questions: e.questions, answers: { [question]: live.askAnswer } } }
+    const answer = typeof live.askAnswer === 'function' ? live.askAnswer(question, (e.questions[0]?.options ?? []).map(o => o.label)) : live.askAnswer
+    return { result: { questions: e.questions, answers: { [question]: answer } } }
   })
   on('tool.call', ($, e) => ({ result: { ok: true, tool: e.tool } }))
 

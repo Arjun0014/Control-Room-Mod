@@ -285,9 +285,11 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
   const window = rt.usage.window ?? null
   const ref = threshold ?? (window === null ? null : window * 0.9)
   const load = liveLoadOf(rt)
-  // Busy for Kit: the processor near its ceiling, or memory at it. Memory merely high (common on a
-  // desktop) neither tires Kit nor costs anything to draw, so it changes nothing.
-  const isBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad' || load.ramTone === 'bad')
+  // Busy for Kit: the processor near its ceiling (fewer frames, no walking). Memory at its limit tires
+  // Kit (its mood) but costs nothing to animate, so it never slows or stills it: a desktop often sits
+  // at its memory ceiling (seen live, 85–90%), and Kit froze there until 1.5.0.
+  const isCpuBusy = load !== null && (load.cpuTone === 'warn' || load.cpuTone === 'bad')
+  const isBusy = isCpuBusy || (load !== null && load.ramTone === 'bad')
   const cache = rt.cache.hud(rt.clock(), rt.turn.isRunning)
   const isGreen = (thisTurn.length > 0 && thisTurn.every(r => r.status === 'passed')) || (p.total > 0 && p.done === p.total && p.done > rt.turnStartDone)
   const mood = moodOf({
@@ -309,14 +311,15 @@ function companionOf(rt: Runtime, now: number, validation: readonly ValidationSu
     isCacheNear: cache !== null && cache.tone === 'warn' && cache.recentMiss === null,
     isRefreshing: rt.cache.state.keepWarm.lastAt !== null && now - rt.cache.state.keepWarm.lastAt < 60_000,
   })
-  // A machine at its limit holds Kit still: the companion never adds to the load.
-  const isStrained = rt.monitor.pressure.level === 'high' || rt.monitor.pressure.level === 'critical'
+  // A processor at its limit: one frame a second (the companion never adds to the load), still alive.
+  const pressure = rt.monitor.pressure
+  const isStrained = pressure.level === 'critical' && pressure.driver === 'cpu'
   return companionView({
     mood,
     now,
     hour: new Date(now).getHours(),
     isReduced: s.ui.reducedMotion,
-    isBusy,
+    isBusy: isCpuBusy,
     isStrained,
     isWorking: rt.turn.isRunning,
     contextStartedAt: rt.contextStartedAt,
@@ -466,6 +469,7 @@ export function paneOf(rt: Runtime): PaneModel {
       lastEffort: rt.frontier.lastEffort,
       isEffortSupported: rt.frontier.isEffortSupported,
       isComposeReached: rt.compose.isReached ? true : rt.composeObserved ? false : null,
+      delivery: rt.ledger.frontier(rt.settings.frontier.enabled),
     },
     notes: rt.notes,
     allowRemoved: rt.allowRemoved,

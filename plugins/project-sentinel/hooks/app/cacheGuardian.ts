@@ -16,8 +16,9 @@
 
 import type { ModelForkResult, Timer } from 'claude-code'
 
-import type { CacheMissView, CacheView, HudModel } from '../../types'
+import type { CacheMissView, CacheView, HudModel, RefreshView } from '../../types'
 import { STORE_ENTRIES } from '../constants'
+import { fingerprint } from '../core/hash'
 import type { Settings } from '../core/settings'
 import * as Cache from '../features/cache'
 import { KEEP_WARM_PROMPT } from '../features/prompts'
@@ -35,8 +36,8 @@ type Ctx = {
   changed: () => void
   /** A miss the person should hear about now. */
   missed: (miss: Cache.CacheMiss) => void
-  /** Keep warm's verdict on itself. */
-  verdict: (verdict: 'yes' | 'no') => void
+  /** Keep warm's verdict on itself, and why it paused when it did. */
+  verdict: (verdict: 'yes' | 'no', reason: string | null) => void
 }
 
 const RECENT_MISS_MS = 5 * 60_000
@@ -56,6 +57,8 @@ export class CacheGuardian {
   private delivered: string | null = null
   private style: string | null | undefined = undefined
   private tools: string | null = null
+  /** Fingerprint of the policy section the last composition sent (null: none sent, or not composed yet). */
+  private sentPolicy: string | null = null
 
   constructor(private readonly ctx: Ctx) {}
 
@@ -114,6 +117,7 @@ export class CacheGuardian {
     this.state = this.fresh()
     this.steps.clear()
     this.delivered = null
+    this.sentPolicy = null
     this.isHeldNoteSent = false
     this.idleSince = null
     this.plan = { at: null, reason: 'Nothing cached yet' }
@@ -125,6 +129,8 @@ export class CacheGuardian {
     this.state = Cache.withVerdictReset(this.state)
     this.remember({ verified: 'unknown', verifiedAt: null })
     this.lastError = null
+    // Planned again at once: a refresh is owed now, not at the next turn's end.
+    if (!this.ctx.isTurnRunning()) this.schedule()
     this.ctx.changed()
   }
 
@@ -145,28 +151,57 @@ export class CacheGuardian {
   stepAnswered(key: string, usage: { input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number; model: string }): void {
     const start = this.steps.get(key)
     this.steps.delete(key)
+    const effort = start?.effort ?? null
     this.observe({
       at: start?.at ?? this.ctx.now(),
       input: usage.input_tokens,
       read: usage.cache_read_input_tokens,
       written: usage.cache_creation_input_tokens,
       model: usage.model,
-      effort: start?.effort ?? null,
+      effort,
+      fingerprint: { model: usage.model, effort, tools: this.tools === null ? null : fingerprint(this.tools), policy: this.sentPolicy, style: this.style === undefined ? null : (this.style ?? 'default') },
     })
+  }
+
+  /**
+   * Claude Code reported that the conversation's earlier part no longer matched what the API had
+   * cached (a `thinking_drop` row: the thinking made over it was dropped). Proof that the next
+   * rebuild is a history change, not the cache's lifetime and not Keep warm.
+   */
+  noteHistoryChanged(now: number): void {
+    this.state = Cache.noteChange(this.state, { cause: 'history', at: now, detail: 'Claude Code reported that the earlier conversation no longer matched the cache' })
+    this.ctx.host()?.trace?.('cache: Claude Code reported a prefix change (thinking_drop): the next request rebuilds from it')
+    this.ctx.changed()
   }
 
   private observe(req: Parameters<typeof Cache.observeRequest>[1]): void {
     const model = this.state.model
+    const before = this.state.keepWarm.log
     const result = Cache.observeRequest(this.state, req)
     this.state = result.state
+    this.traceSettled(before, result.state.keepWarm.log)
     if (result.miss !== null) this.ctx.missed(result.miss)
-    if (result.verdict !== null) this.ctx.verdict(result.verdict)
+    if (result.verdict !== null) this.ctx.verdict(result.verdict, result.state.keepWarm.pausedReason)
     // An effort change followed by a miss: on this model effort is part of what the cache keys on.
     const short = model === null ? null : Cache.shortModel(model)
     const isEffortMiss = result.miss !== null && result.miss.cause === 'effort' && short !== null && !this.memory.effortRebuilds.includes(short)
     this.remember(isEffortMiss && short !== null ? { effortRebuilds: [...this.memory.effortRebuilds, short].slice(-12) } : {})
     this.keepTicking()
     this.ctx.changed()
+  }
+
+  /** One line in the debug log for each refresh the conversation's request just settled. */
+  private traceSettled(before: readonly Cache.RefreshRecord[], after: readonly Cache.RefreshRecord[]): void {
+    const host = this.ctx.host()
+    if (host?.trace === undefined) return
+    for (const r of after) {
+      const was = before.find(b => b.at === r.at)
+      if (was === undefined || was.status === r.status || r.main === null) continue
+      const iso = (ms: number | null) => (ms === null ? '?' : new Date(ms).toISOString())
+      host.trace(
+        `keep warm: refresh of ${iso(r.at)} checked by the conversation's request of ${iso(r.main.at)} (${r.main.phase}; old expiry ${iso(r.oldExpiry)}, refreshed expiry ${iso(r.newExpiry)}): ${r.status.toUpperCase()} · read ${r.main.read}, wrote ${r.main.written}, uncached ${r.main.input}${r.main.changed.length > 0 ? ` · changed: ${r.main.changed.join(', ')}` : ''}`,
+      )
+    }
   }
 
   turnStarted(): void {
@@ -235,29 +270,48 @@ export class CacheGuardian {
    * keeping, and the person asked for stable policies, the text the system
    * prompt already carries is sent again; the change went to Claude as a note.
    */
-  policyText(text: string | null, outputStyle: string | null, reason: string | null): string | null {
+  policyText(text: string | null, outputStyle: string | null, reason: string | null): { text: string | null; isHeld: boolean } {
     if (this.style !== undefined && this.style !== outputStyle) {
       this.state = Cache.noteChange(this.state, { cause: 'style', at: this.ctx.now(), detail: `Output style changed to ${outputStyle ?? 'default'}` })
     }
     this.style = outputStyle
+    const sent = (out: string | null, isHeld: boolean) => {
+      this.sentPolicy = out === null ? null : fingerprint(out)
+      return { text: out, isHeld }
+    }
     const current = text ?? ''
     if (this.delivered === null) {
       this.delivered = current
-      return text
+      return sent(text, false)
     }
     if (current === this.delivered) {
       this.isHeldNoteSent = false
-      return text
+      return sent(text, false)
     }
-    if (this.isHoldingPolicies()) return this.delivered === '' ? null : this.delivered
+    if (this.isHoldingPolicies()) return sent(this.delivered === '' ? null : this.delivered, true)
     // A cold cache is rebuilt anyway: only a warm one is lost to the change.
     if (Cache.warmthOf(this.state, this.ctx.now(), this.ctx.isTurnRunning()) === 'warm') {
-      this.state = Cache.noteChange(this.state, { cause: 'policy', at: this.ctx.now(), detail: reason === null ? 'Control Room policies changed' : `Control Room policies changed: ${reason}`, by: 'person' })
+      this.state = Cache.noteChange(this.state, { cause: 'policy', at: this.ctx.now(), detail: reason === null ? 'Project Sentinel policies changed' : `Project Sentinel policies changed: ${reason}`, by: 'person' })
     }
     this.delivered = current
     this.isHeldNoteSent = false
     this.ctx.changed()
-    return text
+    return sent(text, false)
+  }
+
+  /** The section the system prompt carries now, as last sent ('' for none); null before the first composition of this context. */
+  deliveredPolicy(): string | null {
+    return this.delivered
+  }
+
+  /**
+   * A reload of the plugin mid-context: the system prompt still carries the section the runtime
+   * before the reload sent. Taken as delivered, so a held section stays held instead of the new
+   * runtime rewriting the system prompt (and rebuilding the whole cache) at its first request.
+   */
+  restoreDelivered(text: string): void {
+    if (this.delivered !== null) return
+    this.delivered = text
   }
 
   /** True once Claude was told, by a note, that policies other than its system prompt's apply. */
@@ -315,11 +369,11 @@ export class CacheGuardian {
     if (plan.at === null) return
     this.timer = host.after(Math.max(1000, plan.at - this.ctx.now()), () => {
       this.timer = null
-      void this.refresh(plan.isProbe)
+      void this.refresh(plan.isProbe, plan.at)
     })
   }
 
-  private async refresh(isProbe: boolean): Promise<void> {
+  private async refresh(isProbe: boolean, plannedAt: number | null): Promise<void> {
     const host = this.ctx.host()
     if (host === null || this.isRefreshing) return
     // The world may have moved since the timer was set.
@@ -330,6 +384,8 @@ export class CacheGuardian {
     }
     this.isRefreshing = true
     const at = this.ctx.now()
+    const oldExpiry = Cache.expiresAt(this.state)
+    host.trace?.(`keep warm: refresh sent at ${new Date(at).toISOString()} (planned ${plannedAt === null ? '?' : new Date(plannedAt).toISOString()}; ttl ${this.state.ttl?.value ?? '?'}; old expiry ${oldExpiry === null ? '?' : new Date(oldExpiry).toISOString()}; expects ${this.state.lastPrefix} cached)`)
     let result: ModelForkResult | null = null
     try {
       result = await host.fork(KEEP_WARM_PROMPT)
@@ -343,9 +399,11 @@ export class CacheGuardian {
       const answered = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens > 0
       if (answered) {
         this.lastError = null
-        this.observe({ at, input: u.input_tokens, read: u.cache_read_input_tokens, written: u.cache_creation_input_tokens, model: null, effort: null, isRefresh: true, isProbe: plan.isProbe || isProbe })
-        const k = this.state.keepWarm
-        host.trace?.(`keep warm: refresh ${k.lastHit === true ? 'hit' : 'missed'} · read ${u.cache_read_input_tokens}, wrote ${u.cache_creation_input_tokens}, uncached ${u.input_tokens} · expires ${new Date(Cache.expiresAt(this.state) ?? 0).toISOString()}`)
+        this.observe({ at, input: u.input_tokens, read: u.cache_read_input_tokens, written: u.cache_creation_input_tokens, model: null, effort: null, isRefresh: true, isProbe: plan.isProbe || isProbe, plannedAt })
+        const r = this.state.keepWarm.log[0]
+        host.trace?.(
+          `keep warm: fork ${r?.isHit === true ? 'HIT' : 'MISS'} · read ${u.cache_read_input_tokens}, wrote ${u.cache_creation_input_tokens}, uncached ${u.input_tokens} · ${r?.newExpiry != null ? `refreshed expiry ${new Date(r.newExpiry).toISOString()} · awaiting the conversation's next request` : (r?.note ?? 'no new expiry')}`,
+        )
       } else if (!result.isAnswered) {
         this.lastError = result.reason === 'api-error' ? `The API refused the refresh (${result.error})` : `No reply (${result.reason})`
       }
@@ -396,6 +454,9 @@ export class CacheGuardian {
         maxIdleMinutes: settings.maxIdleMinutes,
         isRefreshing: this.isRefreshing,
         error: this.lastError,
+        main: Cache.mainVerification(s.keepWarm),
+        pausedReason: s.keepWarm.pausedReason,
+        log: s.keepWarm.log.slice(0, 6).map(refreshView),
       },
       misses: s.misses.slice(0, 8).map(m => missView(m, settings)),
       policies: { isStable: settings.stablePolicies, isHolding: this.isHoldingPolicies() },
@@ -482,9 +543,28 @@ export function missView(m: Cache.CacheMiss, settings: Settings['cache']): Cache
     label: Cache.CAUSE_LABEL[m.cause],
     kind: m.kind,
     severity: m.severity,
+    certainty: m.certainty,
     recached: m.recached,
+    read: m.read,
+    prefix: m.prefix,
+    isPartial: m.isPartial,
     detail: m.detail,
     advice: Cache.adviceFor(m, { keepWarm: settings.keepWarm, stablePolicies: settings.stablePolicies }),
     isRefresh: m.isRefresh,
+  }
+}
+
+export function refreshView(r: Cache.RefreshRecord): RefreshView {
+  return {
+    at: r.at,
+    isHit: r.isHit,
+    read: r.read,
+    written: r.written,
+    input: r.input,
+    status: r.status,
+    oldExpiry: r.oldExpiry,
+    newExpiry: r.newExpiry,
+    main: r.main === null ? null : { at: r.main.at, read: r.main.read, written: r.main.written, phase: r.main.phase, changed: r.main.changed },
+    note: r.note,
   }
 }

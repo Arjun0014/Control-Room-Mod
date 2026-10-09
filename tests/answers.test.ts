@@ -82,11 +82,11 @@ describe('answer styles', () => {
     expect(rt.nativeOutputStyle).toBe('Learning')
   })
 
-  test('changing the style mid-session tells Claude at once', async () => {
-    const { rt, kept } = await started()
+  test('changing the style mid-session tells Claude with its next prompt', async () => {
+    const { rt } = await started()
     rt.update(s => void (s.answers.style = 'brief'))
     await flush()
-    expect(kept.appended.some(t => t.includes('the answer style is now Brief'))).toBe(true)
+    expect(rt.onPromptSubmit('Go on.', { kind: 'composer' }).some(t => t.includes('the answer style is now Brief'))).toBe(true)
   })
 
   test('/cr style switches it, lists the styles, and says when a native style outranks it', async () => {

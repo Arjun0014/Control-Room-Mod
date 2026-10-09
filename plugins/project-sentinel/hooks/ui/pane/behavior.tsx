@@ -46,6 +46,41 @@ const STRATEGY_HINT: Record<string, string> = {
 /** A picker hint ("lighter for quick work") as a row's subtitle ("Lighter for quick work"). */
 const sentence = (hint: string): string => hint.charAt(0).toUpperCase() + hint.slice(1)
 
+const EFFORT_WORD: Record<string, string> = { max: 'Maximum', xhigh: 'Extra high', high: 'High', medium: 'Medium', low: 'Low' }
+
+/**
+ * Whether Frontier Max reached Claude in this context, from the requests themselves (app/ledger.ts):
+ * how it travelled and the effort the latest request was sent with. One quiet line; amber only when
+ * a request went out without it, or when it is off but a held section still says it is on.
+ */
+export function frontierDeliveryText(d: PaneModel['frontier']['delivery']): { text: string; tone: 'normal' | 'muted' | 'warn' } {
+  const effort = d.effort === null ? '' : ` · sent with ${EFFORT_WORD[d.effort] ?? d.effort} effort`
+  const how: Record<string, string> = {
+    system: 'in the system prompt',
+    'held+note': 'as a note (the cached system prompt keeps its earlier section)',
+    held: 'in the held system prompt',
+    context: 'with the prompt (this setup skips the system prompt’s hook)',
+    none: 'nowhere',
+  }
+  switch (d.state) {
+    case 'delivered':
+      return { text: `Delivered ${how[d.method ?? 'system']}${d.isFirstRequest === true ? ' from the first request' : ''}${effort}`, tone: 'normal' }
+    case 'waiting':
+      return { text: 'Reaches Claude with its next request', tone: 'muted' }
+    case 'missing':
+      return { text: `Not delivered: the last request went out without it${effort}`, tone: 'warn' }
+    case 'stale':
+      return { text: 'Off, but the cached system prompt still has it until the note saying so goes with Claude’s next tool results or prompt', tone: 'warn' }
+    case 'off':
+      return { text: 'Off', tone: 'muted' }
+  }
+}
+
+function frontierDeliveryRow(k: Kit, d: PaneModel['frontier']['delivery']): RenderElement {
+  const t = frontierDeliveryText(d)
+  return row(k, { key: 'fr-delivery', label: 'This context', subtitle: t.text, subtitleTone: t.tone })
+}
+
 const STRICTNESS_HINT: Record<string, string> = {
   lenient: 'Only obvious hand-backs',
   standard: 'Clear signs the job is unfinished',
@@ -135,6 +170,7 @@ export function behaviorPage(kit: Kit, pane: PaneModel): RenderElement {
               subtitle: 'Raises their effort as well; costs more',
               control: switchControl(k, { key: 'fr-sub', isOn: s.frontier.subagentEffort, onPress: () => u(d => void (d.frontier.subagentEffort = !d.frontier.subagentEffort)) }),
             }),
+          (s.frontier.enabled || pane.frontier.delivery.state === 'stale') && frontierDeliveryRow(k, pane.frontier.delivery),
         ],
       })}
 

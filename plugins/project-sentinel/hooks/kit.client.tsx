@@ -8,18 +8,25 @@
  * behaviour model (the act it is in, a queue of acts, a settled mood) decides what Kit does
  * next, and two renderers draw the pose it is in: half-block pixels in the terminal (20 × 10),
  * and on Desktop an SVG image per frame (40 × 24 art pixels at 3 CSS pixels each, shaded and
- * outlined), in a lane above the headline.
+ * outlined), in a lane above the headline as wide as the status bar.
+ *
+ * What it does comes in episodes: in each mood a set of short runs of two to five acts (a
+ * stroll somewhere, a look round, a sit; typing, a look at the notes, a move with them under its
+ * arm), picked by weight from a seeded generator, none again before its cooldown, never the same
+ * twice running; a walk goes where Kit has been least lately, so it uses the whole lane.
  *
  * Never a jump: Kit's place changes only by walking, its facing only through a turn frame, and
  * it sits, stands and lies down only through transition frames. A mood change applies once it
  * has held for a moment (at once for a handoff, a finish, a failure, a question, a fresh
- * context), so a flicker between tool calls restarts nothing. Reduce motion and a strained
- * machine hold one still pose; a busy machine draws two frames a second at most and never walks.
+ * context), so a flicker between tool calls restarts nothing. Reduce motion holds one still
+ * pose; a busy processor draws two frames a second at most and never walks, a strained one one.
  *
- * A touch is a reaction (a purr, a hop, a spin, a blush, an ear flick, a nose boop, a roll for a
- * belly rub, a high five; never the same twice in a row); many touches make it dizzy; a sleeping
- * Kit is startled; while Claude works it only looks up. Kit never opens anything: the status
- * bar's button does that.
+ * A touch is a reaction by where it lands: a pat on the head (it leans into it; a second one, a
+ * purr), a boop on the nose, a flick of its tail, a pet on its body (a purr, a roll for a belly
+ * rub, a blush, a high five, a hop, a spin; never the same twice running). Three touches in a
+ * few seconds are a giggle, five make it dizzy and it needs a moment; a sleeping Kit is
+ * startled; while Claude works it only looks up. Kit never opens anything: the status bar's
+ * button does that.
  *
  * Self-contained: it runs on the drawing thread, without `$`. The model and the renderers are
  * pure functions over plain data, exported for the tests.
@@ -47,17 +54,26 @@ export const SETTLE_MS = 1200
 export const HOLD_MS = 2500
 /** A reaction to a touch, at most one in this long. */
 export const COOLDOWN_MS = 900
-/** This many touches within TAP_WINDOW_MS make Kit dizzy. */
+/** This many touches within TAP_WINDOW_MS make Kit giggle, and this many dizzy. */
+export const GIGGLE_TAPS = 3
 export const DIZZY_TAPS = 5
 const TAP_WINDOW_MS = 5000
+/** Dizzy, Kit needs this long before a touch does anything again. */
+export const DIZZY_REST_MS = 4000
+/** A second head pat within this long of the first: it purrs. */
+const PAT_CHAIN_MS = 3000
 
-/** Walking paces, in lane units a second: slow on purpose (six CSS pixels a unit on Desktop). */
-const PACE = { stroll: 3, pace: 1.6, magnify: 1.2, trudge: 1.1, enter: 4, exit: 4 } as const
+/** Walking paces, in lane units a second: slow on purpose (six CSS pixels a unit on Desktop); a sprint is the exception. */
+const PACE = { stroll: 3, pace: 2.2, magnify: 1.2, trudge: 1.1, enter: 4, exit: 4, carry: 2.6, sprint: 7 } as const
 
 /** A tick of the model: ten a second on Desktop, five in the terminal. */
 export const TICK_MS: Record<KitProps['surface'], number> = { desktop: 100, terminal: 200 }
-/** A busy machine: at most one new frame in this long. */
+/** A busy processor: at most one new frame in this long, and no walking. */
 const BUSY_FRAME_MS = 500
+/** A processor at its limit: one new frame a second, still alive (a blink, a breath), never frozen. */
+const STRAINED_FRAME_MS = 1000
+/** A new Kit's first moments, drawn at full rate whatever the load: its arrival shows at once. */
+const ARRIVAL_MS = 1000
 
 // ---------------------------------------------------------------------------
 // The model
@@ -107,7 +123,12 @@ export type ActKind =
   | 'fan'
   | 'stamp'
   | 'greet'
+  | 'review'
+  | 'peer'
+  | 'arrive'
   // A touch.
+  | 'pat'
+  | 'giggle'
   | 'purr'
   | 'hop'
   | 'spin'
@@ -121,7 +142,7 @@ export type ActKind =
   | 'notice'
   | 'dizzy'
 
-export type WalkStyle = 'stroll' | 'pace' | 'magnify' | 'trudge' | 'enter' | 'exit' | 'stop'
+export type WalkStyle = 'stroll' | 'pace' | 'magnify' | 'trudge' | 'enter' | 'exit' | 'stop' | 'carry' | 'sprint'
 
 /** One thing Kit does: how long, in which posture it ends, a walk's target and pace. */
 export type Act = {
@@ -167,24 +188,39 @@ export type KitState = {
   lastReaction: ActKind | null
   taps: number[]
   reactedAt: number
+  /** When it was last made dizzy (it rests DIZZY_REST_MS after). */
+  dizzyAt: number
   dancedAt: number
   /** The signals as last seen: a change is a moment to mark. */
   seen: { done: number; greenAt: number | null; fails: number; refreshAt: number | null; context: number | null }
+  /** When each episode (a short sequence of acts, see EPISODES) last began, for its cooldown; and the last one. */
+  cool: Record<string, number>
+  lastEpisode: string | null
+  /** Time spent lately in each fifth of the lane (decaying): Kit goes where it has been least. */
+  visits: number[]
 }
 
 const TRANSITIONS: ReadonlySet<ActKind> = new Set<ActKind>(['turn', 'sitDown', 'standUp', 'lieDown', 'getUp'])
 /** Acts that finish once begun: short, and cut midway they would jump. */
-const UNBROKEN: ReadonlySet<ActKind> = new Set<ActKind>([...TRANSITIONS, 'gone', 'spin', 'dance', 'pounce', 'hop', 'startled', 'pickup', 'stamp'])
-const REACTIONS: readonly ActKind[] = ['purr', 'hop', 'spin', 'blush', 'earflick', 'boop', 'roll', 'highfive']
+const UNBROKEN: ReadonlySet<ActKind> = new Set<ActKind>([...TRANSITIONS, 'gone', 'spin', 'dance', 'pounce', 'hop', 'startled', 'pickup', 'stamp', 'giggle', 'arrive'])
+/** A pet on Kit's body: one of these, a shuffled round of them. */
+const REACTIONS: readonly ActKind[] = ['purr', 'roll', 'blush', 'highfive', 'hop', 'spin']
 const NAPS: ReadonlySet<ActKind> = new Set<ActKind>(['nap', 'doze', 'nod'])
 const FOREVER = 1e12
+/** The lane in fifths, for where Kit has been lately. */
+const ZONES = 5
+/** How fast what Kit remembers of where it has been fades: halved every this long. */
+const VISIT_HALF_LIFE_MS = 45_000
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n))
 const maxX = (s: KitState): number => Math.max(0, s.lane - KIT_W)
-export const isCalm = (p: KitProps): boolean => p.isReduced || p.isStrained
+/** Held still: only Reduce motion. A loaded machine slows Kit down (fewer frames, no walking), never stops it. */
+export const isCalm = (p: KitProps): boolean => p.isReduced
+/** No walking: a busy or strained processor. */
+const isSlow = (p: KitProps): boolean => p.isBusy || p.isStrained
 
 function copy(s: KitState): KitState {
-  return { ...s, act: { ...s.act }, queue: s.queue.map(a => ({ ...a })), recent: [...s.recent], bag: [...s.bag], taps: [...s.taps], seen: { ...s.seen } }
+  return { ...s, act: { ...s.act }, queue: s.queue.map(a => ({ ...a })), recent: [...s.recent], bag: [...s.bag], taps: [...s.taps], seen: { ...s.seen }, cool: { ...s.cool }, visits: [...s.visits] }
 }
 
 /** Mulberry32: a small seeded generator, its state kept in the model. */
@@ -319,8 +355,12 @@ export function createKit(
     lastReaction: null,
     taps: [],
     reactedAt: -COOLDOWN_MS,
+    dizzyAt: -FOREVER,
     dancedAt: -FOREVER,
     seen: { done: p.done, greenAt: p.greenAt, fails: p.fails, refreshAt: p.refreshAt, context: p.contextStartedAt },
+    cool: {},
+    lastEpisode: null,
+    visits: Array.from({ length: ZONES }, () => 0),
   }
   s.home = clamp(o.home, 0, maxX(s))
   s.x = clamp(o.x ?? s.home, 0, maxX(s))
@@ -328,7 +368,9 @@ export function createKit(
     reenter(s)
     const c = cursorOf(s)
     push(s, c, act('greet', 2000, 'stand'))
-  } else begin(s, act('hold', 500 + Math.floor(rand(s) * 700), s.posture))
+  } else if (isCalm(p)) begin(s, act('hold', 500, s.posture))
+  // Switched on mid-session: alive from the first frame (an ear flick, a bounce), then on with its mood.
+  else begin(s, act('arrive', 600, s.posture))
   return s
 }
 
@@ -361,8 +403,12 @@ export function stepKit(prev: KitState, p: KitProps, dt: number): KitState {
   }
   settle(s, p)
   signals(s, p)
-  if (p.isBusy && s.act.kind === 'walk' && s.act.style !== 'enter' && s.act.style !== 'exit' && s.act.style !== 'stop') interrupt(s)
+  if (isSlow(p) && s.act.kind === 'walk' && s.act.style !== 'enter' && s.act.style !== 'exit' && s.act.style !== 'stop') interrupt(s)
   advance(s, p, dt)
+  // Where Kit has spent its time lately, fading (the planner sends it where it has been least).
+  const zone = clamp(Math.floor((s.x / Math.max(1, maxX(s))) * ZONES), 0, ZONES - 1)
+  const fade = Math.pow(0.5, dt / VISIT_HALF_LIFE_MS)
+  s.visits = s.visits.map((v, i) => v * fade + (i === zone ? dt : 0))
   return s
 }
 
@@ -535,101 +581,481 @@ function choose(s: KitState, options: readonly Option[]): ActKind {
 
 const hold = (s: KitState, c: Cursor, lo: number, hi: number): void => push(s, c, act('hold', Math.round(between(s, lo, hi)), c.posture))
 
+/** How long the short acts last (ms) when an episode plays them. */
+const ACT_MS: Partial<Record<ActKind, number>> = { yawn: 1700, scratch: 1600, groom: 2000, swish: 2200, look: 2600, watch: 2600, sneeze: 1300, earflick: 800, stretch: 1700, butterfly: 4200, pounce: 2600, check: 1300, magnify: 1400 }
+/** Acts with something in front of Kit (a keyboard, a book, a clipboard): it faces the open lane first. */
+const IN_FRONT: ReadonlySet<ActKind> = new Set<ActKind>(['type', 'check', 'read', 'review', 'tend', 'poke', 'fan'])
+/** Acts drawn standing; the others sit. */
+const STANDING: ReadonlySet<ActKind> = new Set<ActKind>(['stretch', 'butterfly', 'magnify'])
+
+/** Plays `kind` for `lo` to `hi` ms (its usual length without them), in the posture it is drawn in. */
+function play(s: KitState, c: Cursor, kind: ActKind, lo?: number, hi?: number, posture?: Posture): void {
+  const want = posture ?? (STANDING.has(kind) ? 'stand' : kind === 'ponder' || kind === 'hold' ? c.posture : 'sit')
+  toPosture(s, c, want === 'down' && kind !== 'hold' ? 'sit' : want)
+  if (IN_FRONT.has(kind)) faceOpen(s, c)
+  if (kind === 'pounce' && (c.x + c.facing * 3 < 0 || c.x + c.facing * 3 > maxX(s))) {
+    // Room to land: otherwise it turns toward the middle first.
+    face(s, c, maxX(s) / 2 - c.x)
+  }
+  const ms = lo === undefined ? (ACT_MS[kind] ?? 2000) : Math.round(between(s, lo, hi ?? lo))
+  push(s, c, act(kind, ms, c.posture))
+}
+
+/** One of `kinds`, never the act Kit did last. */
+const oneOf = (s: KitState, kinds: readonly ActKind[]): ActKind => choose(s, kinds.map(k => [k, 1] as Option))
+
+/** Which fifth of the lane a box edge at `x` stands in. */
+const zoneOf = (s: KitState, x: number): number => clamp(Math.floor((x / Math.max(1, maxX(s))) * ZONES), 0, ZONES - 1)
+
+/**
+ * Where a walk goes: somewhere in the part of the lane Kit has been least lately, at least `away`
+ * units from where it will be and at most `reach`. Over a few minutes Kit uses the whole lane.
+ */
+function spot(s: KitState, c: Cursor, away: number, reach = FOREVER): number {
+  const span = maxX(s)
+  if (span < away) return c.x
+  const width = span / ZONES
+  // The least visited first; a little chance in the order, so two quiet zones take turns.
+  const order = s.visits.map((v, i) => ({ i, v: v * (0.8 + 0.4 * rand(s)) })).sort((a, b) => a.v - b.v)
+  for (const { i } of order) {
+    const lo = Math.max(i * width, c.x - reach)
+    const hi = Math.min((i + 1) * width, c.x + reach)
+    if (hi < lo) continue
+    const x = between(s, lo, hi)
+    if (Math.abs(x - c.x) >= away) return x
+  }
+  return c.x < span / 2 ? Math.min(span, c.x + Math.max(away, Math.min(reach, span / 2))) : Math.max(0, c.x - Math.max(away, Math.min(reach, span / 2)))
+}
+
+/** A few units (`lo` to `hi`) toward the side of the lane Kit has been less, turning back at its ends. */
+function nearby(s: KitState, c: Cursor, lo: number, hi: number): number {
+  const zone = zoneOf(s, c.x)
+  const mean = (vs: number[]) => (vs.length === 0 ? 0 : vs.reduce((a, b) => a + b, 0) / vs.length)
+  const left = mean(s.visits.slice(0, zone))
+  const right = mean(s.visits.slice(zone + 1))
+  const dir = zone === 0 || c.x <= 1 ? 1 : zone === ZONES - 1 || c.x >= maxX(s) - 1 ? -1 : left < right ? -1 : right < left ? 1 : rand(s) < 0.5 ? -1 : 1
+  return c.x + dir * between(s, lo, hi)
+}
+
+/**
+ * An episode: a short run of two to five acts Kit plays in a mood (a stroll to where it has not
+ * been lately, a look round, a sit), how likely it is, and how long before it may come again.
+ */
+type Episode = {
+  /** The mood's name and the episode's, as `cool` and `lastEpisode` keep them. */
+  id: string
+  weight: number | ((p: KitProps) => number)
+  /** Not again within this long (ms) of its last start. */
+  cooldown: number
+  /** It walks: left out while the processor is busy. */
+  walks?: boolean
+  plan: (s: KitState, c: Cursor) => void
+}
+
+const isNight = (p: KitProps): boolean => p.hour >= 22 || p.hour < 6
+
+/** Idle (and a fresh context): calm first, every episode ends sitting still a while. */
+const IDLE: readonly Episode[] = [
+  {
+    id: 'idle.rest',
+    weight: 3,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'hold', 2500, 5000, c.posture === 'down' ? 'sit' : c.posture)
+      play(s, c, oneOf(s, ['look', 'swish', 'watch', 'earflick']))
+      play(s, c, 'hold', 2000, 4000)
+    },
+  },
+  {
+    id: 'idle.watch',
+    weight: 1.5,
+    cooldown: 0,
+    plan: (s, c) => {
+      // Watching the lane: one way, round to the other, then still.
+      play(s, c, 'watch', undefined, undefined, 'sit')
+      face(s, c, -c.facing)
+      play(s, c, oneOf(s, ['watch', 'swish']))
+      play(s, c, 'hold', 2000, 3500)
+    },
+  },
+  {
+    id: 'idle.wander',
+    weight: 2,
+    cooldown: 6000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, spot(s, c, 6), 'stroll')
+      play(s, c, oneOf(s, ['look', 'watch', 'swish']))
+      play(s, c, 'hold', 2000, 4000, 'sit')
+    },
+  },
+  {
+    id: 'idle.groom',
+    weight: 1.2,
+    cooldown: 25_000,
+    plan: (s, c) => {
+      play(s, c, 'groom')
+      play(s, c, oneOf(s, ['scratch', 'earflick', 'swish']))
+      play(s, c, 'hold', 2000, 4000, 'sit')
+    },
+  },
+  {
+    id: 'idle.stretch',
+    weight: 1,
+    cooldown: 30_000,
+    plan: (s, c) => {
+      play(s, c, 'stretch')
+      play(s, c, 'yawn')
+      play(s, c, 'hold', 2000, 3500)
+    },
+  },
+  {
+    id: 'idle.patrol',
+    weight: 0.7,
+    cooldown: 45_000,
+    walks: true,
+    plan: (s, c) => {
+      // Down to the quieter end of the lane, then round to look back along it.
+      const span = maxX(s)
+      const atEnd = s.visits[0]! <= s.visits[ZONES - 1]! ? between(s, 0, span * 0.1) : between(s, span * 0.9, span)
+      walkTo(s, c, atEnd, 'stroll')
+      face(s, c, span / 2 - c.x)
+      play(s, c, 'watch')
+      play(s, c, 'swish')
+      play(s, c, 'hold', 1500, 3000)
+    },
+  },
+  {
+    id: 'idle.play',
+    weight: 0.5,
+    cooldown: 60_000,
+    walks: true,
+    plan: (s, c) => {
+      play(s, c, 'butterfly')
+      play(s, c, 'pounce')
+      play(s, c, 'hold', 2000, 3000)
+    },
+  },
+  {
+    id: 'idle.peek',
+    weight: 0.8,
+    cooldown: 30_000,
+    plan: (s, c) => {
+      // A look down at the prompt, then round.
+      play(s, c, 'peer', 1500, 2500, 'sit')
+      play(s, c, 'hold', 1000, 2000)
+      play(s, c, 'look')
+    },
+  },
+  {
+    id: 'idle.loaf',
+    weight: p => (isNight(p) ? 2 : 0.5),
+    cooldown: 60_000,
+    plan: (s, c) => {
+      // Down for a while, eyes shut, then up again.
+      play(s, c, 'hold', 5000, 9000, 'down')
+      play(s, c, 'hold', 1500, 2500, 'sit')
+    },
+  },
+  {
+    id: 'idle.yawn',
+    weight: p => (isNight(p) ? 2 : 0.4),
+    cooldown: 40_000,
+    plan: (s, c) => {
+      play(s, c, 'yawn')
+      play(s, c, 'hold', 2000, 3500, 'sit')
+    },
+  },
+  {
+    id: 'idle.sneeze',
+    weight: 0.3,
+    cooldown: 90_000,
+    plan: (s, c) => {
+      play(s, c, 'sneeze')
+      play(s, c, 'earflick')
+      play(s, c, 'hold', 2000, 3000)
+    },
+  },
+]
+
+/** Thinking: pondering, pacing about the lane, a look up, now and then an idea. */
+const THINK: readonly Episode[] = [
+  {
+    id: 'think.ponder',
+    weight: 3,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'ponder', 1600, 2800, 'stand')
+      play(s, c, 'hold', 600, 1200)
+    },
+  },
+  {
+    id: 'think.pace',
+    weight: 2.5,
+    cooldown: 4000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, nearby(s, c, 3, 7), 'pace')
+      play(s, c, 'ponder', 1400, 2400, 'stand')
+    },
+  },
+  {
+    id: 'think.sit',
+    weight: 1.4,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'ponder', 2200, 3400, 'sit')
+      play(s, c, 'look')
+    },
+  },
+  {
+    id: 'think.idea',
+    weight: 0.7,
+    cooldown: 25_000,
+    plan: (s, c) => {
+      play(s, c, 'ponder', 1200, 2000, 'stand')
+      play(s, c, 'earflick', undefined, undefined, 'stand')
+      play(s, c, 'hold', 600, 1000)
+    },
+  },
+  {
+    id: 'think.roam',
+    weight: 0.8,
+    cooldown: 30_000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, spot(s, c, 8, 30), 'pace')
+      play(s, c, 'ponder', 1600, 2600, 'stand')
+      play(s, c, 'look', undefined, undefined, 'stand')
+    },
+  },
+]
+
+/** Editing and writing: typing in bursts, a check, a look at the notes, now and then a move. */
+const WORK: readonly Episode[] = [
+  {
+    id: 'work.type',
+    weight: 3,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'type', 3000, 6000)
+      play(s, c, 'check')
+    },
+  },
+  {
+    id: 'work.long',
+    weight: 1.5,
+    cooldown: 12_000,
+    plan: (s, c) => {
+      play(s, c, 'type', 4000, 7000)
+      play(s, c, 'review', 2000, 3000)
+      play(s, c, 'type', 2000, 4000)
+    },
+  },
+  {
+    id: 'work.review',
+    weight: 1.2,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'review', 2000, 3000)
+      play(s, c, 'type', 3000, 5000)
+    },
+  },
+  {
+    id: 'work.carry',
+    weight: 0.8,
+    cooldown: 40_000,
+    walks: true,
+    plan: (s, c) => {
+      // The notes under its arm to another spot, then on typing there.
+      walkTo(s, c, spot(s, c, 6, 30), 'carry')
+      play(s, c, 'type', 3000, 5000)
+    },
+  },
+  {
+    id: 'work.stretch',
+    weight: 0.5,
+    cooldown: 60_000,
+    plan: (s, c) => {
+      play(s, c, 'stretch')
+      play(s, c, 'type', 3000, 5000)
+    },
+  },
+]
+
+/** Reading and searching: a book, a magnifier along the lane, a dash to somewhere new. */
+const SEARCH: readonly Episode[] = [
+  {
+    id: 'search.read',
+    weight: 3,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'read', 3000, 5000)
+      play(s, c, 'hold', 500, 1000)
+    },
+  },
+  {
+    id: 'search.magnify',
+    weight: 2,
+    cooldown: 6000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, nearby(s, c, 2, 5), 'magnify')
+      play(s, c, 'magnify')
+      walkTo(s, c, nearby(s, c, 2, 4), 'magnify')
+      play(s, c, 'magnify')
+    },
+  },
+  {
+    id: 'search.peer',
+    weight: 1,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'peer', 1500, 2500)
+      play(s, c, 'read', 2500, 4000)
+    },
+  },
+  {
+    id: 'search.dash',
+    weight: 0.6,
+    cooldown: 40_000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, spot(s, c, 10), 'sprint')
+      play(s, c, 'read', 3000, 4500)
+    },
+  },
+]
+
+/** A check running: watching it, a nervous tail, a pace and back. */
+const TEST: readonly Episode[] = [
+  {
+    id: 'test.watch',
+    weight: 3,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'watchTest', 2500, 4000)
+      play(s, c, 'hold', 500, 1000)
+    },
+  },
+  {
+    id: 'test.fidget',
+    weight: 1.5,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'watchTest', 2000, 3000)
+      play(s, c, 'swish', undefined, undefined, 'sit')
+      play(s, c, 'watchTest', 2000, 3000)
+    },
+  },
+  {
+    id: 'test.peer',
+    weight: 1,
+    cooldown: 15_000,
+    plan: (s, c) => {
+      play(s, c, 'peer', 1500, 2500)
+      play(s, c, 'watchTest', 2500, 4000)
+    },
+  },
+  {
+    id: 'test.pace',
+    weight: 0.8,
+    cooldown: 25_000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, nearby(s, c, 3, 6), 'pace')
+      play(s, c, 'watchTest', 2500, 4000)
+    },
+  },
+]
+
+/** Claude asked something: Kit waits for the answer, looks at the prompt, comes a little closer. */
+const WAITING: readonly Episode[] = [
+  {
+    id: 'waiting.wait',
+    weight: 3,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'wait', 2500, 4000)
+      play(s, c, 'hold', 500, 1000)
+    },
+  },
+  {
+    id: 'waiting.peer',
+    weight: 1.5,
+    cooldown: 0,
+    plan: (s, c) => {
+      play(s, c, 'peer', 1500, 2500)
+      play(s, c, 'wait', 2000, 3000)
+    },
+  },
+  {
+    id: 'waiting.ears',
+    weight: 1,
+    cooldown: 15_000,
+    plan: (s, c) => {
+      play(s, c, 'wait', 2000, 3000)
+      play(s, c, 'earflick')
+      play(s, c, 'look')
+    },
+  },
+  {
+    id: 'waiting.closer',
+    weight: 0.6,
+    cooldown: 60_000,
+    walks: true,
+    plan: (s, c) => {
+      walkTo(s, c, nearby(s, c, 4, 8), 'stroll')
+      play(s, c, 'peer', 1500, 2500)
+      play(s, c, 'wait', 2000, 3000)
+    },
+  },
+]
+
+/** The episodes of each mood that has them; the others play one act at a time (program). */
+export const EPISODES: Partial<Record<KitMood, readonly Episode[]>> = { idle: IDLE, wake: IDLE, think: THINK, work: WORK, search: SEARCH, test: TEST, waiting: WAITING }
+
+/**
+ * Picks the next episode by weight: none still cooling down, never the last one again, no walking
+ * on a busy processor. Every set holds two episodes with no cooldown, so one is always free; were
+ * none, the one begun longest ago (never the last) would play.
+ */
+function episode(s: KitState, p: KitProps, set: readonly Episode[]): void {
+  const c = cursorOf(s)
+  const isBusy = isSlow(p)
+  const allowed = set.filter(e => !(isBusy && e.walks === true) && e.id !== s.lastEpisode)
+  const fresh = allowed.filter(e => s.t - (s.cool[e.id] ?? -FOREVER) >= e.cooldown)
+  const oldest = [...allowed].sort((a, b) => (s.cool[a.id] ?? -FOREVER) - (s.cool[b.id] ?? -FOREVER)).slice(0, 1)
+  const pool = fresh.length > 0 ? fresh : oldest.length > 0 ? oldest : set.slice(0, 1)
+  const weightOf = (e: Episode) => Math.max(0, typeof e.weight === 'function' ? e.weight(p) : e.weight)
+  let r = rand(s) * pool.reduce((n, e) => n + weightOf(e), 0)
+  let pick = pool[pool.length - 1]!
+  for (const e of pool) {
+    r -= weightOf(e)
+    if (r <= 0) {
+      pick = e
+      break
+    }
+  }
+  s.cool[pick.id] = s.t
+  s.lastEpisode = pick.id
+  pick.plan(s, c)
+}
+
 /** Fills the queue with what Kit does next in its settled mood. */
 function program(s: KitState, p: KitProps): void {
+  const set = EPISODES[s.mood]
+  if (set !== undefined) return episode(s, p, set)
   const c = cursorOf(s)
-  const isBusy = p.isBusy
+  const isBusy = isSlow(p)
   const last = s.recent[0]
   switch (s.mood) {
-    case 'idle':
-    case 'wake': {
-      // Calm first: anything lively is followed by sitting still a while.
-      const isNight = p.hour >= 22 || p.hour < 6
-      const kind =
-        last !== undefined && last !== 'hold'
-          ? 'hold'
-          : choose(s, [
-              ['hold', 5],
-              ['yawn', isNight ? 3 : 0.8],
-              ['stretch', 1],
-              ['scratch', 1],
-              ['groom', 1],
-              ['swish', 1],
-              ['look', 1.2],
-              ['watch', 1],
-              ['walk', isBusy ? 0 : 1.6],
-              ['butterfly', isBusy ? 0 : 0.25],
-              ['pounce', isBusy ? 0 : 0.25],
-              ['sneeze', 0.2],
-            ])
-      if (kind === 'walk') {
-        const span = maxX(s)
-        let to = between(s, 0, span)
-        if (Math.abs(to - c.x) < 4) to = c.x + (c.x < span / 2 ? 6 : -6)
-        walkTo(s, c, to, 'stroll')
-        toPosture(s, c, 'sit')
-        return hold(s, c, 2000, 3500)
-      }
-      if (kind === 'stretch' || kind === 'butterfly') {
-        toPosture(s, c, 'stand')
-        push(s, c, act(kind, kind === 'stretch' ? 1700 : 4200, 'stand'))
-        return toPosture(s, c, 'sit')
-      }
-      if (kind === 'pounce') {
-        toPosture(s, c, 'sit')
-        // Room to land: otherwise it turns toward the middle first.
-        if (c.x + c.facing * 3 < 0 || c.x + c.facing * 3 > maxX(s)) face(s, c, maxX(s) / 2 - c.x)
-        return push(s, c, act('pounce', 2600, 'sit'))
-      }
-      toPosture(s, c, c.posture === 'down' ? 'sit' : c.posture)
-      if (kind === 'hold') return hold(s, c, 2500, 5000)
-      const DUR: Partial<Record<ActKind, number>> = { yawn: 1700, scratch: 1600, groom: 2000, swish: 2200, look: 2600, watch: 2600, sneeze: 1300 }
-      return push(s, c, act(kind, DUR[kind] ?? 2000, c.posture))
-    }
-    case 'think': {
-      if (isBusy) {
-        toPosture(s, c, 'sit')
-        return push(s, c, act('ponder', Math.round(between(s, 2200, 3400)), 'sit'))
-      }
-      if (last !== 'ponder') {
-        toPosture(s, c, 'stand')
-        return push(s, c, act('ponder', Math.round(between(s, 1600, 2800)), 'stand'))
-      }
-      // Pacing: a few units one way, back toward the middle of the lane at its ends.
-      const span = maxX(s)
-      const dir = c.x <= 1 ? 1 : c.x >= span - 1 ? -1 : rand(s) < 0.5 ? -c.facing : c.facing
-      return walkTo(s, c, c.x + dir * between(s, 3, 6), 'pace')
-    }
-    case 'work': {
-      toPosture(s, c, 'sit')
-      faceOpen(s, c)
-      if (last === 'type' && rand(s) < 0.4) return push(s, c, act('check', 1300, 'sit'))
-      return push(s, c, act('type', Math.round(between(s, 3000, 6000)), 'sit'))
-    }
-    case 'search': {
-      if (!isBusy && last !== 'magnify' && rand(s) < 0.4) {
-        const span = maxX(s)
-        const dir = c.x <= 1 ? 1 : c.x >= span - 1 ? -1 : c.facing
-        walkTo(s, c, c.x + dir * between(s, 2, 4), 'magnify')
-        toPosture(s, c, 'stand')
-        return push(s, c, act('magnify', 1400, 'stand'))
-      }
-      toPosture(s, c, 'sit')
-      faceOpen(s, c)
-      return push(s, c, act('read', Math.round(between(s, 3000, 5000)), 'sit'))
-    }
-    case 'test':
-      toPosture(s, c, 'sit')
-      return push(s, c, act('watchTest', Math.round(between(s, 2500, 4000)), 'sit'))
     case 'celebrate':
       toPosture(s, c, 'sit')
       return push(s, c, act('happy', Math.round(between(s, 2500, 4000)), 'sit'))
     case 'worried':
       toPosture(s, c, 'sit')
       return push(s, c, last === 'sweat' && rand(s) < 0.5 ? act('facepalm', 1700, 'sit') : act('sweat', Math.round(between(s, 2000, 3000)), 'sit'))
-    case 'waiting':
-      toPosture(s, c, 'sit')
-      return push(s, c, act('wait', Math.round(between(s, 2500, 4000)), 'sit'))
     case 'handoff': {
       // Pick up the notes, face the way out, walk off to the right.
       toPosture(s, c, 'stand')
@@ -665,29 +1091,78 @@ function program(s: KitState, p: KitProps): void {
 // ---------------------------------------------------------------------------
 // Touch
 
-/** A touch at `x` (lane units): on Kit, a reaction; elsewhere in the lane while it idles, a look. */
-export function touchKit(prev: KitState, p: KitProps, x: number): KitState {
+/** Where on Kit a touch lands. */
+export type Part = 'head' | 'nose' | 'tail' | 'body'
+
+const FACING_YOU: ReadonlySet<Body> = new Set<Body>(['front', 'frontStand', 'back'])
+
+/**
+ * The part of Kit at `x` (lane units) and `y` (half units above the ground; null where the surface
+ * cannot tell): its head (the top of it), its nose (the front of its face), its tail, or the rest of
+ * it, its body. Null off Kit. Desktop's drawing stands a little taller than the terminal's.
+ */
+export function partAt(s: KitState, pose: Pose, x: number, y: number | null, surface: KitProps['surface']): Part | null {
+  const u = x - (s.x + pose.dx)
+  if (u < -1 || u > KIT_W + 1) return null
+  const top = TOP[pose.body] * (surface === 'desktop' ? 1.2 : 1)
+  // Unknown height: the middle of it (a nose at the front, its body in the middle, the tail behind).
+  // How high on Kit, as a share of its ear tips (never `h`: in a .tsx file that is JSX's own name).
+  const height = y === null ? 0.5 : (y - pose.dy) / top
+  if (FACING_YOU.has(pose.body)) {
+    if (u > 15.5) return 'tail'
+    if (u >= 7.5 && u <= 12.5 && height >= 0.3 && height < 0.7) return 'nose'
+    return height >= 0.55 ? 'head' : 'body'
+  }
+  // From its back to its front: the tail behind, the face at the front.
+  const along = pose.facing === 1 ? u : KIT_W - u
+  if (along < 5) return 'tail'
+  if (along >= 14.5 && height >= 0.3 && height < 0.8) return 'nose'
+  return height >= 0.55 ? 'head' : 'body'
+}
+
+/**
+ * A touch at `x` (lane units) and `y` (half units above the ground, or null): on Kit, a reaction by
+ * where it lands (a head pat, a nose boop, a tail flick, a pet on its body), a startle if it is
+ * asleep, a glance up while Claude works; three touches in a few seconds are a giggle, five make it
+ * dizzy, and then it needs a moment. Elsewhere in the lane while it idles: it looks there.
+ */
+export function touchKit(prev: KitState, p: KitProps, x: number, y: number | null = null): KitState {
   if (isCalm(p) || prev.isGone) return prev
   const s = copy(prev)
-  const isOnKit = x >= s.x - 1 && x <= s.x + KIT_W + 1
-  if (!isOnKit) {
-    if (s.mood === 'idle' && !p.isBusy && s.t - s.reactedAt >= COOLDOWN_MS) notice(s, x)
+  const part = partAt(s, poseOf(s, p), x, y, p.surface)
+  if (part === null) {
+    if (s.mood === 'idle' && !isSlow(p) && s.t - s.reactedAt >= COOLDOWN_MS) notice(s, x)
+    return s
+  }
+  // Dizzy: it needs a moment before anything more.
+  if (s.t - s.dizzyAt < DIZZY_REST_MS) return s
+  if (NAPS.has(s.act.kind) || (s.posture === 'down' && (s.mood === 'sleep' || s.mood === 'dim'))) {
+    if (s.t - s.reactedAt >= COOLDOWN_MS) react(s, 'startled')
+    s.taps = []
     return s
   }
   s.taps = [...s.taps.filter(t => s.t - t < TAP_WINDOW_MS), s.t]
-  if (s.taps.length >= DIZZY_TAPS && s.act.kind !== 'dizzy') {
+  if (s.taps.length >= DIZZY_TAPS) {
     s.taps = []
+    s.dizzyAt = s.t
     react(s, 'dizzy')
     return s
   }
+  if (s.taps.length === GIGGLE_TAPS && !p.isWorking) {
+    react(s, 'giggle')
+    return s
+  }
   if (s.t - s.reactedAt < COOLDOWN_MS) return s
-  if (NAPS.has(s.act.kind) || s.posture === 'down') react(s, 'startled')
-  else if (p.isWorking) react(s, 'glance')
+  if (p.isWorking) react(s, 'glance')
+  // A head pat again while it still leans into the last one: a purr.
+  else if (part === 'head') react(s, s.lastReaction === 'pat' && s.t - s.reactedAt < PAT_CHAIN_MS ? 'purr' : 'pat')
+  else if (part === 'nose') react(s, 'boop')
+  else if (part === 'tail') react(s, 'swish')
   else react(s, nextReaction(s))
   return s
 }
 
-/** The next reaction from a shuffled round of all of them: every one before any repeats, never twice running. */
+/** The next pet on its body from a shuffled round of them: every one before any repeats, never twice running. */
 function nextReaction(s: KitState): ActKind {
   if (s.bag.length === 0) {
     const bag = [...REACTIONS]
@@ -701,7 +1176,7 @@ function nextReaction(s: KitState): ActKind {
   return s.bag.shift() ?? 'purr'
 }
 
-const REACTION_MS: Partial<Record<ActKind, number>> = { purr: 1800, hop: 750, spin: 1600, blush: 1500, earflick: 800, boop: 900, roll: 2200, highfive: 1100, startled: 1300, glance: 900, dizzy: 2200 }
+const REACTION_MS: Partial<Record<ActKind, number>> = { purr: 1800, hop: 750, spin: 1600, blush: 1500, earflick: 800, boop: 900, roll: 2200, highfive: 1100, startled: 1300, glance: 900, dizzy: 2200, pat: 1600, giggle: 1300, swish: 1400 }
 
 function react(s: KitState, kind: ActKind): void {
   interrupt(s)
@@ -721,7 +1196,7 @@ function react(s: KitState, kind: ActKind): void {
     push(s, c, act(kind, dur, c.posture))
   }
   s.reactedAt = s.t
-  if (REACTIONS.includes(kind)) s.lastReaction = kind
+  s.lastReaction = kind
 }
 
 function notice(s: KitState, x: number): void {
@@ -844,10 +1319,17 @@ export function poseOf(s: KitState, p: KitProps): Pose {
     }
     case 'walk': {
       if (a.style === 'stop') return o
-      const stepMs = a.style === 'stroll' || a.style === 'enter' || a.style === 'exit' ? 220 : 320
+      const stepMs = a.style === 'sprint' ? 110 : a.style === 'stroll' || a.style === 'enter' || a.style === 'exit' || a.style === 'carry' ? 220 : 320
       o.body = alt(e, stepMs) ? 'walkA' : 'walkB'
-      o.tail = swing(s.t, 900) * 0.8
-      if (a.style === 'magnify') {
+      o.tail = swing(s.t, a.style === 'sprint' ? 400 : 900) * 0.8
+      if (a.style === 'sprint') {
+        o.ears = 'back'
+        o.eyes = 'focus'
+        if (alt(e, 220)) o.dy = 1
+      } else if (a.style === 'carry') {
+        o.props = ['notes']
+        o.arms = 'hold'
+      } else if (a.style === 'magnify') {
         o.props = ['magnifier']
         o.arms = 'hold'
         o.eyes = 'down'
@@ -1183,6 +1665,45 @@ export function poseOf(s: KitState, p: KitProps): Pose {
       o.dx = beat(e, 200) % 2 === 0 ? 0 : 0.5
       if (s.posture === 'down') o.body = 'ball'
       return o
+    case 'review':
+      // A look at the notes (a clipboard), now and then up from them.
+      o.props = ['notes']
+      o.arms = 'hold'
+      o.eyes = e % 2600 > 2100 ? 'up' : isBlink(s.t, v) ? 'blink' : 'down'
+      return o
+    case 'peer':
+      // Looking down toward the prompt.
+      o.body = frontOf(s.posture === 'down' ? 'sit' : s.posture)
+      o.eyes = isBlink(s.t, v) ? 'blink' : 'down'
+      o.ears = 'perk'
+      return o
+    case 'arrive':
+      // Switched on: an ear flick and a little bounce, so it reads as alive at once.
+      o.ears = alt(e, 150) ? 'flick' : 'perk'
+      o.eyes = e < 250 ? 'blink' : 'open'
+      o.dy = e > 150 && e < 400 ? 1 : 0
+      return o
+    case 'pat':
+      // Leans into a pat on the head: eyes shut happily, ears flat, a purr, the tail going.
+      o.eyes = e < 900 ? 'closed' : 'happy'
+      o.ears = 'back'
+      o.mouth = 'cat'
+      o.blush = true
+      o.tail = swing(e, 350)
+      o.dx = e < 900 && alt(e, 180) ? 0.5 : 0
+      return o
+    case 'giggle': {
+      // Many touches: a happy twirl.
+      const b = beat(e, 160)
+      const k = b % 4
+      if (k === 1) o.body = frontOf(s.posture)
+      else if (k === 2) o.facing = s.facing === 1 ? -1 : 1
+      else if (k === 3) o.body = s.posture === 'stand' ? 'frontStand' : 'back'
+      o.eyes = 'happy'
+      o.mouth = 'open'
+      o.dy = b % 2 === 0 ? 1 : 0
+      return o
+    }
   }
 }
 
@@ -1322,6 +1843,16 @@ export function particlesOf(s: KitState, p: KitProps, pose: Pose): Particle[] {
       break
     case 'sneeze':
       if (e > 500 && e < 800) add('spark', at.head + f * 6, at.top - 4)
+      break
+    case 'pat':
+      if (e < 450) add('spark', at.head, at.top + 1.5, 0, 1)
+      for (let k = 0; k < 3; k++) rising('heart', 250 + k * 380, 1100, k, k - 1, 5)
+      break
+    case 'giggle':
+      for (let k = 0; k < 4; k++) rising(k % 2 === 0 ? 'heart' : 'note', k * 300, 1000, k, (k - 1.5) * 2, 6)
+      break
+    case 'arrive':
+      if (e < 500) add('spark', at.head + f * 2, at.top + 2)
       break
     default:
       break
@@ -1767,8 +2298,12 @@ export const D_H = 24
 export const D_PX = 3
 /** The lane's height in art pixels: Kit and room above its head. */
 export const D_LANE_H = 28
-/** A Desktop cell's width in CSS pixels, near enough: a touch arrives in cells. */
-export const D_CELL_PX = 7.5
+/**
+ * A Desktop cell's width in CSS pixels: 1ch of the app's 15 px system font (8.08 px in Segoe UI, as
+ * the desktop preview measures it). Near enough is enough: the image fills Kit's region whatever a
+ * cell is (see desktopSvg), so this only sets how finely the lane is divided.
+ */
+export const D_CELL_PX = 8.08
 
 const D_COLOR = {
   outline: '#5B2C1E',
@@ -2227,26 +2762,38 @@ const D_PARTICLE: Record<ParticleKind, { frames: string[][]; colors: string[] }>
 /** The spinner: a ring of eight dots, one lit, going round. */
 const SPIN_RING: Pt[] = [[1, 0], [2, 0], [3, 1], [3, 2], [2, 3], [1, 3], [0, 2], [0, 1]]
 
-/** The width of the Desktop lane, in CSS pixels, for a region `columns` cells wide. */
+/** The widest Desktop lane, in CSS pixels: wider than any status bar, a bound on the image. */
+export const D_MAX_LANE_PX = 3200
+
+/** The width of the Desktop lane, in CSS pixels, for a region `columns` cells wide: the whole of it. */
 export function desktopLanePx(columns: number): number {
   if (columns <= 0) return 360
-  return Math.round(clamp(columns * D_CELL_PX, 240, 560))
+  return Math.round(clamp(columns * D_CELL_PX, 240, D_MAX_LANE_PX))
 }
 
 /** Lane units in a Desktop lane `px` wide. */
 export const desktopLaneUnits = (px: number): number => Math.floor(px / (D_PX * 2))
 
-/** The Desktop lane as art pixels: a grid of colors (null: see-through), Kit then what floats beside it, and its shadow. */
-export function desktopLane(d: Drawable, px: number): { grid: (string | null)[][]; shadow: { cx: number; rx: number; opacity: number } | null } {
+/**
+ * The Desktop lane as art pixels: a grid of colors (null: see-through), Kit then what floats beside
+ * it, and its shadow. The grid covers only the stretch of the lane that has something in it (from
+ * column `x0`); the lane itself is `w` columns wide, so a wide lane costs no more than a narrow one.
+ */
+export function desktopLane(d: Drawable, px: number): { grid: (string | null)[][]; x0: number; w: number; shadow: { cx: number; rx: number; opacity: number } | null } {
   const w = Math.max(KIT_W * 2, Math.floor(px / D_PX))
   const ht = D_LANE_H
-  const grid: (string | null)[][] = Array.from({ length: ht }, () => Array.from({ length: w }, () => null))
+  const left = Math.round((d.x + d.pose.dx) * 2)
+  // What is drawn: Kit's box (unless gone) and every particle, with room for the widest bitmap.
+  const xs = d.particles.map(p => Math.round(p.x * 2))
+  if (!d.isGone) xs.push(left, left + D_W)
+  const x0 = clamp(xs.length === 0 ? 0 : Math.min(...xs) - 6, 0, w)
+  const x1 = clamp(xs.length === 0 ? 0 : Math.max(...xs) + 6, x0, w)
+  const grid: (string | null)[][] = Array.from({ length: ht }, () => Array.from({ length: x1 - x0 }, () => null))
   const put = (x: number, y: number, color: string) => {
-    if (x >= 0 && y >= 0 && x < w && y < ht) grid[y]![x] = color
+    if (x >= x0 && y >= 0 && x < x1 && y < ht) grid[y]![x - x0] = color
   }
   let shadow: { cx: number; rx: number; opacity: number } | null = null
   if (!d.isGone) {
-    const left = Math.round((d.x + d.pose.dx) * 2)
     const top = ht - D_H - Math.round(d.pose.dy * 2)
     desktopSprite(d.pose, d.isDim).forEach((row, y) => row.forEach((c, x) => c !== null && put(left + x, top + y, c)))
     const lifted = Math.max(0, d.pose.dy)
@@ -2264,27 +2811,34 @@ export function desktopLane(d: Drawable, px: number): { grid: (string | null)[][
       continue
     }
     const rows = spec.frames[p.frame % Math.max(1, spec.frames.length)] ?? []
-    const x0 = cx - Math.floor((rows[0]?.length ?? 1) / 2)
-    const y0 = cy - Math.floor(rows.length / 2)
-    rows.forEach((row, y) => [...row].forEach((ch, x) => ch !== '.' && put(x0 + x, y0 + y, ch === 'k' ? '#2A1B16' : ch === 'b' ? '#6FA8F5' : color)))
+    const bx = cx - Math.floor((rows[0]?.length ?? 1) / 2)
+    const by = cy - Math.floor(rows.length / 2)
+    rows.forEach((row, y) => [...row].forEach((ch, x) => ch !== '.' && put(bx + x, by + y, ch === 'k' ? '#2A1B16' : ch === 'b' ? '#6FA8F5' : color)))
   }
-  return { grid, shadow }
+  return { grid, x0, w, shadow }
 }
 
-/** The whole lane on Desktop as one SVG: a soft shadow, then one path per color (crisp pixels). */
-export function desktopSvg(d: Drawable, px: number): string {
-  const { grid, shadow } = desktopLane(d, px)
-  const w = grid[0]?.length ?? 0
+/**
+ * The whole lane on Desktop as one SVG: a soft shadow, then one path per color (crisp pixels).
+ *
+ * `isFill`: the image fills the box it is given, however wide (its own width is half as wide again
+ * as the lane, so the box is the slot, and the drawing stretches to it). Desktop counts a region in
+ * cells of its own font and never says how wide a cell is; filled, Kit's lane is always the whole
+ * status bar, and a touch's share of the region is its share of the lane. Without it (VS Code's
+ * still image) it is drawn at its size.
+ */
+export function desktopSvg(d: Drawable, px: number, isFill = false): string {
+  const { grid, x0, w, shadow } = desktopLane(d, px)
   const ht = grid.length
   // Runs of one color in a row become one rectangle in that color's path.
   const paths = new Map<string, string>()
   grid.forEach((row, y) => {
     let x = 0
-    while (x < w) {
+    while (x < row.length) {
       const color = row[x]
       let end = x + 1
-      while (end < w && row[end] === color) end++
-      if (color !== null && color !== undefined) paths.set(color, `${paths.get(color) ?? ''}M${x} ${y}h${end - x}v1h${x - end}z`)
+      while (end < row.length && row[end] === color) end++
+      if (color !== null && color !== undefined) paths.set(color, `${paths.get(color) ?? ''}M${x0 + x} ${y}h${end - x}v1h${x - end}z`)
       x = end
     }
   })
@@ -2295,8 +2849,9 @@ export function desktopSvg(d: Drawable, px: number): string {
       : `<ellipse cx="${shadow.cx * D_PX}" cy="${(ht - 1) * D_PX}" rx="${(shadow.rx * D_PX).toFixed(1)}" ry="${(1.5 * D_PX).toFixed(1)}" fill="#000" fill-opacity="${shadow.opacity.toFixed(2)}" shape-rendering="auto"/>`
   let body = ''
   for (const [color, dPath] of paths) body += `<path fill="${color}" d="${dPath}"/>`
+  const size = isFill ? `width="${Math.round(w * D_PX * 1.5)}" height="${ht * D_PX}" preserveAspectRatio="none"` : `width="${w * D_PX}" height="${ht * D_PX}"`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w * D_PX}" height="${ht * D_PX}" viewBox="0 0 ${w * D_PX} ${ht * D_PX}" shape-rendering="crispEdges">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" ${size} viewBox="0 0 ${w * D_PX} ${ht * D_PX}" shape-rendering="crispEdges">` +
     `<style>:root{color-scheme:light dark}</style><title>${title}</title>${ground}<g transform="scale(${D_PX})">${body}</g></svg>`
   )
 }
@@ -2382,7 +2937,9 @@ function tick(id: number, surface: ClientSurface<View>): void {
     const d = drawableOf(inst.state, inst.props)
     const key = keyOf(d, inst.props.surface)
     if (key === inst.key) return
-    if (inst.props.isBusy && inst.state.t - inst.drawnAt < BUSY_FRAME_MS) return
+    // A loaded processor gets fewer frames, but never in Kit's first second: switched on, it moves at once.
+    const frameMs = inst.state.t < ARRIVAL_MS ? 0 : inst.props.isStrained ? STRAINED_FRAME_MS : inst.props.isBusy ? BUSY_FRAME_MS : 0
+    if (inst.state.t - inst.drawnAt < frameMs) return
     inst.key = key
     inst.drawnAt = inst.state.t
     redraw(id, surface)
@@ -2391,13 +2948,28 @@ function tick(id: number, surface: ClientSurface<View>): void {
   }
 }
 
+/**
+ * Where a pointer event lands in Kit's lane: across in lane units, up in half units above the
+ * ground (null when the region's height is not known). Desktop reports cells over a region whose
+ * cell size it keeps to itself: the image fills the region, so a position is the same share of
+ * the image (the sub-cell position where the surface gives it).
+ */
+export function pointerAt(ev: ClientPointerEvent, surface: KitProps['surface'], region: { columns: number; rows: number }, lane: { units: number; px: number }): { x: number; y: number | null } {
+  const fx = ev.fine?.x ?? ev.x + 0.5
+  const fy = ev.fine?.y ?? ev.y + 0.5
+  if (surface === 'terminal') return { x: fx, y: Math.max(0, (5 - fy) * 2) }
+  const across = desktopSize(lane.px).width / (D_PX * 2)
+  const x = region.columns > 0 ? (fx / region.columns) * across : (fx * D_CELL_PX) / (D_PX * 2)
+  const y = region.rows > 0 ? Math.max(0, (1 - fy / region.rows) * (D_LANE_H / 2)) : null
+  return { x, y }
+}
+
 function touch(id: number, surface: ClientSurface<View>, ev: ClientPointerEvent): void {
   const inst = instances.get(id)
   if (inst === undefined || inst.isFailed || ev.type !== 'down') return
   try {
-    // Desktop reports cells; Kit's lane counts six CSS pixels a unit.
-    const x = inst.props.surface === 'desktop' ? ((ev.x + 0.5) * D_CELL_PX) / (D_PX * 2) : ev.x + 0.5
-    inst.state = touchKit(inst.state, inst.props, x)
+    const at = pointerAt(ev, inst.props.surface, { columns: surface.columns, rows: surface.rows }, inst.lane)
+    inst.state = touchKit(inst.state, inst.props, at.x, at.y)
     redraw(id, surface)
   } catch (err) {
     fail(id, surface, err)
@@ -2422,7 +2994,8 @@ export default function KitClient(props: KitProps, surface: ClientSurface<View>)
     const lane = inst.lane
     const d = drawableOf(inst.state, props)
     if (props.surface === 'desktop') {
-      const art = { type: 'Svg', props: { source: desktopSvg(d, lane.px), alt: props.caption, ...desktopSize(lane.px) } } as unknown as RenderElement
+      // No width: the box is the region's width (the image fills it); the height is the lane's.
+      const art = { type: 'Svg', props: { source: desktopSvg(d, lane.px, true), alt: props.caption, height: desktopSize(lane.px).height } } as unknown as RenderElement
       return (
         <Box key="kit" flexDirection="row">
           {art}

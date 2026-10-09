@@ -23,8 +23,6 @@ const LIFETIME: Record<string, string> = { '5m': '5-minute', '1h': '1-hour' }
 
 const SOURCE: Record<string, string> = { engine: 'as Claude Code reports it', observed: 'observed', probe: 'learned by Keep warm', stored: 'learned earlier', plan: 'the plan’s default' }
 
-const KIND: Record<CacheMissView['kind'], string> = { preventable: 'preventable', lifecycle: 'expected', unavoidable: 'unexplained' }
-
 /** The cache's state in one line, with the tone it needs. */
 export function cacheState(cache: CacheView, now: number): { glyph: string; text: string; tone: Tone; fraction: number | null } {
   switch (cache.warmth) {
@@ -48,36 +46,76 @@ export function cacheState(cache: CacheView, now: number): { glyph: string; text
 export function keepWarmStatus(cache: CacheView): { text: string; tone: Tone } {
   const k = cache.keepWarm
   if (!k.isOn) return { text: 'Refreshes the cache before it lapses while you are away', tone: 'muted' }
-  const verified = k.verified === 'yes' ? ' · verified here' : ''
-  const count = k.refreshes > 0 ? ` · ${fmt.plural(k.refreshes, 'refresh', 'refreshes')} so far` : ''
   if (k.error !== null) return { text: `Retrying in 2 min: ${k.error}`, tone: 'warn' }
   if (k.isRefreshing) return { text: 'Refreshing now', tone: 'muted' }
-  if (k.nextAt !== null) return { text: `Next refresh at ${fmt.clock(k.nextAt)}${k.isProbe ? ', to learn its lifetime' : ''}${count}${verified}`, tone: 'muted' }
-  return { text: `${k.reason ?? 'Waiting'}${count}${verified}`, tone: k.verified === 'no' ? 'warn' : 'muted' }
+  if (k.nextAt !== null) return { text: `Next refresh at ${fmt.clock(k.nextAt)}${k.isProbe ? ', to learn its lifetime' : ''}`, tone: 'muted' }
+  return { text: k.reason ?? 'Waiting', tone: k.verified === 'no' ? 'warn' : 'muted' }
 }
 
-/** One rebuild: what happened and when, what it cost, then (wrapping, under it) its kind and what would avoid it. */
+/** The conversation's check of the newest refresh, as the proof line says it. */
+const MAIN_WORD: Record<CacheView['keepWarm']['main'], { text: string; tone: Tone }> = {
+  none: { text: 'nothing to verify yet', tone: 'muted' },
+  awaiting: { text: 'AWAITING VERIFICATION · the next request tells', tone: 'muted' },
+  verified: { text: 'VERIFIED · read after the old expiry', tone: 'good' },
+  consistent: { text: 'READ IT · back before the old expiry, no proof yet', tone: 'normal' },
+  failed: { text: 'FAILED · rebuilt before the refreshed expiry', tone: 'bad' },
+  untested: { text: 'NOT TESTED · something changed first', tone: 'muted' },
+}
+
+/**
+ * Keep warm's proof, under its switch once it has refreshed: how many refreshes and when the last
+ * went, what that fork read (HIT or MISS), and what the conversation's next request showed.
+ */
+export function keepWarmProof(cache: CacheView): { refreshes: string; fork: { text: string; tone: Tone } | null; main: { text: string; tone: Tone } } | null {
+  const k = cache.keepWarm
+  if (k.refreshes === 0 && k.log.length === 0) return null
+  const last = k.log[0] ?? null
+  const refreshes = `${fmt.plural(k.refreshes, 'refresh', 'refreshes')}${last === null ? '' : ` · last ${fmt.clock(last.at)}`}`
+  const fork = last === null ? null : { text: `Fork: ${last.isHit ? 'HIT' : 'MISS'} · read ${fmt.tokens(last.read)} · wrote ${fmt.tokens(last.written)}`, tone: (last.isHit ? 'normal' : 'warn') as Tone }
+  const main = { ...MAIN_WORD[k.main] }
+  const settled = k.log.find(r => r.status !== 'renewed')
+  if (k.main === 'untested' && settled?.note) main.text = `NOT TESTED · ${settled.note.replace(/^The request changed: /, 'changed: ')}`
+  return { refreshes, fork, main }
+}
+
+/** Keep warm's proof as rows: the refreshes, the last fork's reading, the conversation's verdict. */
+function keepWarmRows(k: Kit, cache: CacheView): RenderElement[] {
+  const proof = keepWarmProof(cache)
+  if (proof === null) return []
+  const out: RenderElement[] = [pair(k, { key: 'kw-count', left: proof.refreshes })]
+  if (proof.fork !== null) out.push(textRuns(k, 'kw-fork', [{ text: proof.fork.text, tone: proof.fork.tone }]))
+  out.push(textRuns(k, 'kw-main', [{ text: 'Main cache: ', tone: 'muted' }, { text: proof.main.text, tone: proof.main.tone, isBold: proof.main.tone === 'good' || proof.main.tone === 'bad' }]))
+  if (cache.keepWarm.pausedReason !== null) out.push(note(k, `Paused: ${cache.keepWarm.pausedReason}. Turn Keep warm on again to retry.`, 'kw-paused', 'warn'))
+  return out
+}
+
+/**
+ * One rebuild: what happened and when, what it cost (partial or full, and what it still read), then
+ * (wrapping, under it) how sure the cause is and what would avoid it. A cause is stated only as far
+ * as the evidence goes: proven, likely, or unknown; nothing is put on the server without evidence.
+ */
 function missItem(kit: Kit, m: CacheMissView, i: number): RenderElement {
   const { Box } = kit.ui
+  const size = m.isPartial ? `partial · re-sent ${fmt.tokens(m.recached)}, read ${fmt.tokens(m.read)}` : `full · re-sent ${fmt.tokens(m.recached)}`
   return (
     <Box key={`miss-${i}`} flexDirection="column">
       {listItem(kit, {
         key: `miss-${i}-line`,
         glyph: m.severity === 'warn' ? G.warn : m.kind === 'lifecycle' ? G.ring : G.dot,
         tone: m.severity === 'warn' ? 'warn' : 'muted',
-        text: m.detail,
-        right: spaced(kit, [fmt.tokens(m.recached), fmt.clock(m.at)]),
+        text: `${m.label}: ${m.detail}`,
+        right: spaced(kit, [size, fmt.clock(m.at)]),
         rightTone: m.severity === 'warn' ? 'warn' : 'muted',
         isDim: m.kind === 'lifecycle',
       })}
       <Box key={`miss-${i}-advice`} marginLeft={3}>
-        {note(kit, `${KIND_WORD[m.kind]} ${m.advice}`, `miss-${i}-note`)}
+        {note(kit, `${CERTAINTY_WORD[m.certainty]}. ${m.advice}`, `miss-${i}-note`)}
       </Box>
     </Box>
   )
 }
 
-const KIND_WORD: Record<CacheMissView['kind'], string> = { preventable: 'Preventable.', lifecycle: 'Expected.', unavoidable: 'Unexplained.' }
+const CERTAINTY_WORD: Record<CacheMissView['certainty'], string> = { proven: 'Proven cause', likely: 'Likely cause', unknown: 'Cause unknown' }
 
 export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boolean; maxIdleMinutes: number; guardModelSwitch: boolean; stablePolicies: boolean }): RenderElement[] {
   const u = kit.actions.update
@@ -120,6 +158,7 @@ export function cacheCards(kit: Kit, cache: CacheView, settings: { keepWarm: boo
             control: switchControl(k, { key: 'cache-keep', isOn: settings.keepWarm, onPress: () => u(d => void (d.cache.keepWarm = !d.cache.keepWarm)) }),
           }),
         ),
+        ...(settings.keepWarm ? keepWarmRows(k, cache) : []),
         settings.keepWarm &&
           row(k, {
             key: 'cache-idle',

@@ -17,3 +17,6 @@ tools/desktop-preview/out/
 # Local secrets (API keys for tooling): never committed
 .env
 .env.*
+
+# The Kit benchmark's transpiled copy (tools/test/kitbench.mjs removes it when it ends)
+tools/test/kit.bench.mjs

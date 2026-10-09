@@ -24,7 +24,7 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 | Inject context into the fresh window | `prompt.context` answering `{ blocks: [...e.blocks, { name: 'contextAutopilot', text }] }` for the fresh context's first message, once; after its own `/clear` the plugin calls `$.ui.invalidate('prompt.context')` so the engine asks again | ✅ live on 2.1.293 (Haiku 5.5, a terminal session handing off at 62k): the fresh context's first message carried the block as a context section, with the run and session numbers, the notes' path, the objective and all five milestones, and the fresh context finished the task; and in the engine harness. (Until 1.3.0: `classic.SessionStart` answering `additionalContext`, verified live; Anthropic's directory cannot read that answer as leaving the session's start alone, so `classic.SessionStart` now passes `next(e)` on unchanged.) |
 | Resume autonomously | `$.prompt.submit({ text })` after the clear resolves | ✅ turn starts by itself, framed as "The control-room plugin sent a message" (now "The project-sentinel plugin …") |
 | `$.state` across `/clear` | — | ⚠ **reset** by `/clear` (version back to 0). Module memory survives `/clear`; `$.store` survives everything. |
-| Mid-turn policy updates (no user prompt) | `$.session.append({ message: { type: 'user', content } })` during a running turn | ✅ stored as a hidden (`isMeta`) user row and read on the very next model request |
+| Mid-turn notes for Claude (no user prompt) | `classic.PostToolBatch` answering `additionalContext` with what waits (app/notes.ts); between turns, the next prompt's `prompt.submit` context | ✅ (1.5.0) filed with the batch of tool results, read on the next request, and every later request extends it (recording proxy). ⚠ Until 1.5.0: `$.session.append` mid-turn, read on the next request but kept in the transcript where it was appended, so the next turn's conversation differed and the cache was rebuilt from that point (301k and 451k tokens on a real 1-hour session; Claude Code's `thinking_drop`, `prefix_mismatch`). **Never append to the transcript while a turn runs.** |
 | Continue a premature stop | `classic.Stop` answering `{ block }` | ✅ model continued in the same turn; 2nd Stop carries `stop_hook_active: true` |
 | Subagent enforcement | `agent.spawn` answering `{ deny }` | ✅ model receives "Subagent spawn denied by a plugin: …" |
 | Ask before a call | In `tool.call`, before `next`: `$.tool.check({ tool, input })` reads Claude Code's own verdict (it runs nothing); where Claude Code would not ask (allow, no verdict, auto mode), `$.ui.ask(question, { options: ['Run it', "Don't run it"], header: 'Approve' })` asks in Claude Code's question dialog; a decline answers `{ deny }` | ✅ in the engine harness; the dialog is Claude Code's own. There is no `tool.check` hook: the directory refuses one that reads what `next` answered, and answering a permission check is what the removed *Allow* did. (Until 1.3.0: `tool.check` answering `{ decision: 'ask' }`, which held in `bypassPermissions` mode.) |
@@ -40,7 +40,7 @@ versions, with a prototype mod. Log excerpts are in the development notes.
 | Cache lifetime and a confirmed model switch | `classic.PreModelSwitch` (`prompt_cache_warm`, `cache_ttl`, `context_tokens`, `estimated_cache_write_usd`) answering `permissionDecision: 'ask'` with a reason; `classic.PostModelSwitch` (`from_model`, `to_model`, `cache_ttl`, `source`) | ✅ live on 2.1.293 (143k warm, Sonnet → Opus): Claude Code asks "Switch model?" with the hook's reason and Yes / No; declining keeps the model and the cache. ⚠ The reason is drawn on one line and cut at the terminal's width, so it is kept short. After the switch, the lifetime as Claude Code reports it, and the rebuild named as Claude Code names it (model and effort changed, 143k re-cached). |
 | Keep the cache warm | `$.model.fork({ prompt })` from a `$.clock.after` timer | ✅ live on 2.1.293 (Sonnet 5.5, 1-hour cache): a fork re-sends the main thread's last request plus one user message, never added to the transcript (0 rows), and returns the request's usage. The engine counts a fork that reads the cache as a *touch*, not a request: its own expiry moved 05:38 → 05:44 → 06:34 with each refresh (requests stayed 2). A real prompt 66 minutes after the last one, past the expiry the refreshes replaced, read the cache (0 misses), and Keep warm marked itself verified. Each refresh of an 87k context cost about $0.02. On a 5-minute cache too: the probe learned the lifetime (it found the cache gone, as a probe past five minutes must), refreshes every four minutes read the whole 141k, and a prompt after a replaced expiry hit. ⚠ Claude Code's own tracker touches the expiry only for a fork that *reads* the cache, so after a probe that rebuilt it the status line says cold while the cache is warm (the next refresh read all of it). `nothing-to-fork` before the first response. |
 | A drawing with its own clock | a `Client` element naming a surface module, written `<ui.Client module="./kit.client.tsx" />` with `const ui = $.ui.resolve(e)` (the directory reads a `Client` taken out of the table as one with no fixed path); the module gets `surface.every`, `setState`, `onPointer`, `post`; `ui.message` carries its posts to the hooks module | ✅ terminal, live in a real console (Kit through a demo turn, clicks). Desktop runs the module in its own page (a frame with Claude Code's runtime): pointer events in cells of 1ch × 1lh, its local state kept across redraws under one key; a hand-made `{ type: 'Svg', props }` element is accepted in its tree (at most 2000 nodes, depth 32, scalar props; an `Svg` source up to 131072 characters). Chromium decodes a fresh data-URL image before its first paint (60 of 60), and Desktop replaces the region's DOM per render, so an image per frame does not flicker. No `ui.fault` hook: it is not on the directory's list of events; a module that cannot draw posts `{ fault }` instead. |
-| Graphics on Desktop | `Svg` with `source`, `alt`, `width`, `height`; `isInteractive` draws it in a script-less sandboxed frame instead of an image | ⚠ A frame with no `width` takes the browser's default (300 px), and a frame whose color scheme differs from the page's is painted opaque: 1.2.0's animated work track showed as a white bar on Desktop. So Project Sentinel draws every graphic as an image with an explicit size and never asks for a frame. (SMIL animates inside a plain image too, but an image that animates itself restarts from its own beginning whenever it is replaced: 1.3.0's Kit teleported back at each mood change. Kit is now an image per frame from its surface module.) |
+| Graphics on Desktop | `Svg` with `source`, `alt`, `width`, `height`; `isInteractive` draws it in a script-less sandboxed frame instead of an image | ⚠ A frame with no `width` takes the browser's default (300 px), and a frame whose color scheme differs from the page's is painted opaque: 1.2.0's animated work track showed as a white bar on Desktop. So Project Sentinel draws every graphic as an image and never asks for a frame: with an explicit size, except Kit's lane (1.5.0), which gives only its height so its box is the region's width, and stretches its drawing to that box (a region is counted in cells of 1ch, whose size a module never learns). (SMIL animates inside a plain image too, but an image that animates itself restarts from its own beginning whenever it is replaced: 1.3.0's Kit teleported back at each mood change. Kit is now an image per frame from its surface module.) |
 | How Desktop lays a tree out | the app's own renderer (Claude Desktop 2.26454, read from its bundle) | A `Box` is a flex `div`: `width`, `minWidth`, `columnGap` and horizontal margin and padding in `ch`; `height` and `minHeight` in `lh`; `rowGap` and vertical margin and padding in half lines (`--engine-row-unit`, `.5lh`); a bordered box gets the app's border, radius and padding. A `Text` is a `span` that wraps (`pre-wrap`) unless it truncates. A row box that sets no `alignItems` centers its texts, buttons, images and pickers on the row (so a mark beside two lines sits between them). `Select` is the app's combobox: a button `width: fit-content`, no width prop, so pickers are as wide as their value. An `Svg` without `isInteractive` is an `img` (`display: block`, `max-width: 100%`, its width and height in px). `tools/desktop-preview` renders with these rules. |
 | A trace nobody sees | `$.ui.log(text, { to: 'debug' })` | ✅ lines appear in Claude Code's debug log (`--debug`, `--debug-file`) under the plugin's name, never on screen. Autopilot traces each step and turn there. |
 | What a stopped turn leaves running | `classic.Stop` input `background_tasks` (id, type, description) and `session_crons` (schedule, recurring) | ✅ in the engine harness (2.1.293): the status bar says *Waiting for …* instead of *done* while a job or a wake-up will bring the turn back. |
@@ -258,8 +258,8 @@ crossing the threshold again never starts a second handoff.
   again: a low threshold can never loop. Live, with a 64k threshold, a fresh
   context's first request was 44k and reading in took another 20k; without
   this, five contexts in a row did one roadmap step each.
-* Pending notice is injected mid-turn with `$.session.append` (finish the
-  current logical unit; do not begin another large task).
+* The pending notice goes with the next batch of tool results (`classic.PostToolBatch`,
+  app/notes.ts; finish the current logical unit; do not begin another large task).
 * The handoff prompt asks Claude to verify state, run minimum validation and
   leave the work in four places, each for what it is for: the run's
   milestones (the canonical run state, which Project Sentinel hands to the fresh
@@ -358,7 +358,7 @@ crossing the threshold again never starts a second handoff.
   by name with fixed arguments (Windows `typeperf` + `systeminfo` once for the
   total memory, macOS `top` + `sysctl kern.memorystatus_level`, Linux `/proc`
   reads, no process). Pressure from a sliding window; policy section
-  per level; `$.session.append` notices on transitions and on level changes;
+  per level; a note when the load goes high and when it is back, with the next tool results or prompt (hysteresis: high ends 3 points under the ceiling);
   heavy-command classifier on shell tools denies *additional* heavy jobs
   under pressure; lists only Claude-launched background tasks (stop on the
   person's press via `TaskStop`). No OS-level quotas are claimed.
@@ -419,20 +419,42 @@ crossing the threshold again never starts a second handoff.
   under way, a queue planned with transitions (a cursor of posture, facing
   and place, so stand ⇄ sit ⇄ down and every turn get their frames), a
   settled mood (1.2 s to settle, 2.5 s to hold, priority moods at once), a
-  seeded generator, the reactions left in this round, the touches. Its
-  renderers: `terminalSprite` + `terminalLane` (20 × 10 letters, five rows
-  of half blocks, glyphs beside Kit on empty cells only) and
-  `desktopSprite` + `desktopLane` + `desktopSvg` (a rig of ellipses and
-  triangles rasterized to 40 × 24 art pixels, shaded from the top left and
-  outlined between layers, props and particles as bitmaps, one path per
-  color). The glue ticks the model on the surface's clock (100 ms on
-  Desktop, 200 ms in the terminal), redraws only when the drawn frame's key
-  changes (at most every 500 ms on a busy processor), remembers per surface
+  seeded generator, the reactions left in this round, the touches. What it
+  does next comes from `EPISODES`: per mood (idle and a fresh context,
+  think, work, search, test, waiting) a set of episodes, each a weight
+  (or a function of the hour), a cooldown, whether it walks, and a plan of
+  two to five acts. `episode` picks by weight among those off cooldown,
+  never the last one (each set has two with no cooldown and no walk, so one
+  is always free; walks are left out on a busy processor); `spot` and
+  `nearby` send walks where `visits` (time per fifth of the lane, halved
+  every 45 s) is lowest. The other moods play one act at a time. A touch
+  (`touchKit(x, y)`) is placed on Kit by `partAt` (head, nose, tail, body,
+  from the pose's facing and the height as a share of its ear tips,
+  Desktop's drawing a fifth taller); three touches within 5 s are a giggle,
+  five dizzy, then 4 s of rest; asleep, a startle. Its renderers:
+  `terminalSprite` + `terminalLane` (20 × 10 letters, five rows of half
+  blocks, glyphs beside Kit on empty cells only) and `desktopSprite` +
+  `desktopLane` + `desktopSvg` (a rig of ellipses and triangles rasterized
+  to 40 × 24 art pixels, shaded from the top left and outlined between
+  layers, props and particles as bitmaps, one path per color; the grid
+  covers only the stretch with something in it). On Desktop the image has
+  no `width`: its markup is half as wide again as the lane and stretches
+  to its box (`preserveAspectRatio="none"`), so it fills Kit's region
+  whatever a Desktop cell measures (1ch of the app's font, which the
+  module never learns; `D_CELL_PX`, 8.08 px, only sets how finely the lane
+  is divided), and `pointerAt` places a touch by its share of the region.
+  The glue ticks the model on the surface's clock (100 ms on Desktop,
+  200 ms in the terminal), redraws only when the drawn frame's key changes
+  (at most every 500 ms on a busy processor, every second on a strained
+  one, never limited in a new Kit's first second), remembers per surface
   where the last Kit stood (a new instance appears there) and which
   contexts it has walked into (an entrance plays once), and posts
   `{ fault }` if anything throws (`ui.message` → Kit left out until the
   plugin reloads). VS Code, which draws no `Client`, shows `kitStillSvg`.
   While Kit is on, a one-minute tick lets its mood move on with time.
+  Measured (`node tools/test/kitbench.mjs`, a ten-minute seeded run of every
+  mood): 5.6 µs a step, 0.33 ms a drawn Desktop frame, 0.17 ms a terminal
+  one; about 3.3 ms of processor a second on Desktop.
 * **Git** — terminal only (Desktop shows Git natively): `$.session.repo()`
   once, then `git status --porcelain=v1 --branch` at session start and after
   each turn, at most every 15 s, read-only, with a 10 s timeout;
@@ -451,7 +473,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (276 tests in 22 files, run on 2.1.293, and in CI on the latest
+* `claude plugin test` (313 tests in 23 files, run on 2.1.295, and in CI on the latest
   Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux). The
   tests live in the repository's `tests/`, outside the plugin folder (which
   Anthropic's directory scans, and which ships only the plugin);
@@ -525,5 +547,26 @@ only. Unknown future events/props → passed through untouched.
   at its new size, and Overview with the cache's dot and Now's mark on its
   first line. Kit's seams at a 125% display scale were reproduced in
   headless Chrome and fixed there.
+* 1.5.0 live on 2.1.295 with Sonnet 5.5, each session headless over
+  stream-json (the Desktop host protocol) through a recording proxy that
+  keeps, per request, only fingerprints (hashes of the system prompt's
+  blocks, the tools and each message), the model, effort and thinking, and
+  the cache's token counts: never text, headers or credentials. Test
+  copies renamed `ps-test` and `ps-test2` keep their own stores. Proven:
+  the two "unexplained" 301k and 451k rebuilds of a real session were
+  Project Sentinel's own notes appended mid-request (reproduced, then gone
+  with the notes riding tool results); Keep warm on the five-minute cache
+  (two fork HITs, the conversation VERIFIED after the replaced expiry, a
+  control without it rebuilding 47.2k) and on the one-hour cache with
+  Frontier Max on; Frontier Max in the first request of a session, turned
+  on and off mid-session, after Autopilot's `/clear`, after a compaction
+  and across a reload mid-turn, each with its effort; the Autopilot chain
+  with a prompt queued during the handoff, a reload of the plugin
+  mid-handoff, the compaction continuation (which found the SDK
+  compaction refusal, now run as `/compact`) and the lazy-exit guard
+  standing down; the run's cost kept across the `/clear`. Kit through
+  `tools/desktop-preview` at 64 to 175 columns (its image fills the band)
+  and measured with `tools/test/kitbench.mjs`. A clean install from the
+  directory marketplace into a throwaway configuration.
 * Not yet done: the answer styles with a real model, and live sampling on
   macOS and Linux.

@@ -36,8 +36,9 @@ requests that leave are Claude Code's own model requests, as listed under
    next one reads from the cache instead of rebuilding it. Off by default; it stops after two idle
    hours.
 5. **Meet Kit:** `/cr companion on`. Kit paces while Claude thinks, types while it works, reads
-   while it searches, celebrates a green finish and walks off with the notes at a handoff. Click
-   it for a reaction. `/cr motion off` holds it still.
+   while it searches, celebrates a green finish and walks off with the notes at a handoff, and
+   wanders the whole status bar in between. Pat its head, boop its nose or pet it: it reacts to
+   where you touch it. `/cr motion off` holds it still.
 
 `/cr help` lists every command.
 

@@ -705,7 +705,7 @@ describe('ui', () => {
       await ui.press({ key: 'tab-context' })
       await w.clock.advance(300)
       const text = textOf(await ui.drawn())
-      for (const expected of ['CACHE', 'Warm · lapses in about', '1-hour cache', '300k tokens cached', 'Keep warm while you are away', 'Ask before a model switch', 'Keep policies stable', 'CACHE HEALTH', '1 rebuild · 1 preventable', 'Model changed: opus-5-5 → sonnet-5-5', 'Preventable. Switch models', 'Switch models at the start of a fresh context', 'derived']) {
+      for (const expected of ['CACHE', 'Warm · lapses in about', '1-hour cache', '300k tokens cached', 'Keep warm while you are away', 'Ask before a model switch', 'Keep policies stable', 'CACHE HEALTH', '1 rebuild · 1 preventable', 'Model changed: opus-5-5 → sonnet-5-5', 'Proven cause. Switch models', 'Switch models at the start of a fresh context', 'derived']) {
         expect(text, `${surface}: ${expected}`).toContain(expected)
       }
       await ui.unmount()
@@ -874,7 +874,7 @@ describe('ui', () => {
   test("Overview's Cache card says the cache's state once: the status line, then only what it holds, the lifetime in the aside", () => {
     const base: CacheView = {
       warmth: 'unknown', ttl: null, ttlSource: null, expiresAt: null, lastRequestAt: 1, cachedTokens: 345_000, requests: 3, hitRatio: 0.98, read: 1, written: 1, model: null,
-      keepWarm: { isOn: false, nextAt: null, isProbe: false, reason: 'Off', refreshes: 0, lastAt: null, lastRead: null, lastHit: null, verified: 'unknown', maxIdleMinutes: 120, isRefreshing: false, error: null },
+      keepWarm: { isOn: false, nextAt: null, isProbe: false, reason: 'Off', refreshes: 0, lastAt: null, lastRead: null, lastHit: null, verified: 'unknown', maxIdleMinutes: 120, isRefreshing: false, error: null, main: 'none', pausedReason: null, log: [] },
       misses: [], policies: { isStable: true, isHolding: false }, guardModelSwitch: true,
     }
     // The status line says it may have lapsed; the line under it says only what the cache holds.
@@ -947,8 +947,13 @@ describe('ui', () => {
     await live.advance(3000)
     const at = await liveLeft()
     await live.pointer({ type: 'down', x: at + 8, y: 3, button: 'left', in: 'kit' })
-    await live.advance(400)
-    expect(rowsOf(await live.drawn({ in: 'kit' })).join('')).toContain('!')
+    // At once, or after a walk eases to a stop (a working Kit may be carrying its notes somewhere).
+    let isGlanced = false
+    for (let i = 0; i < 6 && !isGlanced; i++) {
+      await live.advance(250)
+      isGlanced = rowsOf(await live.drawn({ in: 'kit' })).join('').includes('!')
+    }
+    expect(isGlanced).toBe(true)
     await w.clock.advance(300)
     expect(w.kept.opened).not.toContain('control-room')
     await live.unmount()
@@ -958,19 +963,27 @@ describe('ui', () => {
     const desktopClient = await desktop.find({ type: 'Client' })
     expect(desktopClient?.props.props).toMatchObject({ surface: 'desktop', mood: 'work' })
     await desktop.resize({ columns: 100, rows: 4, in: 'kit' })
-    await desktop.advance(500)
     const findArt = async () => {
       let found: Node | undefined
       each(await desktop.drawn({ in: 'kit' }), n => void (n.type === 'Svg' ? (found = n) : undefined))
       return found
     }
+    // Switched on mid-session and drawn anew: it moves within 600 ms (its arrival), never a still first picture.
+    await desktop.advance(100)
+    const arriving = String((await findArt())?.props?.source)
+    await desktop.advance(500)
     const art = await findArt()
+    expect(String(art?.props?.source)).not.toBe(arriving)
     expect(String(art?.props?.alt)).toContain('Kit')
     expect(String(art?.props?.source)).toContain('<path')
     expect(String(art?.props?.source)).not.toContain('<animate')
     expect(art?.props?.isInteractive).toBeUndefined()
-    expect(art?.props?.width).toBe(558)
+    // The whole width of the status bar, no longer a strip of it: no width, so the box is the region's,
+    // and the drawing (100 cells of lane) stretches to fill it whatever a Desktop cell measures.
+    expect(art?.props?.width).toBeUndefined()
     expect(art?.props?.height).toBe(84)
+    expect(String(art?.props?.source)).toContain('viewBox="0 0 807 84"')
+    expect(String(art?.props?.source)).toContain('width="1211" height="84" preserveAspectRatio="none"')
     const first = String(art?.props?.source)
     await desktop.advance(3000)
     expect(String((await findArt())?.props?.source)).not.toBe(first)

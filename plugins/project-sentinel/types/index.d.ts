@@ -262,10 +262,32 @@ export type CacheMissView = {
   label: string
   kind: 'preventable' | 'lifecycle' | 'unavoidable'
   severity: 'info' | 'warn'
+  /** Proven: the engine or the request itself shows the cause. Likely: a change seen that usually rebuilds. Unknown: nothing seen. */
+  certainty: 'proven' | 'likely' | 'unknown'
   recached: number
+  /** What the request read from the cache, of the prompt the one before it sent (`prefix`). */
+  read: number
+  prefix: number
+  /** It read part of the prompt: something changed part-way through the conversation, not at its start. */
+  isPartial: boolean
   detail: string
   advice: string
   isRefresh: boolean
+}
+
+/** One Keep warm refresh, from the fork to the conversation's next request (features/cache.ts RefreshRecord). */
+export type RefreshView = {
+  at: number
+  /** The fork read the conversation's prompt from the cache. */
+  isHit: boolean
+  read: number
+  written: number
+  input: number
+  status: 'sent' | 'hit' | 'missed' | 'awaiting' | 'verified' | 'consistent' | 'failed' | 'untested' | 'renewed'
+  oldExpiry: number | null
+  newExpiry: number | null
+  main: { at: number; read: number; written: number; phase: 'before-old-expiry' | 'after-old-expiry' | 'after-new-expiry'; changed: string[] } | null
+  note: string | null
 }
 
 /** The prompt cache in full, for Context: derived figures are named as such where they are drawn. */
@@ -294,6 +316,17 @@ export type CacheView = {
     maxIdleMinutes: number
     isRefreshing: boolean
     error: string | null
+    /**
+     * The conversation's check of the newest refresh: awaiting its next request; verified (it read
+     * the cache after the expiry the refresh replaced); consistent (it came back before that expiry
+     * and read it); failed (it rebuilt before the refreshed expiry with nothing changed); untested
+     * (something changed, or it came back after the refreshed expiry too); none (no refresh to check).
+     */
+    main: 'none' | 'awaiting' | 'verified' | 'consistent' | 'failed' | 'untested'
+    /** Why Keep warm paused itself in this context; null while it runs. */
+    pausedReason: string | null
+    /** The latest refreshes, newest first. */
+    log: RefreshView[]
   }
   misses: CacheMissView[]
   policies: { isStable: boolean; isHolding: boolean }
@@ -362,7 +395,7 @@ export type PaneModel = {
   agents: { running: AgentView[]; spawned: number; denied: number; asked: number }
   router: { lastDecision: string | null; resolved: { alias: string; id: string }[]; unavailable: string[] }
   guard: { turn: number; session: number; last: { verdict: string; score: number; reasons: string[]; at: number } | null; isActive: boolean; reason: string | null }
-  frontier: { lastEffort: string | null; isEffortSupported: boolean | null; isComposeReached: boolean | null }
+  frontier: { lastEffort: string | null; isEffortSupported: boolean | null; isComposeReached: boolean | null; delivery: FrontierDeliveryView }
   notes: string[]
   /** Categories whose saved Allow now reads as Default (Allow was removed in 1.4.0): Guardrails says so in this session. */
   allowRemoved: string[]
@@ -374,6 +407,25 @@ export type PaneModel = {
   cache: CacheView
   /** The run's latest handoff: what it left (health) and what the fresh context picked up (continuity); null before any. */
   handoff: HandoffView | null
+}
+
+/**
+ * Frontier Max as Claude has it in this context, from the requests themselves (app/ledger.ts):
+ * delivered (the latest request carried it), waiting (no request since it was turned on or the
+ * context began), missing (requests went out without it), stale (turned off, still in force until
+ * its note goes), off.
+ */
+export type FrontierDeliveryView = {
+  state: 'delivered' | 'waiting' | 'missing' | 'stale' | 'off'
+  /** How it travelled: the system prompt's section, the held section plus a note, a prompt's context, or not at all. */
+  method: 'system' | 'held+note' | 'held' | 'context' | 'none' | null
+  /** Whether this context's first request carried it; null before the first request. */
+  isFirstRequest: boolean | null
+  lastAt: number | null
+  /** The effort the latest request was sent with, and what Frontier Max asked for. */
+  effort: string | null
+  effortAsked: string | null
+  requests: number
 }
 
 /** One item of Handoff Health or Continuity: `none` is neither good nor missing (nothing to do, or not needed). */
@@ -609,6 +661,11 @@ declare module 'claude-code' {
       spinner: SpinnerModel
       autopilot: { record: AutopilotRecord | null }
       standby: { isNoted: boolean }
+      /**
+       * The policy section this context's system prompt carries, as last sent: a reload of the plugin
+       * keeps sending it while the cache is warm instead of rebuilding the cache. Gone after /clear.
+       */
+      policy: { sessionId: string; text: string } | null
     }
     /** The plugin's former name: its status bar is only read, to tell whether Control Room still runs in the session. */
     'control-room': {

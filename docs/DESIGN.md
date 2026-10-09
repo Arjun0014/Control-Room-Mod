@@ -247,6 +247,14 @@ warm refreshes. At a handoff it picks up the notes and carries them off to the r
 fresh context begins it walks back in from the left. It walks in once per context, never again on
 a redraw.
 
+**Episodes, not a loop.** In the moods it spends longest in (idle, thinking, working, searching, a
+check running, waiting for you) Kit plays episodes: short runs of two to five acts that read as
+one thing done (a stroll to somewhere it has not been, a look round, then a sit; typing, a look at
+the notes, more typing; a dash across the lane to read there). They are picked at random by
+weight, none comes again within its cooldown and none twice running, and its walks go where it has
+been least lately, so over a few minutes it uses the whole lane and never settles into a pattern.
+Every episode ends calm: a sit, a hold.
+
 **Never a jump.** Kit's place changes only by walking, its facing only through a frame that faces
 you, and it sits, stands and lies down only through a crouch or a lie-down frame; a mood change
 starts from where Kit is. A new mood applies once it has held for 1.2 seconds, and a mood holds at
@@ -254,26 +262,30 @@ least 2.5 seconds, so a flicker between tool calls restarts nothing; a handoff, 
 failure, a question and a fresh context apply at once. (Checked by a test that runs every mood at
 random moments with touches, and by thousands of fuzzed runs.)
 
-**A touch.** A click on Kit is a reaction: a purr with hearts, a happy hop, a spin, a blush and a
-wiggle, an ear flick, a nose boop, a roll for a belly rub, a high five; every one before any
-repeats, never the same twice in a row, at most one in 0.9 seconds. Five clicks in five seconds
-make it dizzy. Asleep, it is startled (and grumpily dozes off again); while Claude works, it only
-looks up with a `!`. A click beside it while it idles turns its head there, and sometimes it walks
-over. Kit never opens anything: the status bar's button does.
+**A touch.** A click on Kit is a reaction to where it lands. On the head, a pat: it shuts its eyes,
+lays its ears back and leans into it, hearts rising (a second pat soon after, a purr). On the nose
+(the front of its face), a boop. On the tail, a flick and a look round. On the body, a pet: a purr
+with hearts, a roll for a belly rub, a blush and a wiggle, a high five, a hop, a spin; every one
+before any repeats, never the same twice in a row. At most one reaction in 0.9 seconds; three
+clicks in a few seconds are a giggling twirl, five make it dizzy, and then it ignores clicks for
+four seconds. Asleep, it is startled (and dozes off again); while Claude works, it only looks up
+with a `!`. A click beside it while it idles turns its head there, and sometimes it walks over. Kit
+never opens anything: the status bar's button does.
 
 **Calm rules.** Most acts sit still and only blink, breathe or swish a tail; walks are slow. On a
-busy processor it draws two frames a second at most and never walks; a machine at its limit and
-*Reduce motion* hold one still pose for the mood, with at most one mark (a `?`, a `z`). Memory
-merely high changes nothing.
+busy processor it draws two frames a second at most and never walks, at the processor's limit one;
+only *Reduce motion* holds one still pose for the mood, with at most one mark (a `?`, a `z`).
+Switched on, it moves within a second whatever the load. Memory merely high changes nothing.
 
 **How it is drawn.** One surface module, `hooks/kit.client.tsx`, plays Kit on the surface's own
 clock in the terminal and on Desktop (the plugin does no work between frames; a frame that changes
 nothing draws nothing). In the terminal Kit is 20 × 10 pixels in five rows of half blocks, standing
 on the HUD's top edge, with glyphs every terminal font has (`♥ * ? z ♪`). On Desktop it is an image
-per frame in a lane above the headline (up to 560 × 84 pixels): 40 × 24 art pixels at 3 pixels
-each, shaded from the top left and outlined, one path per color, with crisp edges so no seam shows
-at a display scale like 125%, a soft shadow under it, and its props and particles in the same
-pixels. VS Code, which draws no surface module, shows the mood's still pose as an image. If its
+per frame in a lane above the headline, as wide as the status bar and 84 pixels high: 40 × 24 art
+pixels at 3 pixels each, shaded from the top left and outlined, one path per color, with crisp
+edges so no seam shows at a display scale like 125%, a soft shadow under it, and its props and
+particles in the same pixels. The image fills its region whatever size the app's cells are, so a
+click lands where it looks. VS Code, which draws no surface module, shows the mood's still pose as an image. If its
 module ever fails to draw, it says so and is left out until the plugin reloads; the status bar
 draws without it.
 

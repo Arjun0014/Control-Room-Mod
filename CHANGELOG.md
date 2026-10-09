@@ -6,7 +6,111 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and ver
 `plugins/project-sentinel/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/project-sentinel` checks this when tagging a release.
 
-## [Unreleased]
+## [1.5.0] - 2026-10-09
+
+A reliability pass: what Project Sentinel says it does, proven against real requests (a recording
+proxy that keeps fingerprints and token counts only, Claude Code 2.1.295, Sonnet 5.5), and fixed
+where it fell short. 313 tests.
+
+### Fixed
+
+- **Large prompt-cache rebuilds that Project Sentinel itself caused.** Its notes to Claude (a
+  setting changed, the machine's load, the handoff coming) were hidden rows appended to the
+  transcript while Claude worked. A row appended while a request is on its way is read at the end of
+  the next request, but kept where it was appended; at the next turn Claude Code rebuilds the
+  conversation from the transcript, the row sits elsewhere, and from there the prompt no longer
+  matches the cache. Claude Code then rewrites the rest of the conversation to the cache and drops
+  the thinking made over it (its `thinking_drop` record, reason `prefix_mismatch`). Found in a real
+  session (Opus 5.5, 1-hour cache): 301k and 451k tokens rebuilt at the first request of a turn,
+  each starting exactly at the first such note, and the same in five other sessions (a 662k rebuild
+  at a handoff among them). Cache health had called them "probably evicted by the server". Notes now
+  wait and go with the next batch of tool results (Claude Code's own hook context,
+  `classic.PostToolBatch`) or with the next prompt; nothing is appended to the transcript. Verified
+  through a recording proxy: with the old way the next turn differed from the cached prefix at the
+  first note; with the new way every later request extends the one before.
+- **Machine load no longer flaps at its ceiling.** A machine sitting at its RAM ceiling (85%, 86%,
+  85%…) changed level every few seconds, and each change was a notice to Claude (138 in one session,
+  while idle too). High now ends only after two readings 3 points under the ceiling; Claude is told
+  once when the load goes high and once when it is back, and only when a note can go.
+- **The first request of a session never goes out with default settings.** The system prompt can be
+  composed before the session's start has read the saved settings; the compose and step hooks now
+  load them first, so Frontier Max is in the first request (verified live: section and `xhigh`).
+- **Kit no longer freezes on a loaded machine.** It held one still pose whenever the machine was
+  over a ceiling, which a desktop at its memory ceiling always is, so Kit switched on mid-session
+  could sit frozen for minutes. Only Reduce motion holds it still now; a busy processor slows it
+  (fewer frames, no walking). Switched on, it moves within 600 ms (an ear flick and a bounce), on a
+  strained processor too: its first second is drawn at full rate.
+- **Autopilot's compaction works in Desktop and other SDK sessions.** Claude Code refuses a plugin's
+  compaction there (`$.session.compact`: "not available in a headless (-p / SDK) session yet"), so
+  the *Compact* continuation, and the fallback when `/clear` is refused, stopped at "Compaction
+  failed" and waited for you. Autopilot now runs `/compact` as a command there and carries on once
+  Claude Code has compacted (seen live: a 95k-token context compacted to 3.6k in 15 s, the
+  continuation went into it). If no compaction comes within ten minutes, it waits for you.
+- **A reload of the plugin mid-turn no longer reads as Frontier Max missing.** The turn under way
+  keeps the system prompt composed before the reload; the request after a reload now counts it
+  (seen live mid-handoff: the request carried the section, `/cr diagnostics` said *NOT delivered*).
+- **Background work Claude Code reports finished leaves Resources** (its list at each stop is the truth).
+- **A handoff turn that ends with background work running** is finished by the turn that work
+  brings back: the notes are checked, and `/clear` runs, only then.
+- **CI on Claude Code 2.1.295:** a headless session lays the engine's type declarations only for a
+  watched plugin folder now; the workflow sets `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` for that step.
+
+### Changed
+
+- **Keep warm proves itself on the conversation, refresh by refresh.** Each refresh is recorded: the
+  fork's reading (HIT or MISS, read, written), the old and the refreshed expiry, then the main
+  conversation's next request: VERIFIED (it read the cache after the old expiry), consistent (back
+  before it), NOT TESTED (something changed first: model, effort, tools, policies, style, the earlier
+  conversation), or FAILED (it rebuilt before the refreshed expiry with nothing changed), which
+  pauses Keep warm with the reason. Context → Cache shows the latest; `/cr cache` lists them.
+- **Cache health says how sure it is:** each rebuild's cause is proven, likely or unknown, never put
+  on the server without evidence; partial rebuilds say what they still read. A rebuild needs 5% and
+  4,096 tokens re-sent, no longer half the prompt.
+- **Frontier Max shows that it reached Claude:** Behavior → Frontier Max → *This context* says how
+  (system prompt, held section plus note, or the prompt's context) and the effort sent.
+- **The lazy-exit guard says what it decided** in the debug log: when it stands down (a handoff
+  under way, the context past the handoff point, a turn not the person's) and its verdict on a
+  turn's end, with the reasons (fixed phrases, never quoted text).
+- **`/cr diagnostics`:** each request of the context with the policy section's fingerprint, whether
+  Frontier Max was in it, how it travelled, model and effort; the notes delivered; Keep warm's
+  refreshes. Fingerprints only: no prompt text is kept.
+- **Kit plays episodes, uses the whole status bar, and knows where it is touched.** In each mood it
+  has a set of short episodes of two to five acts (idle: a rest, a look along the lane, a stroll to
+  somewhere new, grooming, a stretch and a yawn, a patrol to the far end, a butterfly chase, a peek
+  at the prompt, a loaf; thinking: pondering, pacing, a sit with its chin in its paw, an idea, a roam;
+  working: typing in bursts, a look at the notes, a move with them under its arm; searching: a book,
+  a magnifier along the lane, a dash; a check running: watching it, a nervous tail; waiting on you:
+  a look at the prompt, a step closer). They are picked by weight from a seeded generator, none
+  again within its cooldown, never the same twice running; a walk goes where Kit has been least
+  lately. On Desktop the lane is as wide as the status bar (it was at most 560 pixels), at no extra
+  cost per frame: the image fills Kit's region whatever size the app's cells are. A touch reacts by where it lands: a head pat (twice, a purr), a nose boop, a tail
+  flick, a pet on its body; three touches in a few seconds are a giggle, five make it dizzy and it
+  rests a few seconds; asleep, it is startled. A Desktop touch is placed by its share of the lane, and
+  its row says head or body. Measured: 5.6 µs a step, 0.33 ms a drawn Desktop frame (0.33% of one
+  core at ten frames a second).
+
+### Verified live
+
+- **Keep warm keeps the conversation's own cache.** Five-minute cache: two refreshes read it
+  (47,130 and 47,156 tokens), and the conversation's next request, after the expiry they replaced,
+  read 47,156: VERIFIED; without Keep warm the same pause rebuilt 47.2k. One-hour cache with Frontier
+  Max on: the refresh read 89,817 of 89,819 tokens, and the request five minutes past the old expiry
+  read 89,817: VERIFIED. A refresh goes at the session's effort, not Frontier Max's; on Sonnet 5.5
+  that changed nothing the cache keys on.
+- **Frontier Max in every case:** the first request of a new session, turned on and off
+  mid-session, after Autopilot's `/clear`, after a compaction, across a reload mid-turn; each
+  request at the effort it asks for (`xhigh`), the section's fingerprint the same throughout.
+- **The Autopilot chain**, step by step from the debug trace: the threshold crossed mid-turn, the
+  note with the next tool results, the handoff turn (with tool calls; the notes written late in it),
+  the notes checked, `/clear` or compaction, the continuation in the fresh context with the run, its
+  objective and its cost carried on. A prompt queued during the handoff turn went into that turn and
+  moved nothing on; a reload of the plugin mid-handoff carried it on; no second handoff, no clear
+  before the notes; the lazy-exit guard stood down for it (`guard: stands down` in the trace).
+- **A clean install** from the directory marketplace into a throwaway configuration (it loads,
+  migrates and registers its commands), and the update of an installed 1.4.1 to 1.5.0 then a fresh
+  terminal session as a user: the panel and status bar, Frontier Max in the first request, Kit
+  switched off and on mid-session (walking again at once), a pat on its head, `/cr cache`, and a
+  model switch asking first (679k warm tokens, about $5.43) then kept.
 
 ## [1.4.3] - 2026-10-08
 

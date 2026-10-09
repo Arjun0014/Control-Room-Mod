@@ -87,6 +87,23 @@ describe('pressure', () => {
     expect(evalAt([at(10, 96, 1000)]).driver).toBe('ram')
   })
 
+  test('a machine sitting at its ceiling stays high instead of flapping; it calms only well under it, twice', () => {
+    // Seen live (RAM 85%, 86%, 85% against an 85% ceiling): a level change every few seconds, a notice each.
+    let p: Pressure = UNKNOWN
+    const levels: string[] = []
+    const ram = [86, 86, 85, 84, 85, 86, 84, 83, 84, 86, 82, 82, 81]
+    ram.forEach((r, i) => {
+      p = evalAt([at(30, r, i * 2000)], p)
+      levels.push(p.level)
+    })
+    // High from the second reading over; readings 1–2 points under keep it high; two at 3+ under end it.
+    expect(levels).toEqual(['elevated', 'high', 'high', 'high', 'high', 'high', 'high', 'high', 'high', 'high', 'high', 'elevated', 'elevated'])
+    // Critical still comes at once, and eases back to high, not to calm.
+    const critical = evalAt([at(30, 96, 30_000)], p)
+    expect(critical.level).toBe('critical')
+    expect(evalAt([at(30, 86, 32_000)], critical).level).toBe('high')
+  })
+
   test('a stale sample reads as unknown', () => {
     expect(evaluate({ samples: [at(90, 90, 0)], ceilings, previous: UNKNOWN, now: 60_000, windowMs: 15_000, staleMs: 30_000 }).level).toBe('unknown')
   })
@@ -98,9 +115,9 @@ describe('pressure', () => {
   })
 
   test('heavy jobs are gated only when over a ceiling', () => {
-    const ok: Pressure = { level: 'ok', cpu: 20, ram: 40, driver: 'cpu', overStreak: 0 }
-    const high: Pressure = { level: 'high', cpu: 80, ram: 40, driver: 'cpu', overStreak: 2 }
-    const critical: Pressure = { level: 'critical', cpu: 95, ram: 40, driver: 'cpu', overStreak: 3 }
+    const ok: Pressure = { level: 'ok', cpu: 20, ram: 40, driver: 'cpu', overStreak: 0, clearStreak: 0 }
+    const high: Pressure = { level: 'high', cpu: 80, ram: 40, driver: 'cpu', overStreak: 2, clearStreak: 0 }
+    const critical: Pressure = { level: 'critical', cpu: 95, ram: 40, driver: 'cpu', overStreak: 3, clearStreak: 0 }
     expect(gateHeavy({ pressure: ok, ceilings, running: 5 }).isAllowed).toBe(true)
     expect(gateHeavy({ pressure: high, ceilings, running: 1 }).isAllowed).toBe(true)
     expect(gateHeavy({ pressure: high, ceilings, running: 2 }).isAllowed).toBe(false)

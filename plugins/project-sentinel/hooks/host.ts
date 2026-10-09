@@ -64,13 +64,19 @@ export type Host = {
   usageSummary(): Promise<SessionUsage>
   version(): Promise<SessionVersion>
   surfaces(): Promise<readonly RenderSurface[]>
-  /** A hidden user-role row Claude reads at its next request (mid-turn too). */
-  appendForModel(text: string): Promise<boolean>
+  // No member appends to the transcript: a row appended while Claude works moves when the next turn
+  // rebuilds the conversation, and the prompt cache is lost from there (app/notes.ts). Notes for
+  // Claude travel with a batch of tool results or with a prompt instead.
   compact(instructions: string): Promise<SessionCompactResult>
 
   submit(text: string): Promise<PromptSubmitResult>
-  /** Runs /clear (an Autopilot handoff's fresh context): the only slash command Control Room runs. */
+  /** Runs /clear (an Autopilot handoff's fresh context). */
   clearContext(): Promise<CommandRunResult>
+  /**
+   * Runs /compact with the handoff's instructions: where `compact` is refused because the session
+   * compacts only inside a turn (headless and SDK sessions). The engine's compaction follows.
+   */
+  compactCommand(instructions: string): Promise<CommandRunResult>
   registerCommand(spec: CommandSpec): Promise<unknown>
   listCommands(): Promise<CommandInfo[]>
 
@@ -140,6 +146,9 @@ export type Host = {
   /** The handoff in flight, in `$.state`: survives a reload of the plugin, not a restart or /clear. */
   saveAutopilotRecord(record: AutopilotRecord | null): Promise<void>
   loadAutopilotRecord(): Promise<AutopilotRecord | null>
+  /** The policy section this context's system prompt carries, in `$.state`: a reload keeps it while the cache is warm. */
+  savePolicyMemo(memo: { sessionId: string; text: string } | null): Promise<void>
+  loadPolicyMemo(): Promise<{ sessionId: string; text: string } | null>
 
   /** Re-runs agent listings (Subagent Control changed what is offered). */
   invalidateDescribes(): void

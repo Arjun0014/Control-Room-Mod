@@ -29,6 +29,7 @@ import { COMMAND, LIMITS, MIN_ENGINE, PANE_ID, PANE_TITLE, SHORT_COMMAND, STORE_
 import { type Effective, POLICY_SECTION_ID, effective, policySections, policyText } from '../core/policy'
 import { applyProfile, findProfile, profileLabel } from '../core/profiles'
 import { PERMISSION_LABEL, type Settings, clone, defaultSettings, normalizeSettings } from '../core/settings'
+import { fingerprint } from '../core/hash'
 import { clean } from '../core/text'
 import { versionAtLeast } from '../core/version'
 import { ActivityTracker } from '../features/activity'
@@ -56,6 +57,8 @@ import { Debounced, findRunBySession, loadHistory, loadIndex, loadSettings, next
 import { CARRIED_MARK, type CarriedMarker, carriedWrites, configDirFromEnv, configDirOf, isFormerHud, readFormerStore } from './formerStore'
 import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
+import { PolicyLedger, policyRenderOf, recordLine } from './ledger'
+import { type NoteKind, NoteBox } from './notes'
 import { Publisher } from './publisher'
 import * as CacheModel from '../features/cache'
 import { endsWithQuestion } from './headline'
@@ -70,7 +73,6 @@ type TurnState = {
   request: string
   toolCount: number
   editCount: number
-  pressureNoticeSent: boolean
 }
 
 export type UsageFigures = { tokens: number | undefined; window: number | undefined; pct: number | undefined; costUsd: number | undefined }
@@ -84,6 +86,9 @@ const isOwnPrompt = (origin: PromptOrigin | undefined): boolean => origin?.kind 
 
 const isPersonOrigin = (origin: PromptOrigin | undefined): boolean =>
   origin === undefined || origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk'
+
+/** `$.session.compact`'s refusal where a session compacts only inside a turn (headless and SDK sessions: the /compact command does it). */
+const isTurnOnlyCompact = (message: string): boolean => /not available in a headless|runs inside a turn/i.test(message)
 
 export class Runtime {
   host: Host | null = null
@@ -107,7 +112,7 @@ export class Runtime {
   activity = new ActivityTracker()
   monitor: ResourceMonitor
 
-  turn: TurnState = { id: null, isRunning: false, kind: 'other', request: '', toolCount: 0, editCount: 0, pressureNoticeSent: false }
+  turn: TurnState = { id: null, isRunning: false, kind: 'other', request: '', toolCount: 0, editCount: 0 }
   guard = { turnBlocks: 0, sessionBlocks: 0, lastBlockedAnswer: '', last: null as (GuardAssessment & { at: number }) | null }
   router = {
     turnModel: null as string | null,
@@ -122,9 +127,18 @@ export class Runtime {
   agents = { list: [] as AgentInfo[], spawned: 0, denied: 0, asked: 0, allowAll: false, poll: null as { cancel: () => void } | null }
   permissionLog: PermissionLogEntry[] = []
   permissionCounts = { denied: 0, asked: 0 }
-  resourceStats = { refused: 0, noticesSent: 0, lastNoticeAt: 0, lastNoticeLevel: 'ok' as string }
+  resourceStats = { refused: 0, noticesSent: 0, lastNoticeLevel: 'ok' as string }
   frontier = { lastEffort: null as string | null, isEffortSupported: null as boolean | null }
   compose = { isReached: false, deliveredFallback: false, isLikelyBypassed: false }
+  /** Notes for Claude, waiting for the next batch of tool results or the next prompt (app/notes.ts). */
+  readonly notesBox = new NoteBox()
+  /** Request by request: how the policies and the effort reached Claude in this context (app/ledger.ts). */
+  readonly ledger = new PolicyLedger()
+  /** What Claude was last told about the machine's load: nothing (ok), or that it is high or critical. */
+  pressureTold: 'ok' | 'high' | 'critical' = 'ok'
+  private pressureToldAt = 0
+  /** Whether the latest request carried Frontier Max (the panel redraws when that changes). */
+  private lastFrontierDelivered: boolean | null = null
 
   ui = {
     tab: 'overview' as TabId,
@@ -188,6 +202,8 @@ export class Runtime {
 
   /** The clear a handoff owes, held back while a turn runs (a prompt the person queued): the turn's end carries it out. */
   private isClearOwed = false
+  /** The handoff turn ended with background work running: the turn that work brings back is still the handoff's. */
+  private handoffBackground = false
   private startSource: { source: string; sessionId: string } | null = null
   /** True from Control Room's own /clear until the fresh session it makes is seen (or the wait ends). */
   private isOwnClear = false
@@ -218,7 +234,7 @@ export class Runtime {
       standDown: () => this.keepWarmStandDown(),
       changed: () => this.publisher.mark('hud', 'pane'),
       missed: miss => this.onCacheMiss(miss),
-      verdict: verdict => this.onKeepWarmVerdict(verdict),
+      verdict: (verdict, reason) => this.onKeepWarmVerdict(verdict, reason),
     })
   }
 
@@ -260,11 +276,13 @@ export class Runtime {
     host.toast(`Cache rebuilt: ${fmt.tokens(miss.recached)} tokens · ${CacheModel.CAUSE_LABEL[miss.cause]}`, 6000)
   }
 
-  private onKeepWarmVerdict(verdict: 'yes' | 'no'): void {
+  private onKeepWarmVerdict(verdict: 'yes' | 'no', reason: string | null): void {
     const host = this.host
-    if (verdict === 'no') this.note('Keep warm did not keep the prompt cache warm on this setup, so it stopped. Context → Cache has the details.')
+    this.trace(`keep warm: verdict ${verdict === 'yes' ? 'VERIFIED' : 'FAILED, paused'}${reason === null ? '' : ` (${reason})`}`)
+    if (verdict === 'no') this.note(`Keep warm paused itself: ${reason ?? 'it did not keep the prompt cache warm here'}. Turn it on again to retry; Context → Cache has each refresh.`)
     if (host !== null && this.settings.ui.toasts) {
-      host.toast(verdict === 'yes' ? 'Keep warm verified: the cache stayed warm past its old expiry' : 'Keep warm stopped: it did not keep the cache warm here', 6000)
+      const paused = reason !== null && reason.startsWith('Rebuilt') ? 'the conversation rebuilt its cache though a refresh had kept it warm (cause unknown)' : 'refreshes found the cache gone before its expiry'
+      host.toast(verdict === 'yes' ? 'Keep warm verified: the conversation read its cache past the old expiry' : `Keep warm paused: ${paused}`, 7000)
     }
   }
 
@@ -388,6 +406,7 @@ export class Runtime {
     this.compose.isLikelyBypassed = Object.keys(policy).length > 0
     await this.attachRun()
     await this.cache.load()
+    await this.restorePolicyMemo()
     await this.refreshUsage(true)
     this.reconfigure({ isStartup: true })
     await this.recoverAutopilot()
@@ -396,6 +415,22 @@ export class Runtime {
     this.publisher.markAll()
 
     if (this.settings.ui.openOnStart) void host.open({ id: PANE_ID, title: PANE_TITLE }).catch(() => undefined)
+  }
+
+  /**
+   * After a reload of the plugin in the same context: the section the system prompt already carries
+   * is what the runtime before this one sent, so a held section stays held (and the cache stays warm).
+   */
+  private async restorePolicyMemo(): Promise<void> {
+    const host = this.host
+    if (host === null || this.sessionId === null) return
+    const memo = await host.loadPolicyMemo().catch(() => null)
+    if (memo === null || memo.sessionId !== this.sessionId) return
+    this.cache.restoreDelivered(memo.text)
+    this.memoText = memo.text
+    // The turn under way (if any) keeps sending that system prompt: its requests carry the section.
+    this.ledger.carried(policyRenderOf(memo.text === '' ? null : memo.text, { at: this.clock(), isHeld: false, isLoaded: true }))
+    this.trace(`policy: the system prompt carries section ${memo.text === '' ? 'none' : fingerprint(memo.text)} from before the reload`)
   }
 
   /** The milestones tool's full name once offered to Claude; null while it is not. */
@@ -516,7 +551,7 @@ export class Runtime {
       await host.registerCommand({
         name: COMMAND,
         description: 'Open Control Room: context, behavior, guardrails, activity and setup',
-        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|cache|frontier|focus|style <name>|resources <level>|agents <mode>]',
+        argumentHint: '[status|profile <name>|autopilot on|off|<70%|700k>|handoff|fresh|cache|diagnostics|frontier|focus|style <name>|resources <level>|agents <mode>]',
       })
       this.commandsRegistered.add(COMMAND)
     } catch (error) {
@@ -668,6 +703,12 @@ export class Runtime {
     this.activity.reset()
     this.guard = { turnBlocks: 0, sessionBlocks: 0, lastBlockedAnswer: '', last: null }
     this.compose = { ...this.compose, isReached: false, deliveredFallback: false }
+    // A fresh context: a fresh system prompt, so notes about the old one, and what the old one was told, are gone.
+    this.notesBox.clear()
+    this.ledger.reset()
+    this.lastFrontierDelivered = null
+    this.pressureTold = 'ok'
+    this.memoText = null
     this.router.turnModel = null
     this.publisher.forgetPublished()
     this.publisher.markAll()
@@ -934,7 +975,8 @@ export class Runtime {
     if (host === null) return
     switch (effect.kind) {
       case 'appendPending':
-        await host.appendForModel(prompts.pendingNotice({ tokens: effect.tokens, threshold: effect.threshold, window: effect.window }))
+        // Mid-turn: it goes with the batch of tool results the crossing step asked for (app/notes.ts).
+        this.tell('autopilot', prompts.pendingNotice({ tokens: effect.tokens, threshold: effect.threshold, window: effect.window }))
         return
       case 'notify':
         if (this.settings.ui.toasts) host.toast(effect.text, effect.level === 'error' ? 8000 : 5000)
@@ -1149,10 +1191,9 @@ export class Runtime {
   private async runCompact(): Promise<void> {
     const host = this.host
     if (host === null) return
+    const instructions = `Context Autopilot handoff: keep the current task, its state, decisions, unfinished work and where the handoff notes are (${this.handoffPath()}).`
     try {
-      const result: SessionCompactResult = await host.compact(
-        `Context Autopilot handoff: keep the current task, its state, decisions, unfinished work and where the handoff notes are (${this.handoffPath()}).`,
-      )
+      const result: SessionCompactResult = await host.compact(instructions)
       if (result.skip !== undefined) {
         this.stepAutopilot({ kind: 'compactFailed', error: result.skip })
         return
@@ -1163,6 +1204,35 @@ export class Runtime {
       }
       this.stepAutopilot({ kind: 'compactDone', now: await host.now() })
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // A headless or SDK session (Desktop's host protocol among them) compacts only inside a turn:
+      // `$.session.compact` refuses there (seen live, Claude Code 2.1.295); /compact, run as a command, does it.
+      if (isTurnOnlyCompact(message)) return this.compactByCommand(instructions)
+      this.stepAutopilot({ kind: 'compactFailed', error: clean(message, 160) })
+    }
+  }
+
+  /** While the handoff's compaction runs as /compact: since when (the engine's compaction then finishes the step). */
+  private compactByCommandSince: number | null = null
+
+  /** The handoff's compaction as the /compact command, where the session compacts only inside a turn. */
+  private async compactByCommand(instructions: string): Promise<void> {
+    const host = this.host
+    if (host === null || this.autopilot.state !== 'compacting') return
+    this.trace('autopilot: this session compacts only inside a turn: running /compact')
+    const since = this.clock()
+    this.compactByCommandSince = since
+    // A compaction that never comes (the command refused or failing) must not leave the handoff hanging.
+    host.after(LIMITS.compactByCommandMs, () => {
+      if (this.compactByCommandSince !== since || this.autopilot.state !== 'compacting') return
+      this.compactByCommandSince = null
+      this.stepAutopilot({ kind: 'compactFailed', error: '/compact did not compact the context' })
+    })
+    try {
+      await host.compactCommand(instructions)
+    } catch (error) {
+      if (this.compactByCommandSince !== since) return
+      this.compactByCommandSince = null
       this.stepAutopilot({ kind: 'compactFailed', error: error instanceof Error ? clean(error.message, 160) : String(error) })
     }
   }
@@ -1170,25 +1240,101 @@ export class Runtime {
   // -------------------------------------------------------------------------
   // Prompts and turns
 
-  /** Context added to a submitted prompt (reminders, policy fallback). */
+  /**
+   * Context added to a submitted prompt: the notes waiting for Claude (app/notes.ts), the machine's
+   * load when it changed since Claude was last told, a reminder of a pending handoff, and the
+   * policies themselves where the system prompt's hook is not reached. Part of the prompt's own
+   * message, so the conversation reads the same at every later request.
+   */
   onPromptSubmit(text: string, origin: PromptOrigin | undefined): string[] {
     const context: string[] = []
-    if (isOwnPrompt(origin)) return context
-    if (isPersonOrigin(origin)) {
+    const isOwn = isOwnPrompt(origin)
+    if (!isOwn && isPersonOrigin(origin)) {
       this.turn.request = text
       this.noteObjective(text)
       if (this.autopilot.state === 'pending') context.push(prompts.pendingPromptReminder())
       this.planRoute(text)
     }
+    const now = this.clock()
+    for (const note of this.notesBox.take('prompt', now)) context.push(this.delivered(note.kind, note.text, 'prompt'))
+    const load = this.pressureNote(now)
+    if (load !== null) context.push(this.delivered('pressure', load, 'prompt'))
+    if (isOwn) return context
     const isComposeMissing = !this.compose.isReached && (this.composeObserved || this.compose.isLikelyBypassed)
     if (isComposeMissing && !this.compose.deliveredFallback) {
       const policy = policyText(this.policies())
       if (policy !== null) {
         context.push(policy)
         this.compose.deliveredFallback = true
+        this.ledger.fallbackDelivered(now, this.settings.frontier.enabled)
+        this.trace(`policy: delivered as the prompt's context (the system prompt's hook was not reached), fingerprint ${fingerprint(policy)}`)
       }
     }
     return context
+  }
+
+  /**
+   * Something Claude must read outside its system prompt. It waits for the next batch of tool
+   * results of a running turn, or for the next prompt; a newer note of the same kind replaces it.
+   * Nothing is appended to the transcript (app/notes.ts says why).
+   */
+  tell(kind: NoteKind, text: string): void {
+    this.notesBox.put({ kind, text, at: this.clock() })
+    this.trace(`note: ${kind} waits for ${this.turn.isRunning ? 'the next batch of tool results' : 'the next prompt'} (${this.notesBox.count()} waiting)`)
+    this.publisher.mark('pane')
+  }
+
+  /** classic.PostToolBatch on the main conversation: what waits goes with this batch's results. */
+  notesForBatch(): string[] {
+    const now = this.clock()
+    const out = this.notesBox.take('tool-batch', now).map(n => this.delivered(n.kind, n.text, 'tool-batch'))
+    const load = this.pressureNote(now)
+    if (load !== null) out.push(this.delivered('pressure', load, 'tool-batch'))
+    return out
+  }
+
+  /** Bookkeeping as a note leaves: the ledger learns which policies Claude now reads, the trace says where it went. */
+  private delivered(kind: NoteKind, text: string, channel: 'tool-batch' | 'prompt'): string {
+    const now = this.clock()
+    if (kind === 'policies') {
+      // A held-policies note names the policies in force: Frontier Max is in force when its section is in it.
+      this.ledger.noteDelivered(now, text.includes('## Frontier Max'))
+      this.cache.isHeldNoteSent = !text.includes('apply again as written')
+    }
+    if (kind === 'pressure') this.resourceStats.noticesSent += 1
+    this.trace(`note: ${kind} delivered with the ${channel === 'tool-batch' ? 'batch of tool results' : 'prompt'} (${text.length} chars)`)
+    this.publisher.mark('pane', 'resources')
+    return text
+  }
+
+  /**
+   * What Claude should hear about the machine's load now, if that changed since it was last told:
+   * that it is over a ceiling (or critical), or back under them. Read at each delivery, so load that
+   * rose and fell between two batches of tool results is never mentioned at all.
+   */
+  private pressureNote(now: number): string | null {
+    const ceilings = this.effective().resources.ceilings
+    const p = this.monitor.pressure
+    if (ceilings === null) {
+      this.pressureTold = 'ok'
+      return null
+    }
+    if (p.level === 'unknown') return null
+    const want: 'ok' | 'high' | 'critical' = p.level === 'critical' ? 'critical' : p.level === 'high' ? 'high' : 'ok'
+    if (want === this.pressureTold) return null
+    // Going back to calm says so only after a while over: a notice and its all-clear never come back to back.
+    if (want === 'ok' && now - this.pressureToldAt < LIMITS.pressureNoticeGapMs) return null
+    if (want === 'high' && this.pressureTold === 'critical') {
+      // Easing from critical to high changes nothing Claude should do.
+      this.pressureTold = 'high'
+      return null
+    }
+    this.pressureTold = want
+    this.pressureToldAt = now
+    if (want === 'ok') return prompts.pressureRecoveredNotice({ cpu: p.cpu, ram: p.ram })
+    const background = [...this.activity.background.values()].map(b => `${b.id} (${b.label})`).slice(0, 4)
+    if (this.settings.ui.toasts) this.host?.toast(`Machine load ${p.level}: Claude was asked to ease off`, 5000)
+    return prompts.pressureNotice({ level: p.level, cpu: p.cpu, ram: p.ram, cpuCeiling: ceilings.cpu, ramCeiling: ceilings.ram, backgroundTasks: background })
   }
 
   /** True once a request went out, so an unreached compose hook means it is bypassed. */
@@ -1254,7 +1400,6 @@ export class Runtime {
       request: kind === 'person' ? input.text || this.turn.request : input.text,
       toolCount: 0,
       editCount: 0,
-      pressureNoticeSent: false,
     }
     if (kind !== 'person') this.router.turnModel = null
     this.cache.turnStarted()
@@ -1309,7 +1454,17 @@ export class Runtime {
     }
     if (isMain) {
       const effort = out.effort ?? e.effort
-      this.cache.stepStarted(`${e.turnId}:${e.index}`, typeof effort === 'string' ? effort : typeof effort === 'number' ? String(effort) : null)
+      const effortWord = typeof effort === 'string' ? effort : typeof effort === 'number' ? String(effort) : null
+      this.cache.stepStarted(`${e.turnId}:${e.index}`, effortWord)
+      this.ledger.stepStarted({
+        key: `${e.turnId}:${e.index}`,
+        at: this.clock(),
+        turnId: e.turnId,
+        step: e.index,
+        model: out.model ?? e.model,
+        effort: effortWord,
+        effortAsked: eff.frontier.effort,
+      })
     }
     return out
   }
@@ -1324,6 +1479,12 @@ export class Runtime {
       }
     }
     if (e.agentId !== undefined) return
+    const record = this.ledger.stepEnded(`${e.turnId}:${e.index}`, { sessionId: this.sessionId, frontierOn: this.settings.frontier.enabled })
+    if (record !== null) {
+      this.trace(`policy: ${recordLine(record)}`)
+      if (record.n === 1 || record.frontierDelivered !== this.lastFrontierDelivered) this.publisher.mark('pane')
+      this.lastFrontierDelivered = record.frontierDelivered
+    }
     if (sent.model !== undefined && result.usage === null && result.stopReason === null) {
       const family = familyOf(sent.model)
       this.router.unavailable.add(family ?? sent.model)
@@ -1361,11 +1522,23 @@ export class Runtime {
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
     // A turn whose start this runtime never saw began before a reload of the plugin.
-    const turnKind: TurnKind = this.turn.id === null ? 'unknown' : this.turn.kind
+    let turnKind: TurnKind = this.turn.id === null ? 'unknown' : this.turn.kind
     this.trace(`turn ${this.turn.id ?? '?'} completed (${turnKind}, ${input.reason})`)
     // A fresh context's turn that ended without starting work: it is read in now, room counts from here.
     this.noteWorkStarted()
-    this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, turn: turnKind, now })
+    // The handoff turn ended with background work still running (its Stop listed it): Claude Code
+    // brings the turn back when that work ends, and only the end of that turn finishes the handoff.
+    // The notes are not checked, and nothing is cleared, under work still running.
+    const isHandoffPart = turnKind === 'handoff' || turnKind === 'retry' || (this.handoffBackground && turnKind !== 'person')
+    const background = this.lastStop?.background.length ?? 0
+    if (this.autopilot.state === 'handoff' && isHandoffPart && input.reason !== 'aborted' && background > 0) {
+      this.handoffBackground = true
+      this.trace(`autopilot: the handoff turn ended with ${background} background job${background === 1 ? '' : 's'} still running; the notes are checked when the turn they bring back ends`)
+    } else {
+      if (this.handoffBackground && isHandoffPart) turnKind = 'handoff'
+      this.handoffBackground = false
+      this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, turn: turnKind, now })
+    }
     // A clear held back while this turn ran (one the person queued behind the handoff) is carried out now.
     if (this.isClearOwed && this.autopilot.state === 'clearing') {
       this.isClearOwed = false
@@ -1386,11 +1559,17 @@ export class Runtime {
   }
 
   onCompacted(trigger: string, result: SessionCompactResult): void {
-    if (result.skip !== undefined) return
+    // The handoff's own /compact (a session that compacts only inside a turn) finishing.
+    const isHandoffCompact = this.compactByCommandSince !== null && this.autopilot.state === 'compacting' && trigger !== 'precompute'
+    if (isHandoffCompact) this.compactByCommandSince = null
+    if (result.skip !== undefined) {
+      if (isHandoffCompact) this.stepAutopilot({ kind: 'compactFailed', error: result.skip })
+      return
+    }
     if (trigger === 'auto') this.stepAutopilot({ kind: 'engineCompacted' })
     if (this.run !== null && trigger !== 'precompute' && trigger !== 'plugin') {
       this.run = Chain.recordTransition(this.run, {
-        kind: trigger === 'auto' ? 'auto-compact' : 'compact',
+        kind: isHandoffCompact ? 'handoff-compact' : trigger === 'auto' ? 'auto-compact' : 'compact',
         at: Date.now(),
         tokensBefore: result.tokensBefore ?? null,
         tokensAfter: result.tokensAfter ?? null,
@@ -1398,24 +1577,50 @@ export class Runtime {
       this.persistRun()
     }
     this.compose.deliveredFallback = false
+    // The system prompt is composed afresh after a compaction: a note about the held section means nothing now.
+    this.notesBox.drop('policies')
     this.usage = { ...this.usage, tokens: result.tokensAfter ?? undefined }
     this.cache.noteCompact(this.clock())
     this.publisher.mark('hud', 'chain')
+    if (isHandoffCompact) this.stepAutopilot({ kind: 'compactDone', now: Date.now() })
   }
 
   // -------------------------------------------------------------------------
   // System prompt
 
-  composeSection(outputStyle?: { name: string } | null): { id: string; text: string; scope: 'session' } | null {
-    this.compose.isReached = true
+  /**
+   * Project Sentinel's section of the system prompt, for one composition. A composition that only
+   * measures the prompt (`/context`: the `analysis` trait) sends nothing: it gets the section, so the
+   * figures are right, but it is neither evidence of delivery nor a change to the cache's state.
+   */
+  composeSection(outputStyle?: { name: string } | null, traits: readonly string[] = []): { id: string; text: string; scope: 'session' } | null {
+    const isAnalysis = traits.includes('analysis')
     const native = outputStyle === undefined || outputStyle === null ? null : clean(outputStyle.name, 60) || null
+    if (isAnalysis) {
+      const current = this.cache.deliveredPolicy() ?? policyText(this.policies()) ?? ''
+      return current === '' ? null : { id: POLICY_SECTION_ID, text: current, scope: 'session' }
+    }
+    this.compose.isReached = true
     if (native !== this.nativeOutputStyle) {
       this.nativeOutputStyle = native
       this.publisher.mark('pane')
     }
     // While the cache is warm, the section the system prompt already carries is sent again (stable policies).
-    const text = this.cache.policyText(policyText(this.policies()), native, this.policyReason)
+    const { text, isHeld } = this.cache.policyText(policyText(this.policies()), native, this.policyReason)
+    this.ledger.rendered(policyRenderOf(text, { at: this.clock(), isHeld, isLoaded: this.isLoaded }))
+    this.rememberPolicy(text ?? '')
     return text === null ? null : { id: POLICY_SECTION_ID, text, scope: 'session' }
+  }
+
+  /** The section the system prompt carries, kept in `$.state` for a reload of the plugin (written only when it changes). */
+  private memoText: string | null = null
+  private rememberPolicy(text: string): void {
+    const host = this.host
+    if (host === null || this.sessionId === null || text === this.memoText) return
+    this.memoText = text
+    void host.savePolicyMemo({ sessionId: this.sessionId, text }).catch(() => {
+      this.memoText = null
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -1429,6 +1634,10 @@ export class Runtime {
     permissionMode: string | undefined
   }): Promise<string | null> {
     if (input.permissionMode !== undefined) this.permissionMode = input.permissionMode
+    // Claude Code's own list of the background work still running is the truth: a job that ended by
+    // itself (or was stopped some other way) leaves the list kept from the tool results.
+    const running = new Set(input.background.map(b => b.id))
+    for (const id of [...this.activity.background.keys()]) if (!running.has(id)) this.activity.backgroundEnded(id)
     this.lastStop = {
       background: input.background.map(b => ({ id: b.id, description: clean(b.description || b.command || `a ${b.type} task`, 80) })).slice(0, 8),
       wakeups: input.wakeups.map(w => ({ schedule: w.schedule, recurring: w.recurring })).slice(0, 8),
@@ -1437,10 +1646,19 @@ export class Runtime {
     }
     this.publisher.mark('hud', 'activity')
     const eff = this.effective()
-    if (!eff.guard.isActive) return null
-    if (this.turn.kind !== 'person' && this.turn.kind !== 'continuation') return null
+    if (!eff.guard.isActive) {
+      if (this.settings.guard.enabled) this.trace(`guard: stands down (${eff.guard.reason ?? 'inactive'})`)
+      return null
+    }
+    if (this.turn.kind !== 'person' && this.turn.kind !== 'continuation') {
+      this.trace(`guard: stands down for the ${this.turn.kind} turn`)
+      return null
+    }
     const threshold = Autopilot.handoffPoint(this.autopilot)
-    if (this.settings.autopilot.enabled && threshold !== null && (this.usage.tokens ?? 0) >= threshold) return null
+    if (this.settings.autopilot.enabled && threshold !== null && (this.usage.tokens ?? 0) >= threshold) {
+      this.trace(`guard: stands down, the context is past the handoff point (${Math.round((this.usage.tokens ?? 0) / 1000)}k of ${Math.round(threshold / 1000)}k): the handoff comes first`)
+      return null
+    }
     const g = this.settings.guard
     if (this.guard.turnBlocks >= g.maxPerTurn || this.guard.sessionBlocks >= g.maxPerSession) return null
     if (input.stopHookActive && this.guard.lastBlockedAnswer !== '' && isRepeat(this.guard.lastBlockedAnswer, input.lastMessage)) return null
@@ -1458,6 +1676,7 @@ export class Runtime {
     if (assessment.verdict === 'uncertain' && g.modelCheck) assessment = await this.classifyExit(assessment, input.lastMessage)
     this.guard.last = { ...assessment, at: now }
     this.publisher.mark('pane', 'hud')
+    this.trace(`guard: ${assessment.verdict} the ${this.turn.kind} turn's end${assessment.reasons.length > 0 ? ` (${assessment.reasons.slice(0, 3).join('; ')})` : ''}`)
     if (assessment.verdict !== 'block') return null
 
     this.guard.turnBlocks += 1
@@ -1741,30 +1960,17 @@ export class Runtime {
   // -------------------------------------------------------------------------
   // Resource pressure
 
+  /**
+   * The machine's load changed level. Nothing is sent from here: what Claude hears is decided when a
+   * note can go (the next batch of tool results, or the next prompt), from the level then
+   * (`pressureNote`). Load that rises and falls between two of those is never mentioned, and while
+   * the person is away nothing piles up.
+   */
   private onPressure(pressure: Pressure, previous: Pressure): void {
     this.publisher.mark('resources', 'hud')
     if (pressure.level === previous.level) return
-    const host = this.host
-    const ceilings = this.effective().resources.ceilings
-    if (host === null || ceilings === null) return
-    const now = Date.now()
-    const isEnteringOver = isOver(pressure) && !isOver(previous)
-    const isCritical = pressure.level === 'critical' && previous.level !== 'critical'
-    const isRecovered = !isOver(pressure) && isOver(previous) && pressure.level !== 'unknown'
-    if ((isEnteringOver || isCritical) && now - this.resourceStats.lastNoticeAt > LIMITS.pressureNoticeGapMs / (isCritical ? 3 : 1)) {
-      const background = [...this.activity.background.values()].map(b => `${b.id} (${b.label})`).slice(0, 4)
-      void host.appendForModel(
-        prompts.pressureNotice({ level: pressure.level, cpu: pressure.cpu, ram: pressure.ram, cpuCeiling: ceilings.cpu, ramCeiling: ceilings.ram, backgroundTasks: background }),
-      )
-      this.resourceStats.noticesSent += 1
-      this.resourceStats.lastNoticeAt = now
-      this.resourceStats.lastNoticeLevel = pressure.level
-      this.turn.pressureNoticeSent = true
-      if (this.settings.ui.toasts) host.toast(`Machine load ${pressure.level}. Claude was asked to ease off`, 5000)
-    } else if (isRecovered && this.turn.pressureNoticeSent && this.turn.isRunning) {
-      void host.appendForModel(prompts.pressureRecoveredNotice({ cpu: pressure.cpu, ram: pressure.ram }))
-      this.turn.pressureNoticeSent = false
-    }
+    this.resourceStats.lastNoticeLevel = pressure.level
+    if (isOver(pressure) !== isOver(previous)) this.trace(`resources: load ${pressure.level} (CPU ${pressure.cpu ?? '?'}%, RAM ${pressure.ram ?? '?'}%)`)
   }
 
   // -------------------------------------------------------------------------
@@ -1823,7 +2029,9 @@ export class Runtime {
       before.resources.enforcement !== this.settings.resources.enforcement
     if (resourceChanged) {
       const section = this.policies().find(s => s.name.startsWith('Resource Governor'))
-      void host.appendForModel(prompts.resourceLevelChangedNotice(section?.text ?? null))
+      this.tell('resources', prompts.resourceLevelChangedNotice(section?.text ?? null))
+      // New ceilings: what Claude was told about the load is measured against them afresh.
+      this.pressureTold = 'ok'
     }
     if (before.progress.milestones !== this.settings.progress.milestones) {
       void this.offerMilestones()
@@ -1836,14 +2044,14 @@ export class Runtime {
     const policy = policyText(this.policies())
     if (this.cache.isHoldingPolicies() && this.cache.isPolicyHeld(policy)) {
       // The system prompt keeps its cached section: the policies now in force come as a note.
-      void host.appendForModel(prompts.heldPoliciesNotice(changes, policy))
-      this.cache.isHeldNoteSent = true
-    } else if (this.cache.isHeldNoteSent && !this.cache.isPolicyHeld(policy)) {
-      // Back to what the system prompt says: the earlier note no longer applies.
-      void host.appendForModel(prompts.policiesRestoredNotice(changes))
-      this.cache.isHeldNoteSent = false
+      this.tell('policies', prompts.heldPoliciesNotice(changes, policy))
+    } else if (!this.cache.isPolicyHeld(policy) && (this.cache.isHeldNoteSent || this.notesBox.has('policies'))) {
+      // Back to what the system prompt says. A note Claude never received is simply withdrawn; one it read is taken back.
+      this.notesBox.drop('policies')
+      if (this.cache.isHeldNoteSent) this.tell('policies', prompts.policiesRestoredNotice(changes))
     } else if (changes.length > 0) {
-      void host.appendForModel(`Control Room · The user changed session settings: ${changes.join('; ')}. The updated policy is in your system prompt from your next request.`)
+      // Claude Code composes the system prompt once per turn (seen live), so a change made mid-turn is in it from the next turn.
+      this.tell('settings', `Control Room · The user changed session settings: ${changes.join('; ')}. This applies now; your system prompt carries it from the next turn.`)
     }
     // Keep warm turned on again tries afresh, whatever it concluded about itself before.
     if (!before.cache.keepWarm && this.settings.cache.keepWarm) this.cache.resetVerdict()

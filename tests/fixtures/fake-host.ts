@@ -44,7 +44,6 @@ export function fakeHost(
   let seq = 0
   const timers: { id: number; at: number; every: number | null; fn: () => void; isCancelled: boolean }[] = []
   const kept = {
-    appended: [] as string[],
     submitted: [] as string[],
     commands: [] as string[],
     toasts: [] as string[],
@@ -65,6 +64,8 @@ export function fakeHost(
     autopilotRecord: null as import('../../types').AutopilotRecord | null,
     /** `$.state`'s standby note: kept across a new Runtime (a reload), as the engine keeps it. */
     isStandbyNoted: false,
+    /** `$.state`'s policy memo: the section the system prompt carries, kept across a reload. */
+    policyMemo: null as { sessionId: string; text: string } | null,
   }
   const live = {
     usage: { startedAt: 0, context: { tokens: 10_000, window: 1_000_000, percent: 1 }, rateLimits: [], cost: { usd: 0.5 } } as SessionUsage,
@@ -76,6 +77,8 @@ export function fakeHost(
     /** The repository the session is in (none by default), and what `git status` says there. */
     repo: null as string | null,
     gitStatus: '## main...origin/main\n',
+    /** `$.session.compact` refuses, as in a headless or SDK session (Desktop's host protocol). */
+    isCompactTurnOnly: false,
   }
   const schedule = (ms: number, fn: () => void, every: number | null) => {
     const t = { id: ++seq, at: time + ms, every, fn, isCancelled: false }
@@ -96,11 +99,9 @@ export function fakeHost(
     usageSummary: async () => live.usage,
     version: async () => ({ version: '2.1.292', base: '2.1.292' }),
     surfaces: async () => ['terminal'],
-    appendForModel: async text => {
-      kept.appended.push(text)
-      return true
-    },
     compact: async () => {
+      // A headless or SDK session (Claude Code 2.1.295): compaction runs only inside a turn, as a /compact prompt.
+      if (live.isCompactTurnOnly) throw new Error('$.session.compact: not available in a headless (-p / SDK) session yet: compaction here runs inside a turn (a /compact prompt); catch it and carry on')
       kept.compacted += 1
       return { messages: [], tokensBefore: 900_000, tokensAfter: 40_000 }
     },
@@ -111,6 +112,10 @@ export function fakeHost(
     clearContext: async () => {
       kept.commands.push('clear')
       return { text: '' }
+    },
+    compactCommand: async instructions => {
+      kept.commands.push(`compact ${instructions}`)
+      return {}
     },
     registerCommand: async () => undefined,
     listCommands: async () => [],
@@ -189,6 +194,8 @@ export function fakeHost(
     publishSpinner: async v => void (kept.published.spinner = v),
     saveAutopilotRecord: async record => void (kept.autopilotRecord = record === null ? null : JSON.parse(JSON.stringify(record))),
     loadAutopilotRecord: async () => kept.autopilotRecord,
+    savePolicyMemo: async memo => void (kept.policyMemo = memo === null ? null : { ...memo }),
+    loadPolicyMemo: async () => kept.policyMemo,
     invalidateDescribes: () => undefined,
     invalidatePromptContext: () => undefined,
   }

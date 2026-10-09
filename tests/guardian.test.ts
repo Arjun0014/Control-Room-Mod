@@ -65,13 +65,18 @@ describe('Cache Guardian', () => {
     await advance(2 * MIN)
     expect(kept.forks).toEqual([t0 + 50 * MIN])
     expect(rt.cache.state.keepWarm).toMatchObject({ refreshes: 1, lastHit: true, verified: 'unknown', provingAfter: t0 + 60 * MIN })
-    // Nothing reaches the transcript or the person for a refresh.
-    expect(kept.appended).toEqual([])
+    // Its record: the fork read the whole prompt, the cache now lasts an hour from the fork, and the conversation's next request will tell.
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ at: t0 + 50 * MIN, isHit: true, read: 300_000, oldExpiry: t0 + 60 * MIN, newExpiry: t0 + 110 * MIN, status: 'awaiting', expected: 300_000 })
+    expect(Views.paneOf(rt).cache.keepWarm.main).toBe('awaiting')
+    // Nothing reaches Claude or the person for a refresh.
+    expect(rt.notesBox.count()).toBe(0)
     expect(kept.toasts).toEqual([])
     // The person is back after the old expiry: the cache is still there, which proves the method.
     await advance(20 * MIN)
     await turn(f, rt, [{ prompt: 301_000, read: 300_000 }])
     expect(rt.cache.state.keepWarm.verified).toBe('yes')
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ status: 'verified', main: { phase: 'after-old-expiry', read: 300_000, changed: [] } })
+    expect(Views.paneOf(rt).cache.keepWarm.main).toBe('verified')
     expect(rt.cache.state.misses).toEqual([])
     expect(kept.toasts.some(t => t.startsWith('Keep warm verified'))).toBe(true)
     expect((kept.store['cache.v1'] as { verified: string }).verified).toBe('yes')
@@ -138,9 +143,10 @@ describe('Cache Guardian', () => {
     expect(kept.forks.length).toBe(2)
     expect(rt.cache.state.ttl).toEqual({ value: '1h', source: 'engine' })
     expect(rt.cache.state.keepWarm.verified).toBe('no')
-    expect(rt.cache.plan).toEqual({ at: null, reason: 'It did not keep the cache warm here, so it stopped' })
-    expect(rt.notes.join(' ')).toContain('Keep warm did not keep the prompt cache warm')
-    expect(kept.toasts.some(t => t.startsWith('Keep warm stopped'))).toBe(true)
+    expect(rt.cache.plan).toEqual({ at: null, reason: 'Paused: its last check failed' })
+    expect(rt.notes.join(' ')).toContain('Keep warm paused itself: Two refreshes sent before the expiry found the cache gone')
+    expect(kept.toasts.some(t => t.startsWith('Keep warm paused: refreshes found the cache gone'))).toBe(true)
+    expect(rt.cache.state.keepWarm.log.map(r => r.status)).toEqual(['missed', 'missed'])
     expect((kept.store['cache.v1'] as { verified: string }).verified).toBe('no')
     rt.update(s => void (s.cache.keepWarm = false))
     rt.update(s => void (s.cache.keepWarm = true))
@@ -168,7 +174,8 @@ describe('Cache Guardian', () => {
     await turn(f, rt, [{ prompt: 300_000, read: 0 }])
     rt.update(s => void (s.frontier.enabled = true))
     await flush()
-    const note = kept.appended.at(-1) ?? ''
+    // Between turns, the note goes with the next prompt: never appended to the transcript.
+    const note = rt.onPromptSubmit('Carry on.', { kind: 'composer' }).join(' ')
     expect(note).toContain('To keep the prompt cache')
     expect(note).toContain('Frontier Max is now ON')
     expect(note).toContain('frontier-level autonomous capability')
@@ -177,7 +184,7 @@ describe('Cache Guardian', () => {
     // Back to what the system prompt already says: Claude is told the note no longer applies.
     rt.update(s => void (s.frontier.enabled = false))
     await flush()
-    expect(kept.appended.at(-1)).toContain('apply again as written')
+    expect(rt.onPromptSubmit('Carry on.', { kind: 'composer' }).join(' ')).toContain('apply again as written')
     // Once the cache is cold there is nothing to keep: the system prompt takes the change.
     await advance(70 * MIN)
     rt.update(s => void (s.frontier.enabled = true))
@@ -309,5 +316,100 @@ describe('Cache Guardian', () => {
     await advance(7 * MIN)
     await turn(f, rt, [{ prompt: 300_000, read: 0 }])
     expect(rt.cache.state.ttl).toEqual({ value: '5m', source: 'observed' })
+  })
+
+  test('the 06:13 case: a fork HIT, then the conversation rebuilds before the old expiry with nothing changed — Keep warm FAILED and pauses, no blame on the server', async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), ONE_HOUR)
+    const { rt, kept, live, advance } = f
+    live.forkRead = 408_000
+    await turn(f, rt, [{ prompt: 408_000, read: 0 }])
+    const t0 = rt.cache.state.lastRequestAt ?? 0
+    await advance(51 * MIN)
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ isHit: true, status: 'awaiting', newExpiry: t0 + 110 * MIN })
+    // The person is back 55 minutes after the last request: before the old expiry, and the fork said the cache was there.
+    await advance(4 * MIN)
+    await turn(f, rt, [{ prompt: 412_000, read: 47_633 }])
+    const r = rt.cache.state.keepWarm.log[0]
+    expect(r).toMatchObject({ status: 'failed', main: { phase: 'before-old-expiry', read: 47_633, changed: [] } })
+    expect(rt.cache.state.keepWarm.verified).toBe('no')
+    expect(rt.cache.plan).toEqual({ at: null, reason: 'Paused: its last check failed' })
+    const miss = Views.paneOf(rt).cache.misses[0]
+    expect(miss).toMatchObject({ cause: 'refresh', certainty: 'unknown', severity: 'warn', isPartial: false })
+    expect(miss?.label).toBe('Keep warm did not hold it')
+    expect(miss?.detail).toContain('cause unknown')
+    expect(`${miss?.detail} ${miss?.advice}`.toLowerCase()).not.toContain('server')
+    expect(Views.paneOf(rt).cache.keepWarm.main).toBe('failed')
+    expect(kept.toasts.some(t => t.startsWith('Keep warm paused: the conversation rebuilt its cache though a refresh had kept it warm'))).toBe(true)
+    expect(rt.notes.join(' ')).toContain('Keep warm paused itself: Rebuilt')
+    // Turned on again, it tries afresh.
+    rt.update(s => void (s.cache.keepWarm = false))
+    rt.update(s => void (s.cache.keepWarm = true))
+    expect(rt.cache.state.keepWarm.pausedReason).toBeNull()
+    expect(rt.cache.plan.at).not.toBeNull()
+  })
+
+  test("Claude Code's report that the earlier conversation changed makes the rebuild a proven history change, and leaves Keep warm untested, not failed", async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), ONE_HOUR)
+    const { rt, live, advance } = f
+    live.forkRead = 400_000
+    await turn(f, rt, [{ prompt: 400_000, read: 0 }])
+    await advance(55 * MIN)
+    rt.cache.noteHistoryChanged(rt.clock())
+    await turn(f, rt, [{ prompt: 404_000, read: 47_000 }])
+    const miss = Views.paneOf(rt).cache.misses[0]
+    expect(miss).toMatchObject({ cause: 'history', certainty: 'proven', label: 'Earlier conversation changed' })
+    expect(miss?.advice).toContain('Project Sentinel no longer does this itself')
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ status: 'untested', main: { changed: ['earlier conversation'] } })
+    expect(rt.cache.state.keepWarm.verified).toBe('unknown')
+    expect(rt.cache.plan.at).not.toBeNull()
+  })
+
+  test('back before the old expiry and the cache read: consistent, not yet a proof; a model change first leaves it untested', async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), ONE_HOUR)
+    const { rt, advance } = f
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    await advance(52 * MIN)
+    await turn(f, rt, [{ prompt: 301_000, read: 300_000 }])
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ status: 'consistent', main: { phase: 'before-old-expiry' } })
+    expect(rt.cache.state.keepWarm.verified).toBe('unknown')
+    expect(Views.paneOf(rt).cache.keepWarm.main).toBe('consistent')
+    // Next idle stretch: a refresh, then the person switches model before coming back.
+    await advance(52 * MIN)
+    expect(rt.cache.state.keepWarm.log[0]?.status).toBe('awaiting')
+    rt.onPostModelSwitch({ from_model: OPUS, to_model: 'claude-sonnet-5-5', cache_ttl: '1h', source: 'command' })
+    await turn(f, rt, [{ prompt: 301_500, read: 0, model: 'claude-sonnet-5-5' }])
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ status: 'untested' })
+    expect(rt.cache.state.keepWarm.log[0]?.main?.changed).toContain('model')
+    expect(rt.cache.state.keepWarm.verified).toBe('unknown')
+  })
+
+  test('a rebuild part-way is called partial, with what it still read; a small shortfall is no rebuild at all', async () => {
+    const f = await started(() => undefined, ONE_HOUR)
+    const { rt } = f
+    await turn(f, rt, [{ prompt: 600_000, read: 0 }])
+    // 2,000 tokens short of 600k: under 5% and under the floor that counts.
+    await turn(f, rt, [{ prompt: 601_000, read: 598_000 }])
+    expect(rt.cache.state.misses).toEqual([])
+    await turn(f, rt, [{ prompt: 602_000, read: 255_000 }])
+    const miss = Views.paneOf(rt).cache.misses[0]
+    expect(miss).toMatchObject({ isPartial: true, read: 255_000, prefix: 601_000, recached: 346_000, cause: 'unexplained', certainty: 'unknown' })
+    expect(miss?.label).toBe('Cause unknown')
+    expect(`${miss?.detail} ${miss?.advice}`.toLowerCase()).not.toContain('evicted')
+  })
+
+  test('each request is fingerprinted: a change of the tools offered between the fork and the next request is named', async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), ONE_HOUR)
+    const { rt, live, advance } = f
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    await flush()
+    const before = rt.cache.state.fingerprint
+    expect(before).toMatchObject({ model: OPUS, effort: 'high' })
+    expect(before?.tools).toMatch(/^[0-9a-f]{8}$/)
+    await advance(52 * MIN)
+    live.tools = [...live.tools, 'mcp__new__tool']
+    await advance(14 * MIN)
+    await turn(f, rt, [{ prompt: 302_000, read: 2_000 }])
+    expect(rt.cache.state.keepWarm.log[0]).toMatchObject({ status: 'untested' })
+    expect(rt.cache.state.keepWarm.log[0]?.main?.changed).toContain('tools offered')
   })
 })

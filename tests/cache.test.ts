@@ -94,9 +94,15 @@ describe('prompt cache', () => {
     s = withTtl(req(emptyCache(), T0, 200_000, 0).state, '1h', 'engine')
     const odd = req(s, T0 + 2 * MIN, 201_000, 0)
     expect(odd.miss?.cause).toBe('unexplained')
-    expect(odd.miss?.severity).toBe('info')
-    const again = req(odd.state, T0 + 4 * MIN, 202_000, 0)
-    expect(again.miss?.severity).toBe('warn')
+    expect(odd.miss?.certainty).toBe('unknown')
+    // 200k re-sent with no cause seen is worth a look the first time; a small one only once it repeats.
+    expect(odd.miss?.severity).toBe('warn')
+    const small = withTtl(req(emptyCache(), T0, 30_000, 0).state, '1h', 'engine')
+    const once = req(small, T0 + 2 * MIN, 30_500, 0)
+    expect(once.miss).toMatchObject({ cause: 'unexplained', severity: 'info' })
+    expect(req(once.state, T0 + 4 * MIN, 31_000, 0).miss?.severity).toBe('warn')
+    // Unknown is said as unknown: nothing in the words puts it on the server.
+    expect(`${odd.miss?.detail} ${adviceFor(odd.miss!, { keepWarm: false, stablePolicies: true })}`.toLowerCase()).not.toMatch(/server|evict/)
   })
 
   test('compaction is an expected rebuild; a tiny prompt is never called a miss', () => {
@@ -186,23 +192,30 @@ describe('prompt cache', () => {
     expect(nextRefresh(probe.state, { ...keep, now: T0 + 6 * MIN, idleSince: T0 })).toEqual({ at: T0 + 10 * MIN, isProbe: false })
   })
 
-  test('Keep warm proves itself: a request after the expiry it replaced still reads the cache', () => {
+  test('Keep warm proves itself only by the conversation: its next request after the expiry a refresh replaced still reads the cache', () => {
     let s = withTtl(req(emptyCache(), T0, 300_000, 0).state, '1h', 'engine')
     const r1 = req(s, T0 + 50 * MIN, 300_100, 299_500, { isRefresh: true })
     expect(r1.state.keepWarm.provingAfter).toBe(T0 + 60 * MIN)
     expect(r1.state.keepWarm.verified).toBe('unknown')
     expect(expiresAt(r1.state)).toBe(T0 + 110 * MIN)
+    expect(r1.state.keepWarm.log[0]).toMatchObject({ status: 'awaiting', isHit: true, oldExpiry: T0 + 60 * MIN, newExpiry: T0 + 110 * MIN })
+    // Another fork that reads it after the old expiry proves only that forks find it: not the conversation.
     const r2 = req(r1.state, T0 + 100 * MIN, 300_100, 299_500, { isRefresh: true })
-    expect(r2.verdict).toBe('yes')
-    expect(r2.state.keepWarm.verified).toBe('yes')
+    expect(r2.verdict).toBeNull()
+    expect(r2.state.keepWarm.log.map(r => r.status)).toEqual(['awaiting', 'renewed'])
+    // The conversation's own request after the expiry the refresh replaced reads it: verified.
+    const back = req(r2.state, T0 + 150 * MIN, 301_000, 300_000)
+    expect(back.verdict).toBe('yes')
+    expect(back.state.keepWarm.verified).toBe('yes')
+    expect(back.state.keepWarm.log[0]).toMatchObject({ status: 'verified', main: { phase: 'after-old-expiry', read: 300_000 } })
 
-    // Refreshes sent in time that find the cache gone, twice: it stops.
+    // Refreshes sent in time that find the cache gone, twice: it pauses.
     s = withTtl(req(emptyCache(), T0, 300_000, 0).state, '1h', 'engine')
     const bad1 = req(s, T0 + 50 * MIN, 300_100, 0, { isRefresh: true })
     expect(bad1.state.keepWarm.verified).toBe('unknown')
     const bad2 = req(bad1.state, T0 + 100 * MIN, 300_100, 0, { isRefresh: true })
     expect(bad2.verdict).toBe('no')
-    expect(nextRefresh(bad2.state, { ...keep, now: T0 + 101 * MIN })).toEqual({ at: null, reason: 'It did not keep the cache warm here, so it stopped' })
+    expect(nextRefresh(bad2.state, { ...keep, now: T0 + 101 * MIN })).toEqual({ at: null, reason: 'Paused: its last check failed' })
   })
 
   test('the five-minute cache is kept warm for 45 idle minutes at most: past that a refresh costs more than a rebuild', () => {

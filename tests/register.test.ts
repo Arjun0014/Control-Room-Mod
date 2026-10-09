@@ -228,6 +228,69 @@ describe('register', () => {
     expect(sent).toEqual(['max', undefined])
   })
 
+  test('the very first composition waits for the saved settings: Frontier Max is in the system prompt even when the prompt is composed before the session start settles', async ($, on) => {
+    world(on, { settings: withSettings(s => { s.frontier.enabled = true; s.frontier.effort = 'xhigh' }) })
+    on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude Code.', scope: 'shared' as const }] }))
+    const sent: unknown[] = []
+    on('turn.step', async function* ($, e) {
+      sent.push(e.effort)
+      return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 30_000, model: 'claude-opus-5-5' } }
+    })
+    // No session.start, no prompt.submit first: the compose hook and the step load the settings themselves.
+    const composed = await $.prompt.compose(COMPOSE)
+    const policy = composed.sections.find(s => s.id === 'project-sentinel:policies')
+    expect(policy?.text).toContain('## Frontier Max')
+    expect(policy?.text).toContain('set to xhigh')
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'medium', messageCount: 1 })) void _
+    expect(sent).toEqual(['xhigh'])
+    // /cr diagnostics shows the evidence: the first request, how the policies travelled, the effort sent.
+    await $.session.start(SESSION)
+    const diag = (await $.command.run(cmd('cr', 'diagnostics'))).text
+    expect(diag).toContain('Frontier Max     on · delivered via system')
+    expect(diag).toContain('request 1 · turn t1 step 0 · section ')
+    expect(diag).toContain('Frontier Max delivered')
+    expect(diag).toContain('effort xhigh')
+    expect(diag).not.toContain('SETTINGS NOT LOADED')
+  })
+
+  test('notes while Claude works go with the next batch of tool results (classic.PostToolBatch), on the main conversation only, and nothing is appended to the transcript', async ($, on) => {
+    const w = world(on)
+    on('classic.PostToolBatch', () => ({}))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'Build the parser.', turnId: 't1' })
+    await $.command.run(cmd('cr', 'resources low'))
+    // A subagent's batch carries nothing of the main conversation's.
+    const sub = await $.classic.PostToolBatch({ tool_calls: [], agent_id: 'agent-1' })
+    expect(sub.additionalContext ?? []).toEqual([])
+    const main = await $.classic.PostToolBatch({ tool_calls: [{ tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'tu-1' }] })
+    expect((main.additionalContext ?? []).join(' ')).toContain('## Resource Governor: LOW')
+    // Once: the next batch carries nothing.
+    expect((await $.classic.PostToolBatch({ tool_calls: [] })).additionalContext ?? []).toEqual([])
+    expect(w.kept.appended).toEqual([])
+  })
+
+  test("Claude Code's thinking_drop row marks the next rebuild as a proven change of the earlier conversation; the row passes on unchanged", async ($, on) => {
+    world(on, { settings: withSettings(s => void (s.cache.keepWarm = false)) })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    let reads = [0, 3_000]
+    on('turn.step', async function* ($, e) {
+      const read = reads.shift() ?? 0
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: 300_000 - read, model: 'claude-opus-5-5' } }
+    })
+    await $.session.start(SESSION)
+    for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })) void _
+    const row = { message: { type: 'attachment' as const, name: 'thinking_drop', content: [] }, door: 'attachment' as const, origin: { kind: 'engine' as const }, uuid: 'row-drop' }
+    const stored = await $.session.append(row)
+    expect(stored.deny).toBeUndefined()
+    for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 4 })) void _
+    const cache = (await $.command.run(cmd('cr', 'cache'))).text
+    expect(cache).toContain('Earlier conversation changed')
+    expect(cache).toContain('proven cause')
+    reads = []
+  })
+
   test('No-Lazy-Exit Guard continues a lazy stop once, then respects the loop guard', async ($, on) => {
     world(on, { settings: withSettings(s => { s.guard.enabled = true; s.guard.modelCheck = false }) })
     on('turn.start', ($, e) => ({ turnId: e.turnId }))
@@ -372,6 +435,28 @@ describe('register', () => {
     await w.clock.advance(5000)
     expect(w.kept.commandsRun.map(c => c.command)).not.toContain('clear')
     await $.turn.complete({ answer: 'Renamed.', durationMs: 1, isAborted: false, turnId: 'p1', reason: 'answer' })
+    await w.clock.advance(3000)
+    expect(w.kept.commandsRun.map(c => c.command)).toContain('clear')
+  })
+
+  test('a handoff turn that ends with background work running is not over: the notes are checked and the context cleared only after the turn that work brings back', async ($, on) => {
+    const w = world(on, { settings: withSettings(s => void (s.autopilot.enabled = true)) })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', ($, e) => ({ text: e.answer }))
+    on('classic.Stop', () => ({}))
+    await $.session.start(SESSION)
+    await $.command.run(cmd('cr', 'handoff'))
+    await w.clock.advance(400)
+    await $.turn.start({ text: framed(w.kept.submitted.find(t => t.includes('final handoff'))), turnId: 'h1' })
+    await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'The checks run in the background.', background_tasks: [{ id: 'bg1', type: 'local_bash', status: 'running', description: 'npm test' }] })
+    await $.turn.complete({ answer: 'The checks run in the background.', durationMs: 1, isAborted: false, turnId: 'h1', reason: 'answer' })
+    await w.clock.advance(5000)
+    expect(w.kept.commandsRun.map(c => c.command)).not.toContain('clear')
+    expect((await $.command.run(cmd('cr', 'status'))).text).toContain('Writing the handoff')
+    // The job ends: Claude Code brings the turn back with its result, and that turn ends with nothing running.
+    await $.turn.start({ text: '', turnId: 'h2' })
+    await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Checks pass. Handoff written.', background_tasks: [] })
+    await $.turn.complete({ answer: 'Checks pass. Handoff written.', durationMs: 1, isAborted: false, turnId: 'h2', reason: 'answer' })
     await w.clock.advance(3000)
     expect(w.kept.commandsRun.map(c => c.command)).toContain('clear')
   })

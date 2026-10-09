@@ -4,8 +4,12 @@ import { CAPTION, type Mood, type MoodInput, companionView, moodOf } from '../ho
 import {
   COOLDOWN_MS,
   D_H,
+  D_MAX_LANE_PX,
   D_W,
+  DIZZY_REST_MS,
   DIZZY_TAPS,
+  EPISODES,
+  GIGGLE_TAPS,
   HOLD_MS,
   KIT_W,
   SETTLE_MS,
@@ -16,10 +20,14 @@ import {
   type KitProps,
   type KitState,
   createKit,
+  desktopLanePx,
+  desktopLaneUnits,
   desktopSprite,
   desktopSvg,
   drawableOf,
   kitStillSvg,
+  partAt,
+  pointerAt,
   resizeKit,
   runsOf,
   stepKit,
@@ -251,26 +259,241 @@ describe('companion', () => {
     expect(frames.every(f => f.s.x >= 0)).toBe(true)
   })
 
-  test('a touch is a reaction, every one before any repeats and never the same twice in a row; a pause between, and many touches make it dizzy', () => {
+  test('a pet on its body is a reaction, every one before any repeats and never the same twice in a row; a pause between', () => {
     let s = kitOf(props(), { x: 20 })
     const seen: string[] = []
-    for (let round = 0; round < 16; round++) {
-      s = run(s, () => props(), 3000).at(-1)!.s
-      s = touchKit(s, props(), s.x + 10)
+    for (let round = 0; round < 12; round++) {
+      s = run(s, () => props(), 6000).at(-1)!.s
+      // The middle of it, low down: its body (whichever way it faces).
+      s = touchKit(s, props(), s.x + 10, 2)
       s = run(s, () => props(), 500).at(-1)!.s
       seen.push(s.lastReaction ?? '')
     }
-    expect(new Set(seen.slice(0, 8)).size).toBe(8)
-    expect(new Set(seen.slice(8)).size).toBe(8)
+    expect(new Set(seen.slice(0, 6)).size).toBe(6)
+    expect(new Set(seen.slice(6)).size).toBe(6)
+    for (const r of seen) expect(['purr', 'roll', 'blush', 'highfive', 'hop', 'spin']).toContain(r)
     for (let i = 1; i < seen.length; i++) expect(seen[i]).not.toBe(seen[i - 1])
     // Within the cooldown a second touch changes nothing.
-    const once = touchKit(run(kitOf(props(), { x: 20 }), () => props(), 2000).at(-1)!.s, props(), 30)
-    const twice = touchKit(stepKit(once, props(), COOLDOWN_MS / 3), props(), 30)
+    const once = touchKit(run(kitOf(props(), { x: 20 }), () => props(), 2000).at(-1)!.s, props(), 30, 2)
+    const twice = touchKit(stepKit(once, props(), COOLDOWN_MS / 3), props(), 30, 2)
     expect(twice.lastReaction).toBe(once.lastReaction)
-    // Five touches in a few seconds: dizzy.
-    let d = run(kitOf(props(), { x: 20 }), () => props(), 2000).at(-1)!.s
-    for (let i = 0; i < DIZZY_TAPS; i++) d = touchKit(stepKit(d, props(), 400), props(), d.x + 10)
-    expect(run(d, () => props(), 2500).some(f => f.s.act.kind === 'dizzy')).toBe(true)
+    expect(twice.act).toEqual(stepKit(once, props(), COOLDOWN_MS / 3).act)
+  })
+
+  test('petting by where the touch lands: a head pat (twice, a purr), a nose boop, a tail flick, a pet on the body; mirrored facing left; Desktop stands taller', () => {
+    // Sitting still, its box from 20 to 40: facing right, the tail behind (left), the face in front (right).
+    const sitting = (facing: 1 | -1, surface: KitProps['surface']): KitState => {
+      const s = createKit(props({ surface }), { lane: LANE, home: 2, seed: 3, isEntering: false, x: 20, facing })
+      return { ...s, posture: 'sit', act: { kind: 'hold', t0: 0, dur: 60_000, posture: 'sit', v: 1 }, queue: [] }
+    }
+    const first = (s: KitState, p: KitProps) => run(s, () => p, 900).map(f => f.s.act.kind).find(k => !['turn', 'sitDown', 'standUp', 'lieDown', 'getUp', 'hold'].includes(k))
+    for (const surface of ['desktop', 'terminal'] as const) {
+      const p = props({ surface })
+      const tall = surface === 'desktop' ? 1.2 : 1
+      for (const facing of [1, -1] as const) {
+        const s = sitting(facing, surface)
+        expect(drawableOf(s, p).pose.body).toBe('sit')
+        // Lane units from its back edge toward its front, at a height as a share of its ear tips (sitting: 8 half units).
+        const at = (along: number, share: number | null) => ({ x: facing === 1 ? s.x + along : s.x + KIT_W - along, y: share === null ? null : share * 8 * tall })
+        const touch = (along: number, share: number | null) => {
+          const { x, y } = at(along, share)
+          return first(touchKit(s, p, x, y), p)
+        }
+        const label = `${surface}, facing ${facing}`
+        expect(partAt(s, drawableOf(s, p).pose, at(10, 0.85).x, at(10, 0.85).y, surface), label).toBe('head')
+        expect(touch(10, 0.85), label).toBe('pat')
+        expect(touch(16, 0.6), label).toBe('boop')
+        expect(touch(2, 0.4), label).toBe('swish')
+        expect(['purr', 'roll', 'blush', 'highfive', 'hop', 'spin'], label).toContain(touch(10, 0.2))
+        // Where the surface cannot tell the height: by place alone (the nose in front, the body in the middle).
+        expect(touch(16, null), label).toBe('boop')
+        expect(['purr', 'roll', 'blush', 'highfive', 'hop', 'spin'], label).toContain(touch(10, null))
+        // Beside it: not a touch on Kit (idle: it looks there).
+        expect(partAt(s, drawableOf(s, p).pose, s.x + KIT_W + 6, 4, surface)).toBeNull()
+        // A second pat while it still leans into the first: a purr.
+        const patted = run(touchKit(s, p, at(10, 0.85).x, at(10, 0.85).y), () => p, COOLDOWN_MS + 200).at(-1)!.s
+        expect(first(touchKit(patted, p, at(10, 0.85).x, at(10, 0.85).y), p), label).toBe('purr')
+      }
+    }
+    // Facing you (the wait pose): the head on top, the nose in the middle of the face, the tail at its right.
+    const waiting = run(kitOf(props({ mood: 'waiting' }), { x: 20 }), () => props({ mood: 'waiting' }), 6000).find(f => f.d.pose.body === 'front' && f.d.pose.dx === 0)!
+    const left = waiting.s.x
+    expect(partAt(waiting.s, waiting.d.pose, left + 10, 8, 'desktop')).toBe('head')
+    expect(partAt(waiting.s, waiting.d.pose, left + 10, 4.5, 'desktop')).toBe('nose')
+    expect(partAt(waiting.s, waiting.d.pose, left + 17, 3, 'desktop')).toBe('tail')
+    expect(partAt(waiting.s, waiting.d.pose, left + 4, 2, 'desktop')).toBe('body')
+  })
+
+  test('many touches: the third in a few seconds a giggle, the fifth dizzy, then a rest when touches do nothing; asleep, a touch startles it awake', () => {
+    const p = props()
+    let s = run(kitOf(p, { x: 20 }), () => p, 2000).at(-1)!.s
+    const kinds: string[] = []
+    for (let i = 0; i < DIZZY_TAPS; i++) {
+      s = touchKit(s, p, s.x + 10, 2)
+      s = run(s, () => p, COOLDOWN_MS + 100).at(-1)!.s
+      kinds.push(s.lastReaction ?? '')
+    }
+    expect(kinds[GIGGLE_TAPS - 1]).toBe('giggle')
+    expect(kinds[DIZZY_TAPS - 1]).toBe('dizzy')
+    expect(new Set(kinds).size).toBe(DIZZY_TAPS)
+    // Dizzy, it rests: a touch now changes nothing it does.
+    const resting = touchKit(s, p, s.x + 10, 2)
+    expect(resting.lastReaction).toBe('dizzy')
+    expect(resting.queue).toEqual(s.queue)
+    const after = run(s, () => p, DIZZY_REST_MS).at(-1)!.s
+    expect(touchKit(after, p, after.x + 10, 2).lastReaction).not.toBe('dizzy')
+    // Asleep: anywhere on it, a startle (never a giggle, however many).
+    const sleep = props({ mood: 'sleep' })
+    let z = run(kitOf(sleep), () => sleep, 5000).at(-1)!.s
+    expect(z.posture).toBe('down')
+    const woke: string[] = []
+    for (let i = 0; i < 4; i++) {
+      z = touchKit(z, sleep, z.x + 4 + i * 4, 1)
+      woke.push(z.lastReaction ?? '')
+      z = run(z, () => sleep, COOLDOWN_MS + 100).at(-1)!.s
+    }
+    expect(woke.every(k => k === 'startled')).toBe(true)
+    // While Claude works: a glance up, whatever part, and never a giggle.
+    const work = props({ mood: 'work', isWorking: true })
+    let w = run(kitOf(work), () => work, 3000).at(-1)!.s
+    for (let i = 0; i < 3; i++) {
+      w = touchKit(w, work, w.x + 10, 7)
+      expect(w.lastReaction).toBe('glance')
+      w = run(w, () => work, COOLDOWN_MS + 100).at(-1)!.s
+    }
+  })
+
+  test('in each mood Kit plays episodes: two to five acts each, picked by weight, none again within its cooldown, never the same one twice running, many kinds in ten minutes', () => {
+    const TRANSITION = new Set(['turn', 'sitDown', 'standUp', 'lieDown', 'getUp'])
+    for (const mood of ['idle', 'think', 'work', 'search', 'test', 'waiting'] as const) {
+      const set = EPISODES[mood]!
+      // Two with no cooldown and no walk: one is always free, never the last one again, on a busy processor too.
+      expect(set.filter(e => e.cooldown === 0 && e.walks !== true).length, mood).toBeGreaterThanOrEqual(2)
+      const played = new Set<string>()
+      const kinds = new Set<string>()
+      for (const seed of [11, 12, 13]) {
+        const p = props({ mood, isWorking: mood !== 'idle' && mood !== 'waiting' })
+        const frames = run(kitOf(p, { seed, x: 30 }), () => p, 600_000)
+        // Where each episode began, from what the planner keeps: its id and when it last began.
+        const starts: { id: string; i: number; at: number }[] = []
+        frames.forEach((f, i) => {
+          const id = f.s.lastEpisode
+          if (id === null) return
+          const at = f.s.cool[id]!
+          const last = starts.at(-1)
+          if (last === undefined || last.id !== id || last.at !== at) starts.push({ id, i, at })
+        })
+        expect(starts.length, `${mood} ${seed}`).toBeGreaterThan(30)
+        for (let k = 0; k < starts.length; k++) {
+          const { id, i, at } = starts[k]!
+          played.add(id)
+          expect(id.startsWith(`${mood === 'waiting' ? 'waiting' : mood}.`), id).toBe(true)
+          if (k > 0) expect(id, `${mood} ${seed}: ${starts[k - 1]!.id} twice running`).not.toBe(starts[k - 1]!.id)
+          const before = starts.slice(0, k).filter(x => x.id === id).at(-1)
+          if (before !== undefined) expect(at - before.at, `${id} cooldown`).toBeGreaterThanOrEqual(set.find(e => e.id === id)!.cooldown)
+          if (k === starts.length - 1) continue
+          // The acts it played: each begun act once, the transitions between postures left out.
+          const acts = new Set(frames.slice(i, starts[k + 1]!.i).map(f => `${f.s.act.kind}@${f.s.act.t0}`))
+          const counted = [...acts].map(a => a.split('@')[0]!).filter(kind => !TRANSITION.has(kind))
+          counted.forEach(kind => kinds.add(kind))
+          expect(counted.length, `${id}: ${counted.join(', ')}`).toBeGreaterThanOrEqual(2)
+          expect(counted.length, `${id}: ${counted.join(', ')}`).toBeLessThanOrEqual(5)
+        }
+      }
+      // Most of the mood's episodes came up (the rare ones, on a long cooldown, may not in thirty minutes).
+      expect(played.size, `${mood}: ${[...played].join(', ')}`).toBeGreaterThanOrEqual(Math.ceil(set.length * 0.8))
+      expect(kinds.size, `${mood}: ${[...kinds].join(', ')}`).toBeGreaterThanOrEqual(mood === 'think' ? 4 : 5)
+    }
+  })
+
+  test('Kit uses the whole lane: its walks go where it has been least, so in ten minutes idle it has been in every fifth of a wide lane', () => {
+    for (const [lane, seed] of [[80, 21], [170, 22], [300, 23]] as const) {
+      const p = props()
+      const s0 = createKit(p, { lane, home: 2, seed, isEntering: false })
+      const frames = run(s0, () => p, 600_000)
+      const span = lane - KIT_W
+      const zones = new Set(frames.map(f => Math.min(4, Math.floor((f.s.x / span) * 5))))
+      expect(zones.size, `lane ${lane}`).toBe(5)
+      // Never past either edge.
+      expect(frames.every(f => f.s.x >= 0 && f.s.x <= span)).toBe(true)
+      expectNoJumps(frames)
+    }
+    // Thinking paces about too, if less.
+    const think = props({ mood: 'think', isWorking: true })
+    const paced = run(createKit(think, { lane: 170, home: 2, seed: 5, isEntering: false }), () => think, 600_000)
+    expect(new Set(paced.map(f => Math.min(4, Math.floor((f.s.x / 150) * 5)))).size).toBeGreaterThanOrEqual(3)
+    // A busy processor: no walk in any mood, episodes still varied.
+    for (const mood of ['idle', 'think', 'work', 'search', 'test', 'waiting'] as const) {
+      const busy = props({ mood, isBusy: true, isWorking: mood !== 'idle' && mood !== 'waiting' })
+      const frames = run(kitOf(busy, { seed: 9 }), () => busy, 120_000)
+      expect(frames.filter(f => f.s.act.kind === 'walk' && f.s.act.style !== 'stop').length, mood).toBe(0)
+      expect(new Set(frames.map(f => f.s.lastEpisode)).size, mood).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  test('switched on mid-session, Kit moves within 600 ms, on a busy or strained processor too', () => {
+    for (const load of [{}, { isBusy: true }, { isStrained: true }, { isBusy: true, isStrained: true }] as Partial<KitProps>[]) {
+      for (const mood of MOODS) {
+        if (mood === 'handoff') continue
+        const p = props({ mood, ...load })
+        const frames = run(kitOf(p, { x: 20 }), () => p, 600)
+        const drawn = new Set(frames.map(f => JSON.stringify(f.d)))
+        expect(drawn.size, `${mood} ${JSON.stringify(load)}`).toBeGreaterThan(1)
+        expect(frames[0]!.s.act.kind, mood).toBe('arrive')
+      }
+    }
+  })
+
+  test('a pointer lands in the lane: Desktop by share of the image it fills, the terminal by cell; rows become heights', () => {
+    const lane = { units: 125, px: 750 }
+    // Desktop: a region 100 cells across, 4 rows; the image (750 px) is 125 units across.
+    expect(pointerAt({ type: 'down', x: 49, y: 0 }, 'desktop', { columns: 100, rows: 4 }, lane)).toEqual({ x: 61.875, y: 12.25 })
+    expect(pointerAt({ type: 'down', x: 0, y: 3 }, 'desktop', { columns: 100, rows: 4 }, lane)).toEqual({ x: 0.625, y: 1.75 })
+    // Where the surface gives the sub-cell position, that.
+    expect(pointerAt({ type: 'down', x: 49, y: 0, fine: { x: 50, y: 2 } }, 'desktop', { columns: 100, rows: 4 }, lane)).toEqual({ x: 62.5, y: 7 })
+    // A region not laid out yet: no height, the usual cell width across.
+    expect(pointerAt({ type: 'down', x: 7, y: 0 }, 'desktop', { columns: 0, rows: 0 }, lane).y).toBeNull()
+    // The terminal: a cell is a unit; five rows, two half units each, the bottom row at the ground.
+    expect(pointerAt({ type: 'down', x: 12, y: 4 }, 'terminal', { columns: 100, rows: 5 }, { units: 100, px: 0 })).toEqual({ x: 12.5, y: 1 })
+    expect(pointerAt({ type: 'down', x: 12, y: 0 }, 'terminal', { columns: 100, rows: 5 }, { units: 100, px: 0 })).toEqual({ x: 12.5, y: 9 })
+  })
+
+  test('Desktop: the lane is as wide as the status bar, and a wide lane costs what a narrow one does (the image, the work per frame)', () => {
+    expect(desktopLanePx(100)).toBe(808)
+    expect(desktopLanePx(200)).toBe(1616)
+    expect(desktopLanePx(10)).toBe(240)
+    expect(desktopLanePx(10_000)).toBe(D_MAX_LANE_PX)
+    // Filled: half as wide again as the lane on its own (so the box is the slot), stretched to the box; a still image keeps its size.
+    const still = createKit(props(), { lane: desktopLaneUnits(808), home: 2, seed: 1, isEntering: false })
+    expect(desktopSvg(drawableOf(still, props()), 808, true)).toContain('width="1211" height="84" preserveAspectRatio="none" viewBox="0 0 807 84"')
+    expect(desktopSvg(drawableOf(still, props()), 808)).toContain('width="807" height="84" viewBox="0 0 807 84"')
+    // The busiest frames of a dance and a nap, at 400 and at 3200 px: the same drawing, only the size differs.
+    const p = props({ mood: 'celebrate' })
+    const frames = run(kitOf(props(), { x: 30 }), () => p, 3000)
+    const busiest = frames.reduce((a, f) => (f.d.particles.length > a.d.particles.length ? f : a), frames[0]!)
+    const narrow = desktopSvg(busiest.d, 400)
+    const wide = desktopSvg(busiest.d, D_MAX_LANE_PX)
+    expect(wide.length - narrow.length).toBeLessThan(40)
+    expect(wide.replace(/width="\d+"|viewBox="[^"]+"/g, '')).toBe(narrow.replace(/width="\d+"|viewBox="[^"]+"/g, ''))
+    expect(wide.length).toBeLessThan(131_072 / 3)
+    // Kit at the far end of a wide lane is drawn there.
+    const far = createKit(props(), { lane: desktopLaneUnits(1500), home: 2, seed: 1, isEntering: false, x: desktopLaneUnits(1500) - KIT_W })
+    const svg = desktopSvg(drawableOf(far, props()), 1500)
+    const xs = [...svg.matchAll(/M(\d+) /g)].map(m => Number(m[1]))
+    expect(Math.min(...xs)).toBeGreaterThan(400)
+    expect(Math.max(...xs)).toBeLessThan(500)
+    // What a frame costs: the model's step, the pose and the image, over a minute of every mood.
+    let s = createKit(props(), { lane: desktopLaneUnits(1500), home: 2, seed: 4, isEntering: false })
+    const started = Date.now()
+    let n = 0
+    for (let t = 0; t < 60_000; t += TICK) {
+      const q = props({ mood: MOODS[Math.floor(t / 4000) % MOODS.length]! })
+      s = stepKit(s, q, TICK)
+      desktopSvg(drawableOf(s, q), 1500)
+      n++
+    }
+    // Under 5 ms a frame on any machine that runs the tests (measured far under: see docs/ARCHITECTURE.md).
+    expect((Date.now() - started) / n).toBeLessThan(5)
   })
 
   test('asleep, a touch startles Kit; while Claude works it only looks up; a touch beside it, idle, turns its head there', () => {
@@ -304,8 +527,15 @@ describe('companion', () => {
     for (const kind of ['stamp', 'dance', 'facepalm', 'poke']) expect(fresh.some(f => f.s.act.kind === kind), kind).toBe(false)
   })
 
-  test('calm: Reduce motion and a strained machine hold one still pose; a busy machine never walks', () => {
-    for (const calm of [{ isReduced: true }, { isStrained: true }] as Partial<KitProps>[]) {
+  test('calm: Reduce motion holds one still pose; a strained or busy processor slows Kit but never stills it, and it never walks', () => {
+    // A strained machine (a processor at its limit) keeps Kit alive: it is no longer one still pose (it froze there until 1.5.0).
+    for (const mood of ['idle', 'work', 'think'] as const) {
+      const p = props({ mood, isStrained: true })
+      const frames = run(kitOf(p, { x: 20 }), () => p, 12_000)
+      expect(new Set(frames.map(f => JSON.stringify(f.d.pose))).size, `${mood} alive`).toBeGreaterThan(1)
+      expect(frames.filter(f => f.s.act.kind === 'walk' && f.s.act.style !== 'stop').length, `${mood} no walk`).toBe(0)
+    }
+    for (const calm of [{ isReduced: true }] as Partial<KitProps>[]) {
       for (const mood of MOODS) {
         const p = props({ mood, ...calm })
         const frames = run(kitOf(p, { x: 20 }), () => p, 8000, (t, s) => (t === 3000 ? s.x + 10 : null))
@@ -343,7 +573,7 @@ describe('companion', () => {
     expect(runs.length).toBeLessThan(20)
     expect(runs.map(r => r.glyph).join('').length).toBeLessThanOrEqual(60)
     // Gone: an empty lane.
-    expect(terminalLane({ ...d, isGone: true }, 60).flat().every(c => c.glyph === ' ')).toBe(true)
+    expect(terminalLane({ ...d, isGone: true, particles: [] }, 60).flat().every(c => c.glyph === ' ')).toBe(true)
   })
 
   test('Desktop draws one image a frame: crisp pixels, a path per color, transparent in both themes, small enough at any width', () => {

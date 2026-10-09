@@ -117,9 +117,18 @@ Claude Code reports how many tokens each request read from the cache and wrote t
   middle of a context, the model router switching models, a setting changed with *Keep policies
   stable* off, an MCP server or plugin connected mid-session, or a long break. Compaction always
   rebuilds it, and reads *Expected*.
-- **"Unexplained"**: nothing Project Sentinel saw changed. Once is usually the server evicting the
-  cache. If it keeps happening, check for a proxy or gateway between Claude Code and the API that
-  does not keep the cache.
+- **How sure a cause is**: each rebuild says *Proven cause* (Claude Code reported it, or the request
+  shows it), *Likely cause* (a change seen that usually rebuilds) or *Cause unknown*. A *partial*
+  rebuild still read part of the conversation (something changed part-way); a *full* one read only
+  the system prompt and tools (something changed near the start, or the cache had lapsed).
+- **"Earlier conversation changed"** (proven): Claude Code reported that the API found the earlier
+  conversation different from what it had cached, and dropped the thinking made over it. Something
+  rewrote earlier messages: a plugin adding hidden notes while Claude works, a rewind, Claude Code
+  clearing old tool results. Before 1.5.0 Project Sentinel's own notes did this (the 300k–450k
+  rebuilds once called "probably evicted by the server"); it no longer appends anything.
+- **"Cause unknown"**: no model, effort, tool, policy, style or history change was seen. It is not
+  put on the server without evidence. If it repeats, look for another plugin or hook that changes
+  requests, or a proxy or gateway, and compare with `/cr diagnostics`.
 - **A model switch asks first**: *Ask before a model switch* (on by default) confirms a switch that
   would re-send 100k or more warm tokens. Switch at the start of a fresh context instead, or turn it
   off (`/cr cache guard off`).
@@ -136,12 +145,29 @@ Claude Code reports how many tokens each request read from the cache and wrote t
   request rebuilds it.
 - **"Retrying in 2 min"**: a refresh failed (the API refused it, or no reply came). It tries again
   while the cache can still be saved.
-- **"It did not keep the cache warm here, so it stopped"**: a refresh must carry the cache past
-  its old expiry, and here it did not, or two refreshes sent in time found the cache gone.
-  Something between Claude Code and the API (a proxy, a gateway, another provider) may not keep
-  the cache alive. Turn Keep warm off and on again to let it try afresh.
+- **Fork HIT, Main cache AWAITING VERIFICATION / VERIFIED / FAILED**: a refresh is a fork of the
+  conversation's last request; HIT means it read the conversation from the cache. That alone proves
+  nothing for the conversation: its own next request does. VERIFIED: it read the cache after the
+  expiry the refresh replaced. *Read it*: you came back before that expiry, no proof yet. NOT
+  TESTED: something changed first (it names what). FAILED: it rebuilt before the refreshed expiry
+  with nothing changed, and Keep warm pauses itself with that reason. `/cr cache` lists each
+  refresh with both expiries and what the next request read.
+- **"Paused: its last check failed"**: a refresh did not hold the cache for the conversation, or
+  two refreshes sent in time found it gone. Turn Keep warm off and on again to let it try afresh.
 - **What it costs**: each refresh re-sends the conversation as cache reads (a tenth of the input
   price) plus a one-word reply. Context → Cache counts the refreshes.
+- **Does a refresh really keep the conversation's own cache?** Measured through a recording proxy
+  (1.5.0, Claude Code 2.1.295, Sonnet 5.5). The fork re-sends the conversation's last request
+  exactly: the same system prompt, tools and messages, then the last answer and its own one-line
+  prompt. On the five-minute cache, two refreshes four minutes apart both read the conversation from
+  the cache (47,130 and 47,156 tokens), and the conversation's next request, five and a half minutes
+  after the expiry the first refresh replaced, read 47,156 tokens: VERIFIED. The same session
+  without Keep warm rebuilt all of it (47.2k written, nothing read) after the same pause. On the
+  one-hour cache with Frontier Max on, the refresh fifty minutes in read 89,817 of 89,819 tokens
+  and moved the expiry an hour on; the conversation's request five minutes after the old expiry
+  read 89,817: VERIFIED. That refresh went at the session's effort (`medium`) while the
+  conversation's requests went at Frontier Max's (`xhigh`): on Sonnet 5.5 effort is not part of
+  what the cache keys on.
 
 ## Kit, the companion
 
@@ -153,12 +179,20 @@ Claude Code reports how many tokens each request read from the cache and wrote t
   the reason.
 - **It moves too much**: Setup → *Reduce motion* (or `/cr motion off`) holds it in one pose. On a
   busy machine (the processor near its ceiling) it draws two frames a second and stops walking; at
-  the machine's limit it holds still.
+  the processor's limit, one a second. It never freezes: switched on, it moves within a second
+  whatever the load (before 1.5.0 it could sit frozen on a machine at its memory ceiling).
 - **It is tired all the time**: the processor is near the ceiling set in Guardrails → Machine load,
-  or the context is nearly full. Memory alone does not tire it.
-- **A click does nothing much**: a click is a reaction (a purr, a hop, a spin…; several clicks in a
-  row make it dizzy). While Claude works it only looks up; asleep, it is startled. It never opens
-  anything: the status bar's *Control Room* button opens the panel.
+  memory is at its ceiling, or the context is nearly full. Memory only tires it: it never slows it.
+- **It stays on the left / does the same thing over and over** (before 1.5.0): it now plays short
+  episodes per mood, picked at random by weight, none repeated straight away, and walks to where it
+  has been least, so over a few minutes it uses the whole status bar (on Desktop the lane is as wide
+  as the status bar).
+- **What a touch does**: it depends on where it lands. A pat on the head (it leans into it; a
+  second one, a purr), a boop on the nose, a touch on the tail (it flicks it and looks round), a pet
+  on its body (a purr, a roll for a belly rub, a blush, a high five, a hop, a spin). Three touches in
+  a few seconds are a giggle, five make it dizzy and it ignores touches for a few seconds. While
+  Claude works it only looks up; asleep, it is startled. It never opens anything: the status bar's
+  *Control Room* button opens the panel.
 - **It walked off and did not come back**: it carries the notes off at a handoff and stays away
   until the handoff ends; then it walks back in from the left.
 
@@ -181,6 +215,7 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 | "The fresh context filled up before work began" (waiting for you) | It passed the handoff point and its room while still reading itself in: handing off again would only repeat that. Raise the handoff point, then **Start fresh** or carry on. |
 | The handoff seems stuck at "Handing off" | Every step moves on when its turn starts or ends. `claude --debug-file <path>` traces each step (`autopilot: … → …`, `turn … started (handoff)`) to see where it stopped. A turn you queued runs first; the `/clear` waits for it. |
 | *Last handoff* shows items missing | It counts what it saw in tool calls: *Project docs updated* needs a documentation file edited in the handoff turn, *Validation recorded* a check run in that context, and *Project docs read* a documentation file opened by the fresh context. `○` marks an item that was not needed (no milestones to save, CLAUDE.md left alone). The handoff itself went ahead; the list says what the fresh context may lack. |
+| "Compaction failed: … not available in a headless (-p / SDK) session" (before 1.5.0) | Desktop and other SDK sessions compact only inside a turn, so the *Compact* continuation (and the fallback when `/clear` is refused) stopped there. Autopilot now runs `/compact` as a command in those sessions and carries on when Claude Code has compacted; the debug log says `autopilot: this session compacts only inside a turn: running /compact`. If nothing compacts within ten minutes it waits for you. |
 | "Control Room reloaded in the middle of a handoff" | The plugin was reloaded (`/reload-plugins`, an update) while a handoff was under way. Autopilot picks up where it was; only when it cannot tell whether a step already happened (the handoff prompt was about to go out, or a compaction) does it wait for you, so nothing runs twice. Press **Hand off now** or **Start fresh**. |
 
 ## Permission Policy
@@ -212,6 +247,22 @@ after each turn, at most every 15 seconds, so a change you make by hand shows af
 - **A heavy command was "held back":** over a ceiling, Project Sentinel refuses *additional* heavy
   jobs (tests, builds, installs…). Claude is told why and can wait or run fewer at once. Set
   *When over* to *Just tell Claude* to only notify, or raise the level.
+
+## Frontier Max
+
+- **Claude Code's effort indicator says `medium`**: it shows the session's own setting (`/effort`).
+  Frontier Max sets the effort of each request as it goes out, so the indicator does not change.
+  Behavior → Frontier Max → *This context* says the effort sent, and `/cr diagnostics` lists it
+  request by request (seen live: `xhigh` on every request while the indicator read `medium`).
+- **Is it really in force?** *This context* says how it reached Claude: in the system prompt, as a
+  note beside a held system prompt (turned on while the cache was warm), or with the prompt where the
+  system prompt's hook is not reached. It is there from the first request of a session, after a
+  `/clear` or a compaction, and across a reload of the plugin. *Missing* means requests went out
+  without it: `/cr diagnostics` shows which, and `claude --debug` logs a `policy:` line per request.
+- **Keep warm's refreshes go at the session's effort**, not Frontier Max's (a refresh is Claude
+  Code's own fork, and takes none). On Sonnet 5.5 the refresh read the whole conversation from the
+  cache all the same; if a model ever rebuilt for it, the refresh would read *MISS*, the next request
+  would show it, and Keep warm would pause itself.
 
 ## Model router
 

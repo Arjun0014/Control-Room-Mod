@@ -6,7 +6,10 @@
  * matters as soon as it is high). Levels:
  *   ok        well under the ceilings
  *   elevated  within 10 points of a ceiling
- *   high      at or over a ceiling for two consecutive samples
+ *   high      at or over a ceiling for two consecutive samples; it ends only once the
+ *             load is EXIT_MARGIN points under the ceiling for two samples, so a machine
+ *             sitting at its ceiling does not flap between high and elevated (seen live:
+ *             RAM 85%, 86%, 85% against an 85% ceiling, a level change every few seconds)
  *   critical  10+ points over a ceiling, or RAM at 95%+
  */
 
@@ -42,9 +45,14 @@ export type Pressure = {
   driver: 'cpu' | 'ram' | null
   /** Samples over a ceiling in a row (for the 'high' debounce). */
   overStreak: number
+  /** Samples at least EXIT_MARGIN points under every ceiling in a row (for leaving 'high'). */
+  clearStreak: number
 }
 
-export const UNKNOWN: Pressure = { level: 'unknown', cpu: null, ram: null, driver: null, overStreak: 0 }
+export const UNKNOWN: Pressure = { level: 'unknown', cpu: null, ram: null, driver: null, overStreak: 0, clearStreak: 0 }
+
+/** How far under its ceiling the load must fall, for two samples, before a high level ends. */
+export const EXIT_MARGIN = 3
 
 /** CPU averaged over the samples of the last `windowMs`. */
 export function windowedCpu(samples: readonly Sample[], now: number, windowMs: number): number | null {
@@ -72,13 +80,16 @@ export function evaluate(input: {
   const driver = worst === -Infinity ? null : cpuOver >= ramOver ? 'cpu' : 'ram'
   const isOver = worst >= 0
   const overStreak = isOver ? input.previous.overStreak + 1 : 0
+  const clearStreak = worst <= -EXIT_MARGIN ? (input.previous.clearStreak ?? 0) + 1 : 0
+  const wasOver = input.previous.level === 'high' || input.previous.level === 'critical'
   let level: PressureLevel
   if (worst === -Infinity) level = 'unknown'
   else if (worst >= 10 || (ram !== null && ram >= 95)) level = 'critical'
   else if (isOver && overStreak >= 2) level = 'high'
+  else if (wasOver && clearStreak < 2) level = 'high'
   else if (worst >= -10) level = 'elevated'
   else level = 'ok'
-  return { level, cpu: cpu === null ? null : Math.round(cpu * 10) / 10, ram, driver, overStreak }
+  return { level, cpu: cpu === null ? null : Math.round(cpu * 10) / 10, ram, driver, overStreak, clearStreak }
 }
 
 /** Whether the session is over its ceilings (heavy-job limits apply). */

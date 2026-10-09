@@ -10,9 +10,13 @@ import { ANSWER_STYLE_INFO, answerStyleLabel } from '../core/answers'
 import * as fmt from '../core/format'
 import { listProfiles } from '../core/profiles'
 import { ANSWER_STYLES, type AnswerStyle, defaultSettings } from '../core/settings'
+import type { CacheView } from '../../types'
+import { VERSION } from '../constants'
 import * as Chain from '../features/chain'
 import type { Runtime } from './runtime'
-import { cacheState, keepWarmStatus } from '../ui/pane/cache'
+import { recordLine } from './ledger'
+import { cacheState, keepWarmProof, keepWarmStatus } from '../ui/pane/cache'
+import { frontierDeliveryText } from '../ui/pane/behavior'
 import { hudOf, paneOf, profileOf, runLabelOf, statusOf } from './views'
 
 const HELP = [
@@ -30,6 +34,7 @@ const HELP = [
   '  /cr style standard|brief|ste|mission|quest   how Claude writes to you',
   '  /cr cache                 the prompt cache: lifetime, Keep warm, recent rebuilds',
   '  /cr cache keep on|off · idle 2h · stable on|off · guard on|off',
+  '  /cr diagnostics           evidence: each request\'s policies and effort, notes to Claude, Keep warm checks',
   '  /cr hud band|status|both|off',
   '  /cr companion on|off      Kit, a small companion on the status bar · /cr motion on|off',
   '  /cr reset confirm         back to Normal (custom profiles are kept)',
@@ -49,7 +54,7 @@ export function statusText(rt: Runtime): string {
     ['Context', ctx],
     ['Cost', `${fmt.cost(hud.cost.usd)} this session${runCost}`],
     ['Autopilot', rt.settings.autopilot.enabled ? `${st.autopilot.text} · ${rt.autopilot.note}` : st.autopilot.text],
-    ['Frontier Max', st.frontier.text],
+    ['Frontier Max', rt.settings.frontier.enabled || paneOf(rt).frontier.delivery.state === 'stale' ? `${st.frontier.text} · ${frontierDeliveryText(paneOf(rt).frontier.delivery).text}` : st.frontier.text],
     ['Lazy-exit guard', st.guard.text],
     ['Release check', st.qa.text],
     ['Model router', st.router.text],
@@ -87,27 +92,65 @@ export function cacheText(rt: Runtime): string {
     ['Model switch', s.guardModelSwitch ? 'Asks first when 100k+ cached tokens would be re-sent' : 'Does not ask'],
     ['Policies', s.stablePolicies ? (cache.policies.isHolding ? 'Held stable: changes reach Claude as notes' : 'Kept stable while the cache is warm') : 'Rewritten on every change'],
   ]
-  const kind = (m: (typeof cache.misses)[number]) => (m.kind === 'lifecycle' ? 'expected' : m.kind === 'unavoidable' ? 'unexplained' : 'preventable')
-  const misses = cache.misses.slice(0, 5).flatMap(m => [`  ${fmt.clock(m.at)}  ${m.detail} · ${fmt.tokens(m.recached)} re-cached (${kind(m)})`, `         ${m.advice}`])
+  const certainty = { proven: 'proven cause', likely: 'likely cause', unknown: 'cause unknown' } as const
+  const misses = cache.misses.slice(0, 5).flatMap(m => [
+    `  ${fmt.clock(m.at)}  ${m.label}: ${m.detail} · ${m.isPartial ? `partial, re-sent ${fmt.tokens(m.recached)} of ${fmt.tokens(m.prefix)}, read ${fmt.tokens(m.read)}` : `full, re-sent ${fmt.tokens(m.recached)} of ${fmt.tokens(m.prefix)}`} (${certainty[m.certainty]})`,
+    `         ${m.advice}`,
+  ])
   // The timeline behind the state, to the second: what a check of Keep warm reads.
   const k = cache.keepWarm
+  const proof = keepWarmProof(cache)
   const timeline: [string, string][] =
     cache.warmth === 'none'
       ? []
       : [
           ['Last request', `${fmt.clockSeconds(cache.lastRequestAt)}${cache.expiresAt === null ? '' : ` · expires ${fmt.clockSeconds(cache.expiresAt)} (derived)`}`],
-          ...(k.lastAt === null
-            ? []
-            : [['Last refresh', `${fmt.clockSeconds(k.lastAt)} · ${k.lastHit === true ? 'hit' : 'missed'}, ${fmt.tokens(k.lastRead)} read from the cache · ${fmt.plural(k.refreshes, 'refresh', 'refreshes')}`] as [string, string]]),
+          ...(proof === null ? [] : ([['Refreshes', proof.refreshes], ['Fork', (proof.fork?.text ?? '—').replace(/^Fork: /, '')], ['Main cache', proof.main.text]] as [string, string][])),
           ...(k.isOn && k.nextAt !== null ? [['Next refresh', `${fmt.clockSeconds(k.nextAt)}${k.isProbe ? ' (learns the lifetime)' : ''}`] as [string, string]] : []),
-          ...(k.verified === 'unknown' ? [] : [['Self-check', k.verified === 'yes' ? 'Verified: a request after a replaced expiry still read the cache' : 'Failed: refreshes did not hold the cache'] as [string, string]]),
+          ...(k.pausedReason === null ? [] : [['Paused', k.pausedReason] as [string, string]]),
         ]
+  const refreshes = k.log.slice(0, 4).map(refreshLine)
   return [
     '◆ Prompt cache',
     ...lines.map(([label, value]) => `${label.padEnd(14)}${value}`),
     ...timeline.map(([label, value]) => `${label.padEnd(14)}${value}`),
+    ...(refreshes.length === 0 ? [] : ['Keep warm refreshes (newest first)', ...refreshes]),
     ...(misses.length === 0 ? [] : ['Recent rebuilds', ...misses]),
-    'Expiry, hit ratio and causes are derived from the tokens Claude Code reports.',
+    'Expiry, hit ratio and causes are derived from the tokens Claude Code reports. A cause is called proven only when the engine or the request shows it.',
+  ].join('\n')
+}
+
+/** One refresh, to the second: the fork's reading, the expiries, and what the conversation's next request showed. */
+function refreshLine(r: CacheView['keepWarm']['log'][number]): string {
+  const fork = `fork ${r.isHit ? 'HIT' : 'MISS'} read ${fmt.tokens(r.read)} wrote ${fmt.tokens(r.written)} uncached ${fmt.tokens(r.input)}`
+  const expiries = `old expiry ${fmt.clockSeconds(r.oldExpiry)}${r.newExpiry === null ? '' : ` → ${fmt.clockSeconds(r.newExpiry)}`}`
+  const main = r.main === null ? '' : ` · next request ${fmt.clockSeconds(r.main.at)} (${r.main.phase.replace(/-/g, ' ')}) read ${fmt.tokens(r.main.read)} wrote ${fmt.tokens(r.main.written)}`
+  return `  ${fmt.clockSeconds(r.at)}  ${fork} · ${expiries}${main} · ${r.status.toUpperCase()}${r.note === null ? '' : ` · ${r.note}`}`
+}
+
+/**
+ * /cr diagnostics: the evidence behind the panel's words. Each model request of this context with
+ * how the policies reached it (fingerprints only: no prompt text), the notes delivered to Claude and
+ * how, and Keep warm's refreshes with the conversation's check of each.
+ */
+export function diagnosticsText(rt: Runtime): string {
+  const f = rt.ledger.frontier(rt.settings.frontier.enabled)
+  const requests = rt.ledger.records.slice(0, 12).map(r => `  ${fmt.clockSeconds(r.at)}  ${recordLine(r)}`)
+  const notes = rt.notesBox.delivered.slice(0, 10).map(n => `  ${fmt.clockSeconds(n.deliveredAt)}  ${n.kind} · ${n.chars} chars · with the ${n.channel === 'tool-batch' ? 'batch of tool results' : 'prompt'} (waited ${Math.round((n.deliveredAt - n.at) / 1000)} s)`)
+  const waiting = rt.notesBox.kinds()
+  const cache = paneOf(rt).cache
+  const first = rt.ledger.first
+  return [
+    `◆ Diagnostics · session ${rt.sessionId ?? '?'} · Project Sentinel ${VERSION}`,
+    `Frontier Max     ${rt.settings.frontier.enabled ? 'on' : 'off'} · ${f.state}${f.method === null ? '' : ` via ${f.method}`}${f.effort === null ? '' : ` · last effort ${f.effort}`}${f.effortAsked === null ? '' : ` (asked ${f.effortAsked})`}`,
+    `First request    ${first === null ? 'none yet in this context' : recordLine(first)}`,
+    `Settings         ${rt.isLoaded ? 'loaded from the store' : 'NOT LOADED (defaults)'} · system prompt hook ${rt.compose.isReached ? 'reached' : rt.composeObserved ? 'NOT reached (policies ride the prompt)' : 'not yet called'}`,
+    'Requests (newest first)',
+    ...(requests.length === 0 ? ['  none yet in this context'] : requests),
+    `Notes for Claude ${waiting.length === 0 ? 'none waiting' : `waiting: ${waiting.join(', ')}`} · never appended to the transcript`,
+    ...(notes.length === 0 ? [] : notes),
+    'Keep warm refreshes (newest first)',
+    ...(cache.keepWarm.log.length === 0 ? ['  none in this context'] : cache.keepWarm.log.map(refreshLine)),
   ].join('\n')
 }
 
@@ -127,6 +170,9 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       return { text: HELP }
     case 'status':
       return { text: statusText(rt) }
+    case 'diagnostics':
+    case 'diag':
+      return { text: diagnosticsText(rt) }
     case 'open':
       await rt.openPane(true)
       return { text: 'Control Room opened.' }

@@ -56,6 +56,8 @@ export const LIMITS = {
   sampleStaleMs: 30_000,
   /** Delay between the handoff turn ending and the automatic /clear. */
   clearDelayMs: 1200,
+  /** How long the handoff waits for its /compact command's compaction (a long context takes a while) before it gives up. */
+  compactByCommandMs: 10 * 60_000,
   /**
    * How long Control Room waits for the fresh session after its /clear
    * resolves. The interactive terminal finishes the reset after the command
@@ -71,7 +73,7 @@ export const LIMITS = {
 } as const
 
 /** The plugin's version, as in its manifest (kept in step on release). */
-export const VERSION = '1.4.3'
+export const VERSION = '1.5.0'
 
 /** Version floor this release was verified on (Desktop 2.1.289, CLI 2.1.292). */
 export const MIN_ENGINE = '2.1.289'

@@ -59,6 +59,10 @@ jobs:
       - name: Lay the engine's type declarations
         # Loading the mod once writes .claude-plugin/types/ and tsconfig.json beside it. The headless
         # session then stops at "Not logged in" before any model call, which is expected here.
+        # Claude Code writes them only for a plugin folder it watches, and since 2.1.295 a headless
+        # (-p) session watches none unless CLAUDE_CODE_PLUGIN_DIR_WATCH says so.
+        env:
+          CLAUDE_CODE_PLUGIN_DIR_WATCH: '1'
         run: |
           claude --plugin-dir plugins/project-sentinel -p "ok" < /dev/null || true
           test -f plugins/project-sentinel/.claude-plugin/types/claude-code/index.d.ts

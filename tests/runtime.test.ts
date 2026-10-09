@@ -31,8 +31,8 @@ const step = (tokens: number, stop: 'tool_use' | 'end_turn') => ({
 })
 
 describe('runtime', () => {
-  test('crossing the threshold mid-turn tells Claude to finish the current unit (no user prompt needed)', async () => {
-    const { rt, kept } = await started(s => {
+  test('crossing the threshold mid-turn tells Claude to finish the current unit, with the next batch of tool results', async () => {
+    const { rt } = await started(s => {
       s.autopilot.enabled = true
       s.autopilot.thresholdMode = 'tokens'
       s.autopilot.thresholdTokens = 100_000
@@ -42,7 +42,12 @@ describe('runtime', () => {
     rt.stepResponse(e, {}, step(120_000, 'tool_use'))
     await flush()
     expect(rt.autopilot.state).toBe('pending')
-    expect(kept.appended.some(t => t.includes('Finish the logical unit of work'))).toBe(true)
+    // It waits for the tool results the crossing step asked for, and goes once.
+    expect(rt.notesBox.kinds()).toEqual(['autopilot'])
+    const batch = rt.notesForBatch()
+    expect(batch.some(t => t.includes('Finish the logical unit of work'))).toBe(true)
+    expect(rt.notesForBatch()).toEqual([])
+    expect(rt.notesBox.delivered[0]).toMatchObject({ kind: 'autopilot', channel: 'tool-batch' })
   })
 
   test('the final step of a turn does not send a pointless notice; the turn end starts the handoff', async () => {
@@ -53,15 +58,15 @@ describe('runtime', () => {
     })
     rt.onTurnStart({ turnId: 't1', text: 'build it' })
     rt.stepResponse({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 3 }, {}, step(120_000, 'end_turn'))
-    expect(kept.appended).toEqual([])
+    expect(rt.notesBox.count()).toBe(0)
     live.usage = { ...live.usage, context: { tokens: 120_000, window: 1_000_000, percent: 12 } }
     await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'done' })
     await advance(300)
     expect(kept.submitted.some(t => t.includes('final handoff'))).toBe(true)
   })
 
-  test('changing the resource level or modes tells Claude at once', async () => {
-    const { rt, kept } = await started(() => undefined)
+  test('changing the resource level or modes between turns tells Claude with the next prompt', async () => {
+    const { rt } = await started(() => undefined)
     rt.update(s => {
       s.resources.level = 'low'
     })
@@ -69,11 +74,14 @@ describe('runtime', () => {
       s.frontier.enabled = true
     })
     await flush()
-    expect(kept.appended.some(t => t.includes('## Resource Governor: LOW'))).toBe(true)
-    expect(kept.appended.some(t => t.includes('Frontier Max is now ON'))).toBe(true)
+    const context = rt.onPromptSubmit('Carry on.', { kind: 'composer' })
+    expect(context.some(t => t.includes('## Resource Governor: LOW'))).toBe(true)
+    expect(context.some(t => t.includes('Frontier Max is now ON'))).toBe(true)
+    // Said once: the next prompt carries nothing more.
+    expect(rt.onPromptSubmit('And this.', { kind: 'composer' }).some(t => t.includes('Frontier Max'))).toBe(false)
   })
 
-  test('machine pressure from the sampler reaches Claude, and extra heavy jobs are held back', async () => {
+  test('machine pressure from the sampler reaches Claude with the next tool results, and extra heavy jobs are held back', async () => {
     const { rt, kept, advance } = await started(
       s => {
         s.resources.level = 'medium'
@@ -83,7 +91,10 @@ describe('runtime', () => {
     await advance(500)
     expect(kept.spawned[0]?.[0]).toBe('windows')
     expect(rt.monitor.pressure.level).toBe('critical')
-    expect(kept.appended.some(t => t.includes('Resource pressure CRITICAL'))).toBe(true)
+    rt.onTurnStart({ turnId: 't1', text: 'build it' })
+    expect(rt.notesForBatch().some(t => t.includes('Resource pressure CRITICAL'))).toBe(true)
+    // Told once: the next batch says nothing while the level holds.
+    expect(rt.notesForBatch()).toEqual([])
     expect(await rt.beforeTool('Bash', { command: 'npm run build' }, 'b1', undefined)).toBeNull()
     const refusal = await rt.beforeTool('Bash', { command: 'npm test' }, 'b2', undefined)
     expect(refusal).toContain('not starting another heavy job')
@@ -109,7 +120,7 @@ describe('runtime', () => {
     // Calm readings stay in the panel; the status line keeps to the run.
     expect(Views.statusLineOf(Views.hudOf(rt))).not.toContain('CPU')
     expect(Views.hudOf(rt).load?.cpu).toBe(42)
-    expect(kept.appended.some(t => t.includes('Resource pressure'))).toBe(false)
+    expect(rt.notesForBatch().some(t => t.includes('Resource pressure'))).toBe(false)
   })
 
   test('a busy machine shows in the status line while it is busy', async () => {
@@ -211,6 +222,43 @@ describe('runtime', () => {
     await advance(16_000)
     expect(rt.autopilot.lastError).toBe('the context was not cleared')
     expect(kept.compacted).toBe(1)
+  })
+
+  test('a session that compacts only inside a turn (headless, SDK: seen live): the handoff runs /compact as a command, and carries on once the engine has compacted', async () => {
+    const { rt, kept, live, advance } = await started(s => {
+      s.autopilot.enabled = true
+    })
+    live.isCompactTurnOnly = true
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
+    rt.startFreshContext()
+    await advance(2000)
+    // The /clear does not take: compaction takes over, as the /compact command (never a prompt: a plugin's prompt may not run a command).
+    await advance(16_000)
+    expect(rt.autopilot.state).toBe('compacting')
+    const compact = kept.commands.find(c => c.startsWith('compact '))
+    expect(compact).toContain('Context Autopilot handoff')
+    expect(compact).toContain('NEXT_SESSION_PROMPT.md')
+    expect(kept.submitted.some(t => t.startsWith('/'))).toBe(false)
+    // The engine compacts (the command's own trigger): the handoff carries on in the compacted context.
+    rt.onCompacted('manual', { messages: [], tokensBefore: 900_000, tokensAfter: 40_000 })
+    expect(rt.autopilot.state).toBe('resuming')
+    // Recorded as the handoff's compaction, not as one the person ran.
+    expect(rt.run?.sessions.at(-1)?.transitions.at(-1)).toMatchObject({ kind: 'handoff-compact', tokensBefore: 900_000, tokensAfter: 40_000 })
+    await advance(1000)
+    expect(kept.submitted.some(t => t.includes('Context Autopilot continuation'))).toBe(true)
+  })
+
+  test('a /compact that never compacts leaves the handoff waiting for the person, never hanging', async () => {
+    const { rt, live, advance } = await started(s => {
+      s.autopilot.enabled = true
+    })
+    live.isCompactTurnOnly = true
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
+    rt.startFreshContext()
+    await advance(18_000)
+    expect(rt.autopilot.state).toBe('compacting')
+    await advance(10 * 60_000)
+    expect(rt.autopilot).toMatchObject({ state: 'awaiting', lastError: '/compact did not compact the context' })
   })
 
   test('a /clear whose fresh session start goes unseen still counts once the session id changed', async () => {

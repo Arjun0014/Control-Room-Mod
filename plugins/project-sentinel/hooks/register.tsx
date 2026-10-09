@@ -40,6 +40,8 @@ const AUTOPILOT = { plugin: 'project-sentinel', key: 'autopilot' } as const
 const FORMER_HUD = { plugin: 'control-room', key: 'hud' } as const
 /** Whether the standby note was shown in this session: kept across reloads, so it shows once. */
 const STANDBY = { plugin: 'project-sentinel', key: 'standby' } as const
+/** The policy section this context's system prompt carries: a reload keeps sending it while the cache is warm. */
+const POLICY = { plugin: 'project-sentinel', key: 'policy' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -68,15 +70,11 @@ function hostOf($: EngineInterface): Host {
     usageSummary: () => $.session.usage({ breakdown: 'summary' }),
     version: () => $.session.version(),
     surfaces: () => $.session.surfaces(),
-    appendForModel: text =>
-      $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } }).then(
-        r => r.deny === undefined,
-        () => false,
-      ),
     compact: instructions => $.session.compact({ instructions }),
 
     submit: text => $.prompt.submit({ text }),
     clearContext: () => $.command.run({ command: 'clear', args: '' }),
+    compactCommand: instructions => $.command.run({ command: 'compact', args: instructions }),
     registerCommand: spec => $.command.register(spec),
     listCommands: () => $.command.list(),
 
@@ -136,6 +134,8 @@ function hostOf($: EngineInterface): Host {
 
     saveAutopilotRecord: record => $.state.set(AUTOPILOT, { record }).then(() => undefined),
     loadAutopilotRecord: () => $.state.get(AUTOPILOT).then(read => read.value?.record ?? null),
+    savePolicyMemo: memo => $.state.set(POLICY, memo).then(() => undefined),
+    loadPolicyMemo: () => $.state.get(POLICY).then(read => read.value ?? null),
 
     invalidateDescribes: () => $.ui.invalidate('tool.describe'),
     invalidatePromptContext: () => $.ui.invalidate('prompt.context'),
@@ -233,10 +233,14 @@ export const register: Register = on => {
     return next(notes === null ? e : { ...e, blocks: [...e.blocks, { name: 'contextAutopilot', text: notes }] })
   }).catch(($, e, next) => next(e))
 
+  // The system prompt's own section. The settings are loaded first, whichever hook is the session's
+  // first: a request is never composed from defaults while the person's settings are still loading.
   on('prompt.compose', async ($, e, next) => {
     if (rt.isStandby) return next(e)
+    if (rt.host === null) rt.bind(hostOf($))
+    await rt.ensureLoaded()
     const answer = await next(e)
-    const section = rt.composeSection(e.outputStyle)
+    const section = rt.composeSection(e.outputStyle, e.traits)
     if (section === null) return answer
     return { sections: [...answer.sections.filter(s => s.id !== POLICY_SECTION_ID), section] }
   }).catch(($, e, next) => next(e))
@@ -252,6 +256,8 @@ export const register: Register = on => {
 
   on('turn.step', async function* ($, e, next) {
     if (rt.isStandby) return yield* next(e)
+    if (rt.host === null) rt.bind(hostOf($))
+    await rt.ensureLoaded()
     const want = rt.stepRequest(e)
     const request = want.model === undefined && want.effort === undefined ? e : { ...e, ...want }
     const answer = yield* next(request)
@@ -279,6 +285,25 @@ export const register: Register = on => {
   on('classic.PostModelSwitch', ($, e, next) => {
     if (rt.isStandby) return next(e)
     rt.onPostModelSwitch(e)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Notes for Claude while it works (a setting changed, the machine is busy, the handoff is coming)
+  // go with the next batch of tool results, as Claude Code's own hook context: filed with that batch,
+  // so every later request reads the conversation exactly as this one did (app/notes.ts). Main
+  // conversation only: a subagent's batch carries its `agent_id`.
+  on('classic.PostToolBatch', async ($, e, next) => {
+    const answer = await next(e)
+    if (rt.isStandby || e.agent_id !== undefined) return answer
+    const notes = rt.notesForBatch()
+    return notes.length === 0 ? answer : { ...answer, additionalContext: [...(answer.additionalContext ?? []), ...notes] }
+  }).catch(($, e, next) => next(e))
+
+  // Claude Code's record that the API found the conversation's earlier part changed and dropped the
+  // thinking made over it (`thinking_drop`): proof of why the next request rebuilds the cache. Only
+  // the row's kind is read; the row is passed on unchanged.
+  on('session.append', { door: 'attachment' }, async ($, e, next) => {
+    if (!rt.isStandby && e.agentId === undefined && e.message.name === 'thinking_drop') rt.cache.noteHistoryChanged(rt.clock())
     return next(e)
   }).catch(($, e, next) => next(e))
 

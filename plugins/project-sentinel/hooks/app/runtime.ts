@@ -58,7 +58,7 @@ import { Debounced, findRunBySession, loadHistory, loadIndex, loadSettings, next
 import { CARRIED_MARK, type CarriedMarker, carriedWrites, configDirFromEnv, configDirOf, isFormerHud, readFormerStore } from './formerStore'
 import { CacheGuardian } from './cacheGuardian'
 import { handleCommand } from './commands'
-import { type FreshPurpose, Operations } from './operations'
+import { type FreshPurpose, Operations, isTurnOnlyCompact } from './operations'
 import { headlineOf } from './headline'
 import { PolicyLedger, policyRenderOf, recordLine } from './ledger'
 import { type NoteKind, NoteBox } from './notes'
@@ -67,6 +67,7 @@ import * as CacheModel from '../features/cache'
 import { endsWithQuestion } from './headline'
 import type { HudHeadline } from '../../types'
 import * as fmt from '../core/format'
+import { cardKey } from '../ui/primitives'
 
 type TurnKind = Autopilot.TurnKind
 
@@ -85,6 +86,11 @@ const OWN_PLUGIN = 'project-sentinel'
 
 /** How long after the load an announcement waits, so the session's window is there to show it. */
 const ANNOUNCE_DELAY_MS = 1500
+/** While a cost limit is set, the session's cost is read mid-turn at most this often (`$.session.usage()` costs nothing). */
+const BUDGET_COST_EVERY_MS = 5_000
+/** Operations opened at a card or field: the first try this long after, each later one this much later again. */
+const OPS_DRAWN_MS = 300
+const OPS_SCROLL_TRIES = 3
 
 const isOwnPrompt = (origin: PromptOrigin | undefined): boolean => origin?.kind === 'plugin' && origin.name === OWN_PLUGIN
 
@@ -92,7 +98,6 @@ const isPersonOrigin = (origin: PromptOrigin | undefined): boolean =>
   origin === undefined || origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk'
 
 /** `$.session.compact`'s refusal where a session compacts only inside a turn (headless and SDK sessions: the /compact command does it). */
-const isTurnOnlyCompact = (message: string): boolean => /not available in a headless|runs inside a turn/i.test(message)
 
 export class Runtime {
   host: Host | null = null
@@ -1362,6 +1367,8 @@ export class Runtime {
         this.run = Chain.recordTransition(this.run, { kind: 'handoff-compact', at: await host.now(), tokensBefore: result.tokensBefore ?? null, tokensAfter: result.tokensAfter ?? null })
         this.persistRun()
       }
+      // Claude Code does not run this plugin's own session.compact hook for its own compaction.
+      this.afterCompaction(result)
       this.stepAutopilot({ kind: 'compactDone', now: await host.now() })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1464,7 +1471,7 @@ export class Runtime {
       this.cache.isHeldNoteSent = !text.includes('apply again as written')
     }
     if (kind === 'pressure') this.resourceStats.noticesSent += 1
-    if (kind === 'queue' || kind === 'answers') this.ops.onNoteDelivered(kind)
+    if (kind === 'queue' || kind === 'answers' || kind === 'agents') this.ops.onNoteDelivered(kind)
     this.trace(`note: ${kind} delivered with the ${channel === 'tool-batch' ? 'batch of tool results' : 'prompt'} (${text.length} chars)`)
     this.publisher.mark('pane', 'resources')
     return text
@@ -1505,10 +1512,15 @@ export class Runtime {
 
   /** When the session's usage was last read for the plan's rate-limit windows (the cache's default lifetime). */
   private planCheckedAt = 0
+  /** When the session's cost was last read mid-turn for the run budget. */
+  private budgetCostAt = 0
 
   /**
    * The run's objective: the person's latest substantial request (a short
    * "yes" or "continue" keeps the one before), cut to its first sentence.
+   * An objective Claude stated with its milestones holds while any of them is
+   * open: a request made meanwhile is part of that work, and Claude states
+   * another objective with its milestones when it starts other work.
    */
   private noteObjective(text: string): void {
     if (this.run === null) return
@@ -1516,6 +1528,7 @@ export class Runtime {
     if (objective === null) return
     const isSubstantial = text.trim().length >= 40 || this.run.objective === undefined || this.run.objective === null
     if (!isSubstantial || this.run.objective === objective) return
+    if (this.run.objectiveBy === 'claude' && this.plan().tasks.some(t => t.status !== 'completed')) return
     this.run = { ...this.run, objective, objectiveBy: 'person' }
     this.persistRun()
     this.publisher.mark('activity', 'hud')
@@ -1672,6 +1685,12 @@ export class Runtime {
     this.usage = { ...this.usage, tokens, pct: this.usage.window ? Math.round((100 * tokens) / this.usage.window) : this.usage.pct }
     if (this.run !== null) this.run = Chain.measure(this.run, { tokens, window: this.usage.window, costUsd: undefined }, Date.now())
     this.publisher.mark('hud')
+    // A cost limit is checked as Claude works: Claude Code measures the session's cost after the turn, not
+    // after each step (seen live: one measurement in a 13-step turn), and Finish the milestone must act mid-turn.
+    if (result.stopReason === 'tool_use' && this.ops.isCostWatched() && this.clock() - this.budgetCostAt >= BUDGET_COST_EVERY_MS) {
+      this.budgetCostAt = this.clock()
+      void this.refreshUsage().then(() => this.ops.checkBudget())
+    }
     if (result.stopReason === 'tool_use' && this.settings.autopilot.enabled) {
       this.stepAutopilot({ kind: 'context', tokens, window: this.usage.window, isInTurn: true, now: Date.now() })
     }
@@ -1724,8 +1743,10 @@ export class Runtime {
     this.publisher.mark('hud', 'pane', 'activity', 'spinner', 'chain', 'ops')
   }
 
-  onMeasure(input: Pick<SessionUsage, 'context' | 'cost'>): void {
+  onMeasure(input: Pick<SessionUsage, 'context' | 'cost'> & { changed?: readonly string[] }): void {
     this.applyUsage(input)
+    // The session's cost grew with no turn of the conversation running: Claude Code sent a request of its own.
+    if (input.changed?.includes('cost') === true && !this.turn.isRunning) this.cache.noteSideRequest(this.clock())
   }
 
   onCompacted(trigger: string, result: SessionCompactResult): void {
@@ -1746,15 +1767,25 @@ export class Runtime {
       })
       this.persistRun()
     }
+    this.afterCompaction(result)
+    if (isHandoffCompact) this.stepAutopilot({ kind: 'compactDone', now: Date.now() })
+    // A compaction the Cold Resume Guard asked for: the message it held goes now.
+    if (!isHandoffCompact && trigger !== 'auto') this.ops.onCompacted()
+  }
+
+  /**
+   * What any compaction changes here: the context's size, the cache (the next request rebuilds it, a
+   * lifecycle cost), and the notes about the old system prompt. Project Sentinel's own compactions
+   * (`$.session.compact`) call it themselves: Claude Code does not run the calling plugin's own
+   * `session.compact` hook for them ("skipped: re-entry", seen live).
+   */
+  afterCompaction(result: { tokensAfter?: number }): void {
     this.compose.deliveredFallback = false
     // The system prompt is composed afresh after a compaction: a note about the held section means nothing now.
     this.notesBox.drop('policies')
     this.usage = { ...this.usage, tokens: result.tokensAfter ?? undefined }
     this.cache.noteCompact(this.clock())
     this.publisher.mark('hud', 'chain')
-    if (isHandoffCompact) this.stepAutopilot({ kind: 'compactDone', now: Date.now() })
-    // A compaction the Cold Resume Guard asked for: the message it held goes now.
-    if (!isHandoffCompact && trigger !== 'auto') this.ops.onCompacted()
   }
 
   // -------------------------------------------------------------------------
@@ -2293,7 +2324,7 @@ export class Runtime {
    * `/cr decisions`, `/cr agents`), with `focusKey`'s field focused. False where no panel can be
    * shown (a headless run): the caller answers in words instead.
    */
-  async openOps(focusKey?: string): Promise<boolean> {
+  async openOps(focusKey?: string, section?: string): Promise<boolean> {
     const isChange = this.ui.tab !== 'activity' || this.ui.activitySub !== 'ops'
     this.ui.tab = 'activity'
     this.ui.activitySub = 'ops'
@@ -2303,10 +2334,38 @@ export class Runtime {
     if (host === null) return false
     void this.refreshAgents()
     const isOpen = (await host.panes().catch(() => [])).some(p => p.id === PANE_ID)
-    const isShown = isOpen || (await this.openPane(true))
-    if (isOpen && isChange) void host.scrollPaneToTop().catch(() => undefined)
-    if (isShown && focusKey !== undefined) host.after(300, () => void host.focusPane(focusKey).catch(() => false))
+    // A field takes the focus only while the panel holds the keyboard, and after a /cr command the
+    // prompt box holds it (seen live: "that site does not hold the keyboard"): opening the panel
+    // again with `focus` hands it over.
+    const isShown = isOpen && focusKey === undefined ? true : (await this.openPane(true)) || isOpen
+    if (isOpen && isChange && section === undefined) void host.scrollPaneToTop().catch(() => undefined)
+    // At its card (a chip, /cr agents), with the field focused (/cr queue), once the panel has drawn it.
+    if (isShown && section !== undefined) {
+      const key = cardKey(section)
+      this.onceDrawn(`scroll to ${key}`, () => host.scrollPaneTo(key), OPS_SCROLL_TRIES)
+    }
+    // Claude Code waits for a field not drawn yet itself: one try.
+    if (isShown && focusKey !== undefined) this.onceDrawn(`focus ${focusKey}`, () => host.focusPane(focusKey), 1)
     return isShown
+  }
+
+  /**
+   * Acts on an element of the panel once it is drawn. A panel opened a moment ago may not have
+   * drawn Operations yet, so a refusal is tried again, up to `tries` times and a little later each
+   * time; never once the person moved the panel themselves. Each refusal goes to the debug trace.
+   */
+  private onceDrawn(what: string, act: () => Promise<string | null>, tries: number, attempt = 1): void {
+    const host = this.host
+    if (host === null) return
+    host.after(OPS_DRAWN_MS * attempt, () => {
+      void act()
+        .catch((err: unknown) => (err instanceof Error ? err.message : String(err)))
+        .then(deny => {
+          if (deny === null) return
+          this.trace(`ops: ${what} refused (try ${attempt}): ${deny}`)
+          if (attempt < tries && !deny.includes('moved meanwhile')) this.onceDrawn(what, act, tries, attempt + 1)
+        })
+    })
   }
 
   setTab(tab: TabId): void {

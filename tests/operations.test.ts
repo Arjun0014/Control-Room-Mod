@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { OpsView } from '../types'
 import { COLD } from '../hooks/app/operations'
+import { budgetText } from '../hooks/app/opsCommands'
 import { Runtime } from '../hooks/app/runtime'
 import * as Views from '../hooks/app/views'
 import { hudCells, hudSegments, tiersOf } from '../hooks/ui/hud'
@@ -242,6 +243,72 @@ describe('Mission Queue', () => {
     await advance(800)
     expect(kept.submitted).toHaveLength(1)
     expect(kept.submitted[0]).toContain('Add the fixture')
+  })
+
+  test('the objective Claude stated holds through the person’s follow-ups while its milestones are open, and reaches the fresh context', async () => {
+    const f = await started()
+    const { rt } = f
+    milestones(rt, [
+      ['Read the notes', 'completed'],
+      ['Summarise notes-a', 'in_progress'],
+      ['Write the summary file', 'pending'],
+    ])
+    expect(rt.run).toMatchObject({ objective: 'Ship the orchestration layer', objectiveBy: 'claude' })
+    // A follow-up long enough to read as a request (seen live: it took the run's objective, and the fresh context lost it).
+    rt.onPromptSubmit('Rewrite NEXT_SESSION_PROMPT.md as a proper handoff of about ten lines, then reply DONE.', { kind: 'composer' })
+    expect(rt.run).toMatchObject({ objective: 'Ship the orchestration layer', objectiveBy: 'claude' })
+    expect(rt.ops.resumePreview().objective).toBe('Ship the orchestration layer')
+    await rt.ops.refreshNotes(true)
+    clears(f)
+    expect(await ownFresh(f)).toEqual({ ok: true })
+    expect(rt.takeFreshContext()).toContain(`toward the run's objective, "Ship the orchestration layer"`)
+    // With every milestone done, the person's next substantial request is the new objective.
+    milestones(rt, [
+      ['Read the notes', 'completed'],
+      ['Summarise notes-a', 'completed'],
+      ['Write the summary file', 'completed'],
+    ])
+    rt.onPromptSubmit('Translate the summary into French and keep every heading as it is.', { kind: 'composer' })
+    expect(rt.run).toMatchObject({ objective: 'Translate the summary into French and keep every heading as it is.', objectiveBy: 'person' })
+  })
+
+  test('an answer that waits while a watcher parks the run says it goes with the wake (seen live: it said only "your next message")', async () => {
+    const f = await started()
+    const { rt } = f
+    milestones(rt, [['Wait for the reviewer', 'waiting']])
+    rt.ops.decisionTool({ question: 'Include the version history?', options: ['Yes', 'No'] }, undefined)
+    rt.ops.armFrom('the reviewer reply', 'in 3h', 'fresh')
+    expect(rt.ops.answer('D-1', 'Yes')).toEqual({ ok: true })
+    expect(view(rt).decisions[0]!.route).toStartWith("Goes with W-1's wake (")
+    expect(view(rt).decisions[0]!.route).toEndWith('), or with your next message (or Send now)')
+  })
+
+  test('after the current milestone, while the run waits on a milestone: after that wait, not at once (seen live)', async () => {
+    const f = await started()
+    const { rt, kept, advance } = f
+    milestones(rt, [
+      ['Draft the digest', 'completed'],
+      ['Wait for the reviewer', 'waiting'],
+      ['Publish the digest', 'pending'],
+    ])
+    const added = rt.ops.queueAdd('Note the reviewer verdict at the top of the digest.', 'milestone')
+    expect(added).toMatchObject({ ok: true, when: 'After the current milestone: Wait for the reviewer' })
+    await advance(2000)
+    expect(kept.submitted).toEqual([])
+    // A turn of the person's that leaves the wait as it is: still waiting.
+    await turn(f, 'How long has the reviewer had it?')
+    await advance(2000)
+    expect(kept.submitted).toEqual([])
+    // The wait resolves in a turn: the item goes at its end.
+    await turn(f, 'The reviewer replied.', {
+      during: () => void milestones(rt, [
+        ['Draft the digest', 'completed'],
+        ['Wait for the reviewer', 'completed'],
+        ['Publish the digest', 'in_progress'],
+      ]),
+    })
+    await advance(2000)
+    expect(kept.submitted.at(-1)).toContain('Note the reviewer verdict at the top of the digest.')
   })
 
   test('the queue belongs to the run: it survives a reload, the person’s /clear, and goes into the next fresh context Project Sentinel starts', async () => {
@@ -665,6 +732,17 @@ describe('Watchers', () => {
     expect(g.kept.commands).toEqual(['clear'])
     expect(g.kept.submitted.at(-1)).toStartWith('Project Sentinel fresh resume (session 2): watcher W-1 woke the run, parked waiting for the build.')
     expect(g.rt.ops.current().watchers[0]!.decided?.reason).toContain('Keep warm could not hold this cache')
+    // The API refuses the hold's refresh (seen live, a test proxy's 400): the cause is that, not "Keep warm was off".
+    const h = await started(undefined, { tokens: 300_000, memory: FIVE_MINUTES })
+    await turn(h, 'Build it.', { prompt: 300_000 })
+    h.live.forkRefusal = 'unknown'
+    h.rt.ops.armFrom('the build', 'in 9m', 'warm')
+    await h.advance(10 * MIN)
+    expect(h.kept.submitted).toEqual([])
+    expect(h.rt.ops.current().watchers[0]).toMatchObject({ status: 'due' })
+    const needs = h.rt.ops.current().watchers[0]!.needs ?? ''
+    expect(needs).toStartWith('The cache went cold before the wake (idle 9m')
+    expect(needs).toEndWith("; Keep warm's refresh failed (The API refused the refresh)): waking here re-reads 300k tokens.")
   })
 
   test('overdue after a reload: it waits for the person, said in words; Wake now wakes it', async () => {
@@ -792,7 +870,7 @@ describe('Cold Resume Guard', () => {
     expect(await f.rt.ops.coldGuard(person('Carry on.'))).toBeNull()
     const q = f.kept.asked[0]!
     expect(q.header).toBe('Cache cold')
-    expect(q.question).toStartWith('The prompt cache expired: this session has 300k tokens of earlier context, and continuing re-reads all of it before the cache is warm again.')
+    expect(q.question).toStartWith("300k tokens need to be reprocessed: the prompt cache expired, and continuing sends this session's earlier context again before the cache is warm. Why:")
     expect(q.question).toContain('Why: idle 20m 0s; Keep warm was off.')
     expect(q.question).not.toContain('$')
     expect(q.options).toEqual([COLD.continue, COLD.compact, COLD.cancel])
@@ -800,12 +878,46 @@ describe('Cold Resume Guard', () => {
     expect(view(f.rt).cold).toMatchObject({ isOn: true, threshold: 100_000, isArmed: true, tokens: 300_000, usd: null })
   })
 
+  test('Claude Code’s own request while the conversation idles (its away summary, seen live) keeps the cache warm: not called cold until that lapses too', async () => {
+    const f = await started(undefined, { tokens: 300_000, memory: FIVE_MINUTES })
+    await turn(f, 'Build it.', { prompt: 300_000 })
+    await f.advance(3 * MIN)
+    // The session's cost grows with no turn running: Claude Code read this conversation's cache for a request of its own.
+    f.rt.onMeasure({ context: f.live.usage.context, cost: { usd: 0.6 }, changed: ['cost'] })
+    await f.advance(3 * MIN)
+    f.live.answer = COLD.continue
+    expect(await f.rt.ops.coldGuard(person('Carry on.'))).toBeNull()
+    expect(f.kept.asked).toEqual([])
+    expect(view(f.rt).cold.isArmed).toBe(false)
+    // Five minutes after that request too, it has surely lapsed.
+    await f.advance(3 * MIN)
+    await f.rt.ops.coldGuard(person('Carry on.'))
+    expect(f.kept.asked).toHaveLength(1)
+    // A measurement during a turn is the turn's own.
+    const g = await started(undefined, { tokens: 300_000, memory: FIVE_MINUTES })
+    await turn(g, 'Build it.', { prompt: 300_000, during: () => g.rt.onMeasure({ context: g.live.usage.context, cost: { usd: 0.6 }, changed: ['cost'] }) })
+    await g.advance(6 * MIN)
+    g.live.answer = COLD.continue
+    await g.rt.ops.coldGuard(person('Carry on.'))
+    expect(g.kept.asked).toHaveLength(1)
+    // A resumed session whose cache Claude Code said had expired: its own request since re-cached it.
+    const h = await started(undefined, { tokens: 616_000 })
+    await h.rt.onClassicSessionStart({ source: 'resume', sessionId: 'S1', model: OPUS, secondsSince: 3 * 3600, contextTokens: 616_000, isCacheExpired: true, usd: 4.62 })
+    await h.advance(4 * MIN)
+    h.rt.onMeasure({ context: h.live.usage.context, cost: { usd: 1.2 }, changed: ['cost'] })
+    h.live.answer = COLD.continue
+    expect(await h.rt.ops.coldGuard(person('Where were we?'))).toBeNull()
+    expect(h.kept.asked).toEqual([])
+  })
+
   test('a dollar figure only from Claude Code’s own price for this model', async () => {
     const f = await coldSession()
     f.rt.cache.noteWriteRate({ model: OPUS, ttl: '5m', usd: 4, tokens: 1_000_000, pricing: 'catalog' })
     f.live.answer = COLD.continue
     await f.rt.ops.coldGuard(person('Carry on.'))
-    expect(f.kept.asked[0]!.question).toContain("(about $1.20 at Claude Code's cache-write price for opus-5-5 (list price")
+    // An estimate, and a floor: never a figure that reads as exact.
+    expect(f.kept.asked[0]!.question).toContain("At Claude Code's cache-write price for opus-5-5 (list price")
+    expect(f.kept.asked[0]!.question).toContain('that is at least ~$1.20.')
     expect(view(f.rt).cold).toMatchObject({ usd: 1.2 })
     // A default-tier estimate is no price.
     const g = await coldSession()
@@ -866,7 +978,11 @@ describe('Cold Resume Guard', () => {
     expect(f.kept.asked[0]!.options).toEqual([COLD.continue, COLD.fresh, COLD.compact, COLD.cancel])
     expect(f.kept.asked[0]!.question).toContain("Start fresh: Claude restores run 1's 1 milestones")
     expect(held).toEqual({ drop: 'Starting fresh from the resume state: your message goes to the fresh context.' })
+    // Claude Code puts a dropped prompt's text back in the box (seen live): one Enter would send it twice.
+    f.live.box = 'Fix the parser bug.'
     await f.advance(1000)
+    expect(f.live.box).toBe('')
+    expect(f.kept.traces).toContain('cold resume: cleared the copy Claude Code put back in the prompt box; the message goes to the fresh context')
     expect(f.kept.commands).toEqual(['clear'])
     const first = f.kept.submitted.at(-1) ?? ''
     expect(first).toStartWith('Project Sentinel fresh resume (session 2): the user chose to start fresh instead of re-reading 300k tokens')
@@ -886,12 +1002,78 @@ describe('Cold Resume Guard', () => {
     const f = await coldSession()
     f.live.answer = COLD.compact
     expect(await f.rt.ops.coldGuard(person('Fix the parser bug.'))).toEqual({ drop: 'Compacting first (it reads the conversation once now): your message is sent after.' })
-    await f.advance(10)
-    expect(f.kept.compacted).toBe(1)
+    f.live.box = 'Fix the parser bug.'
+    // Not asked from inside the prompt's own dispatch (Claude Code refuses it there): once it is dropped.
+    expect(f.kept.compacted).toBe(0)
     expect(f.rt.ops.isFree()).toBe(false)
-    f.rt.onCompacted('manual', { messages: [], tokensBefore: 300_000, tokensAfter: 40_000 })
-    await f.advance(1000)
+    // Claude Code does not run Project Sentinel's own session.compact hook for a compaction it asked for
+    // ("skipped: re-entry", seen live: the message waited for a compaction it never heard of): its result says so.
+    await f.advance(2000)
+    expect(f.kept.compacted).toBe(1)
     expect(f.kept.submittedAsUser).toEqual(['Fix the parser bug.'])
+    expect(f.rt.ops.isFree()).toBe(true)
+    // Sent once: the copy Claude Code put back in the box was cleared before it.
+    expect(f.live.box).toBe('')
+    // Recorded as a compaction, and the cache's next rebuild is put down to it (a lifecycle cost).
+    expect(f.rt.run?.sessions.at(-1)?.transitions.at(-1)).toMatchObject({ kind: 'compact', tokensBefore: 900_000, tokensAfter: 40_000 })
+    expect(f.rt.cache.state.pending.map(p => p.cause)).toContain('compact')
+    expect(f.kept.traces).toContain('cold resume: compacted (900k → 40k tokens)')
+  })
+
+  test('Compact first while Claude Code still counts the dropped prompt as a turn: asked again; any other refusal gives up and says why', async () => {
+    const f = await coldSession()
+    f.live.answer = COLD.compact
+    f.live.compactRefusals = ['$.session.compact: a turn is running']
+    await f.rt.ops.coldGuard(person('Fix the parser bug.'))
+    await f.advance(5000)
+    expect(f.kept.compacted).toBe(1)
+    expect(f.kept.traces).toContain('cold resume: the compaction was refused ($.session.compact: a turn is running); trying again')
+    expect(f.kept.submittedAsUser).toEqual(['Fix the parser bug.'])
+    // A refusal that is not about a turn: no compaction, the message back in the box, the reason in the trace.
+    const g = await coldSession()
+    g.live.answer = COLD.compact
+    g.live.compactRefusals = ['compaction is disabled by policy']
+    await g.rt.ops.coldGuard(person('Fix the parser bug.'))
+    await g.advance(5000)
+    expect(g.kept.compacted).toBe(0)
+    expect(g.kept.traces).toContain('cold resume: the compaction did not run (compaction is disabled by policy); the message goes back to the prompt box')
+    expect(g.live.box).toBe('Fix the parser bug.')
+    expect(g.kept.submittedAsUser).toEqual([])
+    expect(g.rt.ops.isFree()).toBe(true)
+  })
+
+  test('the copy cleared after Start fresh or Compact first is only ever that message: a draft the person typed since stays', async () => {
+    const f = await coldSession()
+    f.live.answer = COLD.compact
+    await f.rt.ops.coldGuard(person('Fix the parser bug.'))
+    f.live.box = 'Fix the parser bug. And the lexer'
+    await f.advance(1000)
+    expect(f.live.box).toBe('Fix the parser bug. And the lexer')
+    expect(f.kept.filled).toEqual([])
+    // Cancel still puts the message back.
+    const g = await coldSession()
+    g.live.answer = COLD.cancel
+    await g.rt.ops.coldGuard(person('Fix the parser bug.'))
+    await g.advance(1000)
+    expect(g.live.box).toBe('Fix the parser bug.')
+  })
+
+  test('Claude Code configured for the five-minute cache (FORCE_PROMPT_CACHING_5M, seen live): the plan’s hour is not assumed, and the guard asks after five idle minutes', async () => {
+    const f = await started(undefined, { tokens: 300_000, host: { ttlConfig: { force5m: '1' } } })
+    f.live.usage = { ...f.live.usage, rateLimits: [{ kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-08T15:00:00Z' }] }
+    await turn(f, 'Build it.', { prompt: 300_000 })
+    expect(f.rt.cache.state.ttl).toEqual({ value: '5m', source: 'config' })
+    await f.advance(6 * MIN)
+    f.live.answer = COLD.continue
+    expect(await f.rt.ops.coldGuard(person('Carry on.'))).toBeNull()
+    expect(f.kept.asked[0]!.question).toContain('Why: idle 6m')
+    // Read again each session, never remembered as learned.
+    expect((f.kept.store['cache.v1'] as { ttl?: string } | undefined)?.ttl ?? null).toBeNull()
+    // The promptCacheTtl setting, and the plan's default where nothing is configured.
+    const g = await started(undefined, { tokens: 300_000, host: { ttlConfig: { setting: '1h' } } })
+    expect(g.rt.cache.state.ttl).toEqual({ value: '1h', source: 'config' })
+    const h = await started(undefined, { tokens: 300_000, host: { ttlConfig: { setting: '5m', enable1h: 'true' } } })
+    expect(h.rt.cache.state.ttl).toEqual({ value: '5m', source: 'config' })
   })
 
   test('never for a prompt typed while Claude works, nor for Project Sentinel’s own prompts, nor where no one can be asked', async () => {
@@ -909,8 +1091,8 @@ describe('Cold Resume Guard', () => {
     f.live.answer = COLD.continue
     await f.rt.ops.coldGuard(person('Where were we?'))
     const q = f.kept.asked[0]!.question
-    expect(q).toContain('616k tokens of earlier context')
-    expect(q).toContain("(about $4.62, Claude Code's own estimate)")
+    expect(q).toStartWith('616k tokens need to be reprocessed')
+    expect(q).toContain('Claude Code currently estimates at least ~$4.62.')
     expect(q).toContain('its last answer was 3 hours ago, longer than the cache lasts')
   })
 })
@@ -936,6 +1118,73 @@ describe('Agent Command Center', () => {
     expect(kept.sentToAgents).toEqual([{ agentId: 'a1', text: 'Stop after this file' }])
   })
 
+  test('/cr agents and the chips open Operations at their own card (seen live: the Agents card was off-screen below the watcher form)', async () => {
+    const f = await started()
+    const { rt, kept, advance } = f
+    await rt.runCommand('agents')
+    await advance(500)
+    // By the key the card is drawn under (seen live: the card's own name found nothing, and the panel stayed at its top).
+    expect(kept.scrolledTo).toEqual(['card-ops-agents'])
+    await rt.runCommand('decisions')
+    await advance(500)
+    expect(kept.scrolledTo).toEqual(['card-ops-agents', 'card-ops-review'])
+  })
+
+  test('a panel that has not drawn the card yet: the scroll is tried again a little later, the refusal traced; never past three tries, nor once the person moved it', async () => {
+    const f = await started()
+    const { rt, kept, live, advance } = f
+    live.paneRefusals = ['no element keyed card-ops-agents in control-room']
+    await rt.runCommand('agents')
+    await advance(350)
+    expect(kept.scrolledTo).toEqual([])
+    expect(kept.traces).toContain('ops: scroll to card-ops-agents refused (try 1): no element keyed card-ops-agents in control-room')
+    await advance(650)
+    expect(kept.scrolledTo).toEqual(['card-ops-agents'])
+    // Refused every time: three tries, then it stays where it is.
+    kept.traces.length = 0
+    live.paneRefusals = ['not drawn', 'not drawn', 'not drawn', 'not drawn']
+    await rt.runCommand('decisions')
+    await advance(5000)
+    expect(kept.traces.filter(t => t.startsWith('ops: scroll to card-ops-review'))).toHaveLength(3)
+    expect(live.paneRefusals).toEqual(['not drawn'])
+    // The person scrolled meanwhile: theirs stands.
+    kept.traces.length = 0
+    live.paneRefusals = ['the window moved meanwhile', 'not drawn']
+    await rt.runCommand('agents')
+    await advance(5000)
+    expect(kept.traces.filter(t => t.startsWith('ops: scroll'))).toEqual(['ops: scroll to card-ops-agents refused (try 1): the window moved meanwhile'])
+    expect(kept.scrolledTo).toEqual(['card-ops-agents'])
+  })
+
+  test('/cr queue and /cr watch alone focus their field, handing the open panel the keyboard first (seen live: the prompt box kept it, and the focus was refused)', async () => {
+    const { rt, kept, live, advance } = await started()
+    // The panel not open: it opens with the keyboard, and the field takes the focus.
+    await rt.runCommand('queue')
+    await advance(1000)
+    expect(kept.opens).toEqual([{ id: 'control-room', isFocus: true }])
+    expect(kept.focused).toEqual(['ops-queue-input'])
+    // Open already, the prompt box holding the keys: opened again with the keyboard, then focused.
+    live.isPaneOpen = true
+    await rt.runCommand('watch')
+    await advance(1000)
+    expect(kept.opens).toEqual([
+      { id: 'control-room', isFocus: true },
+      { id: 'control-room', isFocus: true },
+    ])
+    expect(kept.focused).toEqual(['ops-queue-input', 'ops-watch-label'])
+    // Claude Code waits for a field not drawn yet itself: a refusal is traced, not tried again.
+    live.paneRefusals = ['that site does not hold the keyboard']
+    await rt.runCommand('queue')
+    await advance(3000)
+    expect(kept.traces.filter(t => t.startsWith('ops: focus'))).toEqual(['ops: focus ops-queue-input refused (try 1): that site does not hold the keyboard'])
+    expect(kept.focused).toEqual(['ops-queue-input', 'ops-watch-label'])
+    // A chip with the panel open moves nothing of the keyboard: no open, only the scroll.
+    await rt.runCommand('agents')
+    await advance(1000)
+    expect(kept.opens).toHaveLength(3)
+    expect(kept.scrolledTo).toEqual(['card-ops-agents'])
+  })
+
   test('completed and failed: the answer’s first line, or why it ended; Claude Code’s refusal is shown as it words it', async () => {
     const { rt, kept, live } = await started()
     rt.ops.noteSpawn({ agentId: 'a1', model: null, isBackground: true, isFork: false, description: 'Find it', type: 'Explore', name: null, parentId: null })
@@ -954,6 +1203,27 @@ describe('Agent Command Center', () => {
     live.stopResult = { deny: 'No task a1 is running.' }
     await rt.ops.stopAgent('a1')
     expect(kept.toasts.at(-1)).toBe('Could not stop the agent: No task a1 is running.')
+  })
+
+  test('a reload keeps what the session saw of its agents: a running background agent keeps Stop and Message, its time and model (seen live: they were lost)', async () => {
+    const f = await started()
+    const { kept, live, advance } = f
+    f.rt.ops.noteSpawn({ agentId: 'g1', model: 'claude-sonnet-5-5', isBackground: true, isFork: false, description: 'gamma sleeper', type: 'general-purpose', name: null, parentId: null })
+    // Claude Code 2.1.295 lists a background agent with no name (seen live), so only the spawn says it takes TaskStop.
+    live.agents = [{ id: 'g1', type: 'general-purpose', description: 'gamma sleeper', status: 'running' }]
+    await advance(30_000)
+    const g = await reloaded(f)
+    await g.rt.refreshAgents()
+    expect(view(g.rt).agents[0]).toMatchObject({ id: 'g1', status: 'running', model: 'claude-sonnet-5-5', isBackground: true, canStop: true, canMessage: true })
+    expect(view(g.rt).agents[0]!.startedAt).not.toBeNull()
+    expect(kept.traces).toContain('ops: 1 agent carried across the reload')
+    // Claude Code tells the main conversation a plugin's TaskStop as "stopped by Claude" (seen live): Claude hears it was the user.
+    await g.rt.ops.messageAgent('g1', 'Codeword PINEAPPLE')
+    await g.rt.ops.stopAgent('g1')
+    const note = g.rt.notesForBatch().find(n => n.startsWith('Project Sentinel · From the Agents panel'))
+    expect(note).toBe(`Project Sentinel · From the Agents panel, the user sent the agent "gamma sleeper" (g1) this message: "Codeword PINEAPPLE"; then the user stopped the agent "gamma sleeper" (g1). These were the user's actions, not yours.`)
+    // Told once.
+    expect(g.rt.notesForBatch().some(n => n.includes('Agents panel'))).toBe(false)
   })
 })
 
@@ -983,9 +1253,36 @@ describe('Run Budget', () => {
     expect(kept.submitted).toEqual([])
     expect(rt.ops.budgetHeld).toBe('queued work')
     expect(hud(rt).alert).toMatchObject({ kind: 'budget', text: 'Run budget reached: queued work waits for you' })
+    // Never "goes now" while it waits (seen live: /cr queue answered "Due: goes now." at the limit).
+    expect(view(rt).queue[0]?.when).toBe('Waits for you: the run budget is reached (Continue the run, or /cr budget continue)')
+    expect(rt.ops.queueAdd('And this', 'turn')).toMatchObject({ ok: true, when: 'Waits for you: the run budget is reached (Continue the run, or /cr budget continue)' })
+    expect(budgetText(view(rt))).toContain('Reached: Cost $31.00 of $30. Queued work waits for you: /cr budget continue')
+    expect(budgetText(view(rt))).toContain('Cost $31.00 of $30\n')
     rt.ops.approveBudget()
     await advance(800)
     expect(kept.submitted[0]).toContain('Then this')
+  })
+
+  test('a cost limit crossed mid-turn is seen as Claude works, not only when Claude Code measures the session after the turn (seen live)', async () => {
+    const f = await started()
+    const { rt, live, advance } = f
+    rt.ops.setBudget({ costUsd: 10, atLimit: 'finish' })
+    await rt.onTurnStart({ turnId: 'tb', text: 'Work through the milestones.' })
+    const step = (index: number) => {
+      const e = { turnId: 'tb', index, model: OPUS, messageCount: 3 + index }
+      const sent = rt.stepRequest(e)
+      rt.stepResponse(e, sent, { turnId: 'tb', index, answer: '', toolUses: [], stopReason: 'tool_use', usage: { input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 500, model: OPUS } })
+    }
+    step(0)
+    await flush()
+    expect(rt.notesForBatch()).toEqual([])
+    // The session's cost grows past the limit; Claude Code raises no measurement until the turn ends.
+    live.usage = { ...live.usage, cost: { usd: 12 } }
+    await advance(6000)
+    step(1)
+    await flush()
+    expect(rt.notesForBatch().some(n => n.startsWith('Project Sentinel · Run budget reached (Cost $12.00 of $10). Finish the milestone you are on'))).toBe(true)
+    expect(rt.turn.isRunning).toBe(true)
   })
 
   test('Finish the milestone, then pause: Claude is told with its next tool results; nothing stops a tool call or the turn', async () => {
@@ -1018,6 +1315,14 @@ describe('Run Budget', () => {
     expect(await rt.ops.budgetGuard(person('Keep going.'))).toBeNull()
     expect(await rt.ops.budgetGuard(person('And more.'))).toBeNull()
     expect(kept.asked).toHaveLength(2)
+  })
+
+  test('a cost limit reads as money (seen live: "Cost $1.43 of $1.2")', async () => {
+    const { rt } = await started()
+    rt.ops.setBudget({ costUsd: 1.2 })
+    expect(budgetText(view(rt))).toContain(' of $1.20')
+    rt.ops.setBudget({ costUsd: 30 })
+    expect(budgetText(view(rt))).toContain(' of $30')
   })
 
   test('Notify only: a toast, and nothing else changes', async () => {

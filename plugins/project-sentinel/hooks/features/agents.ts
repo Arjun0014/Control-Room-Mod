@@ -74,10 +74,46 @@ export function noteSpawn(
   }
 }
 
+/**
+ * The ledger as `$.state` kept it across a reload (never trusted: each entry is checked). Entries the
+ * ledger already holds stay as they are.
+ */
+export function restoreLedger(ledger: AgentLedger, raw: unknown): number {
+  if (!Array.isArray(raw)) return 0
+  const str = (v: unknown, max: number): string | null => (typeof v === 'string' ? clean(v, max) : null)
+  const time = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null)
+  let n = 0
+  for (const r of raw.slice(-40)) {
+    if (typeof r !== 'object' || r === null) continue
+    const x = r as Record<string, unknown>
+    const id = str(x.id, 80)
+    const spawnedAt = time(x.spawnedAt)
+    if (id === null || id === '' || spawnedAt === null || ledger.has(id)) continue
+    ledger.set(id, {
+      id,
+      spawnedAt,
+      model: str(x.model, 80),
+      isBackground: typeof x.isBackground === 'boolean' ? x.isBackground : null,
+      isFork: x.isFork === true,
+      description: str(x.description, 80) ?? '',
+      type: str(x.type, 40) ?? '',
+      name: str(x.name, 40),
+      parentId: str(x.parentId, 80),
+      endedAt: time(x.endedAt),
+      result: str(x.result, 140),
+      isFailed: x.isFailed === true,
+    })
+    n += 1
+  }
+  return n
+}
+
 /** The model an agent's own requests report (its loop's turn.step). */
-export function noteModel(ledger: AgentLedger, agentId: string, model: string): void {
+export function noteModel(ledger: AgentLedger, agentId: string, model: string): boolean {
   const a = ledger.get(agentId)
-  if (a !== undefined && a.model !== model) ledger.set(agentId, { ...a, model })
+  if (a === undefined || a.model === model) return false
+  ledger.set(agentId, { ...a, model })
+  return true
 }
 
 /** An agent's loop ended (its turn.complete): the first line of its answer, or why it stopped. */

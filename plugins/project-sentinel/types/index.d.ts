@@ -388,7 +388,7 @@ export type RefreshView = {
 export type CacheView = {
   warmth: CacheWarmth
   ttl: '5m' | '1h' | null
-  ttlSource: 'engine' | 'observed' | 'probe' | 'stored' | 'plan' | null
+  ttlSource: 'engine' | 'config' | 'observed' | 'probe' | 'stored' | 'plan' | null
   expiresAt: number | null
   lastRequestAt: number | null
   cachedTokens: number
@@ -931,6 +931,22 @@ export type OpsUiView = {
   messaging: string | null
 }
 
+/** What this session saw of an agent's start and end (its spawn, model, result), kept in `$.state` so a reload keeps it. */
+export type AgentMemo = {
+  id: string
+  spawnedAt: number
+  model: string | null
+  isBackground: boolean | null
+  isFork: boolean
+  description: string
+  type: string
+  name: string | null
+  parentId: string | null
+  endedAt: number | null
+  result: string | null
+  isFailed: boolean
+}
+
 /** The prompt cache's last request, kept in `$.state` so a reload of the plugin keeps knowing when it lapses. */
 export type CacheMemo = { sessionId: string; lastRequestAt: number; lastPrefix: number; model: string | null; ttl: '5m' | '1h' | null }
 
@@ -940,6 +956,8 @@ declare module 'claude-code' {
       ops: OpsView
       /** The prompt cache's last request in this context: a reload keeps it (Cold Resume Guard, Keep warm under a watcher). */
       cacheMemo: CacheMemo | null
+      /** What this session saw of its agents' starts and ends: a reload keeps Stop, Message and the details. */
+      agents: AgentMemo[] | null
       hud: HudModel
       pane: PaneModel
       resources: ResourcesView

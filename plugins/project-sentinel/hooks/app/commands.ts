@@ -92,7 +92,7 @@ export function cacheText(rt: Runtime): string {
   const now = rt.clock()
   const state = cacheState(cache, now)
   const s = rt.settings.cache
-  const lifetime = cache.ttl === null ? 'not known yet' : `${cache.ttl === '1h' ? '1 hour' : '5 minutes'} (${cache.ttlSource === 'engine' ? 'as Claude Code reports it' : cache.ttlSource === 'probe' ? 'learned by Keep warm' : cache.ttlSource === 'stored' ? 'learned earlier' : cache.ttlSource === 'plan' ? "the plan's default" : 'observed'})`
+  const lifetime = cache.ttl === null ? 'not known yet' : `${cache.ttl === '1h' ? '1 hour' : '5 minutes'} (${cache.ttlSource === 'engine' ? 'as Claude Code reports it' : cache.ttlSource === 'config' ? 'as Claude Code is configured' : cache.ttlSource === 'probe' ? 'learned by Keep warm' : cache.ttlSource === 'stored' ? 'learned earlier' : cache.ttlSource === 'plan' ? "the plan's default" : 'observed'})`
   const lines: [string, string][] = [
     ['State', state.text],
     ['Lifetime', lifetime],

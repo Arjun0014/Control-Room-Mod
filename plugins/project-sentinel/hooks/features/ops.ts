@@ -623,6 +623,14 @@ export function modeOf(w: Pick<Watcher, 'strategy' | 'decided'>): { mode: 'warm'
 
 export const STRATEGY_WORDS: Record<WatchStrategy, string> = { smart: 'Smart', warm: 'Keep warm', fresh: 'Fresh' }
 
+/** How a watcher resumes the run, in a few words: "Keep warm · cache held to the wake", "Smart · wakes fresh". */
+export function howWords(w: { strategy: WatchStrategy; decided: { mode: 'warm' | 'fresh'; hold: boolean } | null }): string {
+  if (w.strategy === 'warm') return 'Keep warm · cache held to the wake'
+  if (w.strategy === 'fresh') return 'Fresh · nothing spent while it sleeps'
+  if (w.decided === null) return 'Smart · decides at the wake'
+  return `Smart · ${w.decided.mode === 'fresh' ? 'wakes fresh' : w.decided.hold ? 'holds the cache warm' : 'wakes in this context'}`
+}
+
 // ---------------------------------------------------------------------------
 // Run Budget
 

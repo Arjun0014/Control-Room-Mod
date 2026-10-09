@@ -179,9 +179,12 @@ missed the cache, and the change it saw before it is the cause (a model or effor
 model router's switch, changed policies, the output style, a new tool, compaction), else idling
 past the cache's lifetime, else *unexplained*. The lifetime is the one Claude Code reports at a
 model switch, or learned: a request that still read the cache after more than five idle minutes
-proves the one-hour cache, and that is remembered across sessions. Until then, a session on a
-claude.ai plan (Claude Code reports the plan's rate-limit windows) starts at the one-hour cache,
-named as the plan's default; a miss after five idle minutes corrects it to five. While a turn is
+proves the one-hour cache, and that is remembered across sessions. Where Claude Code is told which
+lifetime to use, that is the lifetime (*as Claude Code is configured*), read in Claude Code's own
+order: `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, the `promptCacheTtl` setting,
+`ENABLE_PROMPT_CACHING_1H`. Otherwise, until it is learned, a session on a claude.ai plan (Claude
+Code reports the plan's rate-limit windows) starts at the one-hour cache, named as the plan's
+default; a miss after five idle minutes corrects it to five. While a turn is
 running (a long command, a long answer) the cache counts as warm unless a five-minute lifetime is
 known: Claude Code's own requests keep it warm, so the panel never says it may have lapsed then.
 
@@ -198,10 +201,13 @@ turning it on again lets it try afresh.
 *Surely lapsed* means one of: the cache's lifetime is known and its expiry passed; more than an
 hour passed since the last request (longer than any lifetime); or Claude Code said so when the
 session was resumed (`prompt_cache_likely_expired`). A cache that may still be warm is never called
-cold. The Cold Resume Guard says why it lapsed (idle past the lifetime, Keep warm off or paused,
-its idle limit, a handoff), and gives a dollar figure only from Claude Code's own estimate of
-re-caching for that model (seen at a model switch or a resume, priced from your managed pricing or
-the list price, at most 30 days old); otherwise it says tokens.
+cold: a request Claude Code sends of its own while you are away (its away summary, its prompt
+suggestion; the session's cost grows with no turn running) reads the conversation from the cache,
+so the expiry counts from that too. The Cold Resume Guard leads with the tokens to reprocess, says
+why the cache lapsed (idle past the lifetime, Keep warm off or paused, its idle limit, a handoff),
+and gives a price only as Claude Code's estimate of re-caching for that model, as a floor (*at
+least ~$0.46*: seen at a model switch or a resume, priced from your managed pricing or the list
+price, at most 30 days old); otherwise it says tokens.
 
 ### Operations (`ops`)
 

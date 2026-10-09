@@ -60,7 +60,7 @@ export function actionsOf(rt: Runtime): Actions {
     },
     copy: (text, surface) => void rt.host?.copy(text, surface),
 
-    openOps: () => void rt.openOps(),
+    openOps: section => void rt.openOps(undefined, section),
     toggleOpsRow: id => {
       const open = rt.ui.ops.expanded
       rt.ui.ops.expanded = open.includes(id) ? open.filter(x => x !== id) : [...open, id].slice(-12)

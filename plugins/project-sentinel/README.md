@@ -12,6 +12,8 @@ re-read, the agents running, an optional run budget), and **Kit** is an optional
 that shows what Claude is doing. It works in the terminal and in Claude
 Desktop's Code tab, needs Claude Code 2.1.289 or newer, and was called Control Room before 1.4.0.
 
+Install it from a session: `/plugin install project-sentinel --marketplace Arjun0014/project-sentinel`.
+
 Everything stays on your machine. Project Sentinel sends nothing anywhere itself; the only
 requests that leave are Claude Code's own model requests, as listed under
 [What it does on your machine](#what-it-does-on-your-machine).
@@ -124,7 +126,9 @@ It asks in Claude Code's own question dialog: a call set to **Ask**; before a me
 large conversation whose prompt cache has lapsed (the Cold Resume Guard); before your next message
 once a run budget set to *Ask* is reached; `/cr decide`; and a watcher time that reads two ways.
 Where no one can be asked (a headless run) it does not ask. The Cold Resume Guard's *Cancel* puts
-your message back in the prompt box (`$.prompt.fill`).
+your message back in the prompt box (`$.prompt.fill`). After *Start fresh* or *Compact first*, which
+send that message themselves, it reads the prompt box (`$.prompt.read`) and empties it only while
+it holds just that message, which Claude Code put back there; a draft you typed is left alone.
 
 ### What its tool-call hook does with the calls it sees
 
@@ -194,7 +198,9 @@ edits, to place them inside or outside the project; Claude Code's managed policy
 whether its policy section can be added; Claude Code's list of the session's agents (id, type,
 description, status, parent, name); what Claude Code says of a resumed session's cache (seconds
 since the last answer, context size, whether the cache likely expired, its own estimate of
-re-caching) and its estimate at a model switch; Claude's last message as a turn ends, in memory,
+re-caching) and its estimate at a model switch; the cache lifetime Claude Code is set to use (the
+environment variables `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL` and
+`ENABLE_PROMPT_CACHING_1H`, and the `promptCacheTtl` setting); Claude's last message as a turn ends, in memory,
 for the Watcher Scout to see whether Claude said it will check back at a time; and the output of
 the programs above. In a session that
 still runs Control Room it reads Control Room's status bar, and stands by until the session

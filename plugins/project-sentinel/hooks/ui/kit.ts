@@ -60,7 +60,8 @@ export type Actions = {
   resetSettings: () => void
   copy: (text: string, surface: RenderSurface) => void
   /** Activity → Operations: opens the panel there (from the status bar's chips and alerts). */
-  openOps: () => void
+  /** Opens Activity → Operations, at one of its cards when given (`ops-agents`, `ops-review`, ...). */
+  openOps: (section?: string) => void
   /** Opens or closes a row's details (a watcher, a queued item, an agent, a decision). */
   toggleOpsRow: (id: string) => void
   // Mission Queue

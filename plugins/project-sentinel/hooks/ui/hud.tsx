@@ -300,6 +300,9 @@ function chipsThatFit(chips: readonly HudChip[], room: number): HudChip[] {
   return out
 }
 
+/** The Operations card a chip opens at: pressed, Agents 2 shows the agents, not the top of Operations. */
+const CHIP_SECTION: Record<string, string> = { review: 'ops-review', queued: 'ops-queue', watcher: 'ops-watchers', agents: 'ops-agents', budget: 'ops-budget' }
+
 /**
  * A chip: its mark in its tone, then its words. One that `opens` is a control: pressed, it opens
  * Activity → Operations (Review, a watcher's countdown, queued work, agents, the budget). Its words
@@ -314,7 +317,7 @@ function chipEl(kit: Kit, chip: HudChip): RenderElement {
     return (
       <Box key={`chip-${chip.key}-box`} flexDirection="row" flexShrink={0}>
         {markEl}
-        <Button key={`chip-${chip.key}`} label={chip.text} plain onPress={kit.actions.openOps} />
+        <Button key={`chip-${chip.key}`} label={chip.text} plain onPress={() => kit.actions.openOps(CHIP_SECTION[chip.key])} />
       </Box>
     )
   }
@@ -427,14 +430,14 @@ export function alertActions(kit: Kit, alert: NonNullable<HudModel['alert']>): A
     case 'budget':
       return [
         { key: 'budget-go', label: 'Continue anyway', onPress: a.budgetApprove, isPrimary: true },
-        { key: 'budget-open', label: `Budget ${G.chevron}`, onPress: a.openOps },
+        { key: 'budget-open', label: `Budget ${G.chevron}`, onPress: () => a.openOps('ops-budget') },
       ]
     case 'suggest':
       return [
         alert.hasTime === true
           ? { key: 'suggest-take', label: 'Create watcher', onPress: a.suggestTake, isPrimary: true }
           : { key: 'suggest-1h', label: 'In 1h', onPress: () => a.suggestAt('in 60m'), isPrimary: true },
-        { key: 'suggest-change', label: 'Change time', onPress: a.openOps },
+        { key: 'suggest-change', label: 'Change time', onPress: () => a.openOps('ops-watchers') },
         { key: 'suggest-ignore', label: 'Ignore', onPress: a.suggestIgnore },
       ]
     case 'load':

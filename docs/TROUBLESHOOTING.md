@@ -101,6 +101,11 @@ anything the engine refused, and why.
 Claude Code reports how many tokens each request read from the cache and wrote to it. The rest
 (the expiry, the hit ratio, why it was rebuilt) is derived from those, and the panel says so.
 
+- **"as Claude Code is configured"**: Claude Code is told which lifetime to use, and Project
+  Sentinel reads the same settings in Claude Code's order: `FORCE_PROMPT_CACHING_5M`, then
+  `CLAUDE_CODE_PROMPT_CACHE_TTL` (`5m` or `1h`), then the `promptCacheTtl` setting, then
+  `ENABLE_PROMPT_CACHING_1H`. Before 1.6.2 a claude.ai plan was taken for the one-hour cache even
+  under such a setting.
 - **"Lifetime not known yet"**: Claude Code reports the cache's lifetime only at a model switch.
   Otherwise Project Sentinel learns it: a request that still reads the cache after more than five
   idle minutes proves the one-hour cache, and with Keep warm on, one refresh six minutes after the
@@ -148,7 +153,9 @@ Claude Code reports how many tokens each request read from the cache and wrote t
 - **Fork HIT, Main cache AWAITING VERIFICATION / VERIFIED / FAILED**: a refresh is a fork of the
   conversation's last request; HIT means it read the conversation from the cache. That alone proves
   nothing for the conversation: its own next request does. VERIFIED: it read the cache after the
-  expiry the refresh replaced. *Read it*: you came back before that expiry, no proof yet. NOT
+  expiry the refresh replaced, or after the expiry the first of a chain of refreshes replaced (a
+  watcher's wake just after the newest refresh of a long hold). *Read it*: you came back before
+  that expiry, no proof yet. NOT
   TESTED: something changed first (it names what). FAILED: it rebuilt before the refreshed expiry
   with nothing changed, and Keep warm pauses itself with that reason. `/cr cache` lists each
   refresh with both expiries and what the next request read.
@@ -167,7 +174,10 @@ Claude Code reports how many tokens each request read from the cache and wrote t
   and moved the expiry an hour on; the conversation's request five minutes after the old expiry
   read 89,817: VERIFIED. That refresh went at the session's effort (`medium`) while the
   conversation's requests went at Frontier Max's (`xhigh`): on Sonnet 5.5 effort is not part of
-  what the cache keys on.
+  what the cache keys on. Under a Keep warm watcher (1.6.2, five-minute cache, 145k tokens): three
+  refreshes four minutes apart each read about 144,960 tokens and wrote at most 5, and the wake
+  twelve minutes after the conversation's last request read 144,965 from the cache: VERIFIED, by
+  the chain.
 
 ## Kit, the companion
 
@@ -236,12 +246,17 @@ due`, `ops: W-1 wakes the run in this context`, `cold resume: asking …`).
 | "The cache went cold before the wake" | Keep warm did not hold the cache to the wake (it paused itself, or the five-minute cache was past its cap). Waking here would re-read the whole context, so it asks; a Smart watcher with healthy resume state wakes fresh instead. |
 | A watcher did not wake while I was away | Watchers are timers in Claude Code's running process: closed, or the machine asleep, nothing wakes. When the session is open again, an overdue watcher reads *Watcher was due 43 minutes ago* and waits for **Wake now**. No daemon or scheduled task is installed. |
 | "Which one?" for a watcher time | `at 2:30` could be 02:30 or 14:30: pick one, or type `2:30pm` or `14:30`. Times are local, at least a minute and at most a week ahead. |
-| The Cold Resume Guard did not ask | It asks only when the cache has surely lapsed (its known lifetime passed, an hour of quiet, or Claude Code's word at a resume) and the context is at least *Warn above* (100k by default); never for a prompt typed while Claude works, never in a headless run. A cache that may still be warm is never called cold. |
+| The Cold Resume Guard did not ask | It asks only when the cache has surely lapsed (its known lifetime passed, an hour of quiet, or Claude Code's word at a resume) and the context is at least *Warn above* (100k by default); never for a prompt typed while Claude works, never in a headless run. A cache that may still be warm is never called cold: Claude Code's own requests while you are away (its away summary reads the whole conversation from the cache) keep it warm, so the guard waits until those have lapsed too. |
 | The Cold Resume Guard shows tokens, not dollars | It prices only from Claude Code's own estimate for that model, which comes with a model switch or a resumed session. Until one is seen (or after 30 days) it says tokens. |
-| Continuing cost more than the Cold Resume Guard said | The figure is Claude Code's own estimate, of the context it reports at a resume. The request that follows re-writes the whole prompt, which can be larger: seen live, the estimate was $0.36 for 90k tokens, and the request re-wrote 129k tokens, adding $0.52 to the cost Claude Code reports. Read the figure as a lower bound. |
+| Continuing cost more than the Cold Resume Guard said | The figure is Claude Code's own estimate, of the context it reports at a resume, and the question says *at least*. The request that follows re-writes the whole prompt, which can be larger: seen live, the estimate was $0.36 for 90k tokens, and the request re-wrote 129k tokens, adding $0.52 to the cost Claude Code reports. The token count comes first in the question for that reason. |
+| *Compact first* put my message back | Before 1.6.2 it always did: the compaction was asked for from inside the held prompt, where Claude Code refuses it. Now it compacts once the prompt is dropped, then sends the message once. If it still says *The compaction did not run (…)*, the words in brackets are Claude Code's reason. Compacting reads the whole conversation once (seen live: 112k uncached plus 72k from the cache for a 185k context), then the context is small. |
+| After *Start fresh* or *Compact first* my message was still in the prompt box | Claude Code puts a dropped prompt's text back in the box. Since 1.6.2 Project Sentinel clears it while it holds just that message, because the message goes on by itself; a draft you typed since is left alone. Do not send it again: it reaches Claude once. |
 | *Start fresh from resume state* is missing from its question | The resume state is not healthy; the question says why. Context → *Ready to resume* shows the same. |
 | My message was not sent and is not in the prompt box | Where the box cannot take text back (some Desktop hosts), the message is kept in Operations (and the status bar's alert line): **Put back**, **Send now** or **Discard**. It is kept in memory only, so a restart loses it. |
-| An agent has no Stop or Message | Claude Code's `TaskStop` and `SendMessage` take background agents and teammates only; a foreground agent ends with its turn. An agent shows as running only while Claude Code lists it so. |
+| An agent has no Stop or Message | Claude Code's `TaskStop` and `SendMessage` take background agents and teammates only; a foreground agent ends with its turn. An agent shows as running only while Claude Code lists it so. Since 1.6.2 a reload of the plugin keeps what the session saw of its agents (before, a running background agent lost both after a reload). |
+| Claude says it does not know who stopped an agent | Claude Code tells the conversation that an agent was *stopped by Claude* even when you pressed **Stop**. Since 1.6.2 Claude is told, with its next tool results or your next message, what you did from the Agents panel. |
+| A chip or `/cr agents` opened Operations, but not at its card | Since 1.6.2 it scrolls to the card once the panel has drawn it, trying again for about two seconds; a card near the end of Operations shows where the panel's end allows. If it stays at the top, `claude --debug-file <path>` says why: `ops: scroll to card-ops-agents refused (try 1): …` with Claude Code's reason. |
+| `/cr queue` opened Operations, but typing went to the prompt box | Before 1.6.2, with the panel already open, the prompt box kept the keyboard and Claude Code refused to focus the field. Now the panel asks for the keyboard first; Claude Code gives it only while the prompt box is empty. The trace says so if it is refused: `ops: focus ops-queue-input refused (try 1): …`. |
 | "Run 41 left open work" | An ended run of this project left watchers, queued work or open decisions. Nothing moves by itself: resume that session to carry it on there, or **Bring them here**. |
 
 ## Permission Policy

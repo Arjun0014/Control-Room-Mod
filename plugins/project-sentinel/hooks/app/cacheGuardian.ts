@@ -69,9 +69,13 @@ export class CacheGuardian {
     const host = this.ctx.host()
     if (host === null) return
     this.memory = Cache.memoryOf(await host.storeGet(STORE_ENTRIES.cache).catch(() => undefined))
+    this.configured = Cache.configuredTtl(await host.cacheTtlConfig().catch(() => ({})))
     this.state = this.fresh()
     this.ctx.changed()
   }
+
+  /** The lifetime Claude Code is configured to use (an environment variable, `promptCacheTtl`), read at load; null when none is set. */
+  configured: Cache.TtlValue | null = null
 
   /** True once the session reported a claude.ai plan's rate-limit windows: the one-hour cache is its default. */
   isPlan = false
@@ -79,6 +83,8 @@ export class CacheGuardian {
   private fresh(): Cache.CacheState {
     const m = this.memory
     const fresh = Cache.emptyCache({ ttl: m.ttl === null ? null : { value: m.ttl, source: 'stored' }, verified: m.verified })
+    // What Claude Code is configured to use outranks a remembered lifetime and the plan's default.
+    if (this.configured !== null) return Cache.withTtl(fresh, this.configured, 'config')
     return this.isPlan ? Cache.withTtl(fresh, '1h', 'plan') : fresh
   }
 
@@ -100,9 +106,9 @@ export class CacheGuardian {
     const s = this.state
     const next: Cache.CacheMemory = {
       v: 1,
-      // What this install learned is remembered; the plan's default is derived again each session.
-      ttl: s.ttl !== null && s.ttl.source !== 'plan' ? s.ttl.value : this.memory.ttl,
-      ttlSource: s.ttl !== null && !Cache.isTtlHint(s.ttl.source) ? s.ttl.source : this.memory.ttlSource,
+      // What this install learned is remembered; the plan's default and the configured lifetime are read again each session.
+      ttl: s.ttl !== null && s.ttl.source !== 'plan' && s.ttl.source !== 'config' ? s.ttl.value : this.memory.ttl,
+      ttlSource: s.ttl !== null && !Cache.isTtlHint(s.ttl.source) && s.ttl.source !== 'config' ? s.ttl.source : this.memory.ttlSource,
       verified: s.keepWarm.verified === 'unknown' ? this.memory.verified : s.keepWarm.verified,
       verifiedAt: s.keepWarm.verified !== this.memory.verified && s.keepWarm.verified !== 'unknown' ? this.ctx.now() : this.memory.verifiedAt,
       effortRebuilds: this.memory.effortRebuilds,
@@ -134,9 +140,25 @@ export class CacheGuardian {
     this.ctx.changed()
   }
 
+  /**
+   * When Claude Code last sent a request of its own while the conversation was idle (its away
+   * summary or prompt suggestion: the session's cost grew with no turn running). Such a request
+   * reads this conversation's cache (seen live: an away summary read all 184k tokens three idle
+   * minutes in), so the cache may be warm past the expiry derived from the conversation's own
+   * requests: nothing calls it surely lapsed before this plus its lifetime. Keep warm does not plan
+   * on it (it may not have read the cache).
+   */
+  sideRequestAt: number | null = null
+
+  noteSideRequest(at: number): void {
+    if (this.state.lastRequestAt !== null && at <= this.state.lastRequestAt) return
+    this.sideRequestAt = at
+  }
+
   /** A fresh context (/clear): its cache starts empty; the system prompt may change freely. */
   resetForContext(): void {
     this.cancel()
+    this.sideRequestAt = null
     this.state = this.fresh()
     this.steps.clear()
     this.delivered = null
@@ -436,13 +458,13 @@ export class CacheGuardian {
       const answered = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens > 0
       if (answered) {
         this.lastError = null
-        this.observe({ at, input: u.input_tokens, read: u.cache_read_input_tokens, written: u.cache_creation_input_tokens, model: null, effort: null, isRefresh: true, isProbe: plan.isProbe || isProbe, plannedAt })
+        this.observe({ at, endAt: this.ctx.now(), input: u.input_tokens, read: u.cache_read_input_tokens, written: u.cache_creation_input_tokens, model: null, effort: null, isRefresh: true, isProbe: plan.isProbe || isProbe, plannedAt })
         const r = this.state.keepWarm.log[0]
         host.trace?.(
           `keep warm: fork ${r?.isHit === true ? 'HIT' : 'MISS'} · read ${u.cache_read_input_tokens}, wrote ${u.cache_creation_input_tokens}, uncached ${u.input_tokens} · ${r?.newExpiry != null ? `refreshed expiry ${new Date(r.newExpiry).toISOString()} · awaiting the conversation's next request` : (r?.note ?? 'no new expiry')}`,
         )
       } else if (!result.isAnswered) {
-        this.lastError = result.reason === 'api-error' ? `The API refused the refresh (${result.error})` : `No reply (${result.reason})`
+        this.lastError = result.reason === 'api-error' ? `The API refused the refresh${result.error === undefined || result.error === 'unknown' ? '' : ` (${result.error})`}` : `No reply (${result.reason})`
       }
     }
     // A failed attempt tries again in two minutes while the cache can still be saved.

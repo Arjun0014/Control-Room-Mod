@@ -20,7 +20,7 @@ import type { PromptOrigin, Timer } from 'claude-code'
 import type { ColdResumeView, ForeignOpsView, HudOps, OpsView, QueueTarget, Tone, WatchStrategy } from '../../types'
 import * as fmt from '../core/format'
 import { clean } from '../core/text'
-import { type AgentLedger, agentRows, isAlive, noteEnd, noteModel, noteSpawn } from '../features/agents'
+import { type AgentLedger, agentRows, isAlive, noteEnd, noteModel, noteSpawn, restoreLedger } from '../features/agents'
 import * as Cache from '../features/cache'
 import * as Chain from '../features/chain'
 import { doingOf } from '../features/digest'
@@ -43,6 +43,14 @@ export const COLD = {
 
 /** How long after a boundary Project Sentinel's own prompt goes, so the turn's end settles first. */
 const BOUNDARY_MS = 700
+/** Compact first waits this long after the prompt it replaces is dropped, then asks Claude Code to compact. */
+const COMPACT_AFTER_DROP_MS = 600
+/** How many times Compact first asks while Claude Code still counts the dropped prompt as a turn under way. */
+const COMPACT_TRIES = 3
+
+/** A session that compacts only inside a turn (headless, SDK, Desktop's host protocol): `$.session.compact` refuses, /compact does it. */
+export const isTurnOnlyCompact = (message: string): boolean => /not available in a headless|runs inside a turn/i.test(message)
+
 /** A watcher's tick: countdowns move on, and a time missed by a sleeping machine is caught. */
 const TICK_MS = 30_000
 /** Past this, a cache with no known lifetime has surely lapsed (no lifetime is longer than an hour). */
@@ -150,6 +158,7 @@ export class Operations {
     }
     if (sending.length + answering.length > 0) this.rt.trace(`ops: ${[...sending, ...answering].join(', ')} were on their way when the last runtime ended: marked unsure, not sent again`)
     this.commit(ops)
+    await this.restoreAgents()
     await this.refreshNotes(true)
     this.findForeign()
     this.rearm()
@@ -319,10 +328,15 @@ export class Operations {
     })
   }
 
-  /** The milestone under way (its key and words), for After the current milestone. */
+  /**
+   * The milestone under way (its key and words), for After the current milestone. With none in
+   * progress, the one the run waits on or is blocked on: queued "once this milestone is done" while
+   * the run waits for a reviewer means after that wait (seen live: it went at once).
+   */
   private currentMilestone(): { key: string; subject: string } | null {
     const p = this.rt.progress()
-    return p.current === null ? null : { key: p.current.key, subject: p.current.subject }
+    const t = p.current ?? p.waiting.at(-1) ?? p.blocked.at(-1) ?? null
+    return t === null ? null : { key: t.key, subject: t.subject }
   }
 
   /** The run's fingerprint now. */
@@ -407,6 +421,7 @@ export class Operations {
   /** A note of the layer's left with tool results or a prompt: what it carried is with Claude now. */
   onNoteDelivered(kind: string): void {
     const now = this.now()
+    if (kind === 'agents') this.agentActions = []
     if (kind === 'queue' || kind === 'answers') this.rt.trace(`ops: ${kind === 'queue' ? 'queued work' : 'answers'} delivered with the tool results`)
     if (kind === 'queue') this.commit(Ops.markQueue(this.current(), this.current().queue.filter(q => q.status === 'sending' && q.via === 'note').map(q => q.id), 'delivered', now, 'note'))
     if (kind === 'answers') this.commit(Ops.markDecisions(this.current(), this.current().decisions.filter(d => d.status === 'sending' && d.via === 'note').map(d => d.id), 'delivered', now, 'note'))
@@ -538,6 +553,8 @@ export class Operations {
     // After the handoff: the next fresh context Project Sentinel starts, a watcher's fresh wake included.
     if (q.target === 'fresh') return isHeld && Ops.modeOf(holder).mode === 'fresh' ? `Goes into ${holder.id}'s fresh wake (${clockAhead(holder.wakeAt, this.now())})` : Ops.TARGET_WORDS.fresh
     if (isHeld) return `Waits for ${holder.id}'s wake (${clockAhead(holder.wakeAt, this.now())})`
+    // At a limit set to Ask or Finish, automation waits for the person: never "goes now" when it will not.
+    if (q.status === 'due' && !this.forcedIds.has(q.id) && this.isBudgetHolding()) return 'Waits for you: the run budget is reached (Continue the run, or /cr budget continue)'
     if (q.status === 'due') return rt.turn.isRunning ? 'Due: goes when this turn ends' : 'Due: goes now'
     if (q.target === 'milestone' && q.milestone !== null) return `After the current milestone: ${clean(q.milestone, 50)}`
     if (q.target === 'boundary' && rt.turn.isRunning && this.currentMilestone() !== null) return 'At the next boundary: this milestone or this turn'
@@ -1025,7 +1042,10 @@ export class Operations {
     let usd: number | null = null
     let priceNote: string | null = null
     const r = this.resumed
-    if (r !== null && c.requests === 0 && c.lastRequestAt === null && r.isExpired && (r.tokens ?? 0) > 0) {
+    // Claude Code's own request since (its away summary, seen live) read this cache: it may be warm until that plus its lifetime.
+    const side = rt.cache.sideRequestAt
+    const isSideWarm = (since: number): boolean => side !== null && side > since && now < side + (Cache.ttlMs(c) ?? SURELY_LAPSED_MS)
+    if (r !== null && c.requests === 0 && c.lastRequestAt === null && r.isExpired && (r.tokens ?? 0) > 0 && !isSideWarm(r.at)) {
       isCold = true
       tokens = r.tokens ?? tokens
       cause = r.secondsSince === null ? 'the session was resumed after its cache lapsed' : `its last answer was ${agoWords(r.secondsSince * 1000)}, longer than the cache lasts`
@@ -1036,7 +1056,7 @@ export class Operations {
     } else if (c.lastRequestAt !== null && c.lastPrefix >= Cache.MIN_PREFIX) {
       const warmth = Cache.warmthOf(c, now, rt.turn.isRunning)
       const idle = now - c.lastRequestAt
-      isCold = warmth === 'cold' || (c.ttl === null && idle > SURELY_LAPSED_MS)
+      isCold = (warmth === 'cold' || (c.ttl === null && idle > SURELY_LAPSED_MS)) && !isSideWarm(c.lastRequestAt)
       if (isCold) cause = this.coldCause(idle)
     }
     if (isCold && usd === null) {
@@ -1057,8 +1077,9 @@ export class Operations {
     const s = rt.settings.cache
     const idle = `idle ${fmt.duration(idleMs)}`
     if (c.state.keepWarm.verified === 'no') return `${idle}; Keep warm paused itself (${clean(c.state.keepWarm.pausedReason ?? 'it did not hold the cache', 80)})`
-    if (!s.keepWarm && this.hold() === null) return `${idle}; Keep warm was off`
+    // Before "off": a watcher that held the cache is no longer armed at its own wake (seen live: a refused refresh read as "Keep warm was off").
     if (c.lastError !== null) return `${idle}; Keep warm's refresh failed (${clean(c.lastError, 60)})`
+    if (!s.keepWarm && this.hold() === null) return `${idle}; Keep warm was off`
     const reason = c.plan.at === null ? c.plan.reason : ''
     if (/^Paused (after|at)/.test(reason)) return `${idle}; Keep warm stopped at its ${fmt.minutes(s.maxIdleMinutes)} idle limit`
     if (/handoff/i.test(reason)) return `${idle}; Keep warm stood down for a handoff`
@@ -1080,11 +1101,10 @@ export class Operations {
     if (!cold.isArmed || cold.tokens === null) return null
     const health = this.resumeHealth()
     const preview = this.resumePreview()
-    // "about $4.62 at Claude Code's cache-write price …", "about $0.36, Claude Code's own estimate"
-    const note = cold.priceNote === null ? '' : cold.priceNote.startsWith('at ') ? ` ${cold.priceNote}` : `, ${cold.priceNote}`
-    const cost = cold.usd === null ? '' : ` (about ${fmt.cost(cold.usd)}${note})`
+    // Tokens are the fact; a price is only ever an estimate, and the re-read costs at least that (seen live: Claude Code's $0.36 was $0.52).
+    const cost = Cache.coldCostWords(cold)
     const fresh = health.isHealthy ? ` Start fresh: ${previewLine(preview)}, then your message.` : ` A fresh start is not offered: ${health.problems[0] ?? 'the resume state is not ready'}.`
-    const question = `The prompt cache expired: this session has ${fmt.tokens(cold.tokens)} tokens of earlier context, and continuing re-reads all of it before the cache is warm again${cost}. Why: ${cold.cause ?? 'it lapsed'}.${fresh} Compacting still reads it once now, then the context is smaller. Continue?`
+    const question = `${fmt.tokens(cold.tokens)} tokens need to be reprocessed: the prompt cache expired, and continuing sends this session's earlier context again before the cache is warm.${cost === null ? '' : ` ${cost.sentence}`} Why: ${cold.cause ?? 'it lapsed'}.${fresh} Compact first reads it all once more to summarise it, then the context is smaller. Continue?`
     const options = [COLD.continue, ...(health.isHealthy ? [COLD.fresh] : []), COLD.compact, COLD.cancel]
     rt.trace(`cold resume: asking before a message re-reads ${cold.tokens} tokens (${cold.cause ?? 'lapsed'})`)
     let answer: string
@@ -1106,15 +1126,37 @@ export class Operations {
       case COLD.fresh:
         if (!health.isHealthy) return null
         void this.freshForMessage(e.text, hasAttachments, cold.tokens)
+        this.clearRestored(e.text, 'goes to the fresh context')
         return { drop: 'Starting fresh from the resume state: your message goes to the fresh context.' }
       case COLD.compact:
-        void this.compactForMessage(e.text, hasAttachments)
+        this.compactForMessage(e.text, hasAttachments)
+        this.clearRestored(e.text, 'is sent after the compaction')
         return { drop: 'Compacting first (it reads the conversation once now): your message is sent after.' }
       default:
         rt.trace(`cold resume: ${isDismissed ? 'the question was dismissed' : answer === COLD.cancel ? 'cancelled' : `answered "${clean(answer, 60)}"`}; nothing sent, the message goes back to the prompt box`)
         this.putBack(e.text, hasAttachments)
         return { drop: hasAttachments ? 'Not sent. Your message is back in the prompt box (attachments were not kept).' : 'Not sent. Your message is back in the prompt box.' }
     }
+  }
+
+  /**
+   * The message goes on by Project Sentinel's own hand (Start fresh, Compact first), but Claude Code
+   * puts a dropped prompt's text back in the prompt box, where one Enter would send it a second time
+   * (seen live). The box is cleared while it still holds just that text, never what the person typed.
+   */
+  private clearRestored(text: string, how: string): void {
+    const host = this.rt.host
+    if (host === null || text.trim() === '') return
+    host.after(400, () => {
+      void host
+        .readPrompt()
+        .then(async box => {
+          if (box.text.trim() !== text.trim()) return
+          const cleared = await host.fillPrompt('')
+          this.rt.trace(`cold resume: ${cleared.isFilled ? 'cleared the copy Claude Code put back in the prompt box' : 'could not clear the copy Claude Code put back in the prompt box'}; the message ${how}`)
+        })
+        .catch(() => undefined)
+    })
   }
 
   /** The message goes back in the prompt box; where it cannot, it is kept in Operations (memory only). */
@@ -1151,30 +1193,55 @@ export class Operations {
     }
   }
 
-  /** Compact first, then the person's message, as theirs. */
-  private async compactForMessage(text: string, hasAttachments: boolean): Promise<void> {
+  /**
+   * Compact first, then the person's message, as theirs. The compaction starts once the prompt it
+   * replaces is dropped: asked from inside that prompt's dispatch, Claude Code refuses it as a turn
+   * under way (seen live: Compact first gave up at once and nothing was compacted).
+   */
+  private compactForMessage(text: string, hasAttachments: boolean): void {
     const rt = this.rt
     const host = rt.host
     if (host === null) return
     this.afterCompact = { text, at: this.now() }
     rt.trace('cold resume: compacting before the message')
-    const giveUp = () => {
+    const giveUp = (why: string) => {
       if (this.afterCompact?.text !== text) return
       this.afterCompact = null
-      this.toast('The compaction did not finish. Your message is back in the prompt box.', 8000)
+      rt.trace(`cold resume: the compaction did not run (${why}); the message goes back to the prompt box`)
+      this.toast(`The compaction did not run (${clean(why, 80)}). Your message is back in the prompt box.`, 8000)
       this.putBack(text, hasAttachments)
     }
-    host.after(10 * 60_000, giveUp)
+    host.after(10 * 60_000, () => giveUp('it did not finish within 10 minutes'))
     const instructions = 'Keep the current task, its state, decisions and unfinished work.'
-    try {
-      const result = await host.compact(instructions)
-      if (result.skip !== undefined) giveUp()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      // A session that compacts only inside a turn (Desktop's): the /compact command does it.
-      if (/not available in a headless|runs inside a turn/i.test(message)) await host.compactCommand(instructions).catch(() => giveUp())
-      else giveUp()
+    const attempt = async (n: number): Promise<void> => {
+      if (this.afterCompact?.text !== text) return
+      try {
+        const result = await host.compact(instructions)
+        if (result.skip !== undefined) {
+          giveUp(`a hook skipped it: ${result.skip}`)
+          return
+        }
+        // Claude Code runs every session.compact hook but the caller's for this one ("skipped: re-entry",
+        // seen live: the message waited for a compaction it never heard of), so it is seen here.
+        rt.trace(`cold resume: compacted (${result.tokensBefore === undefined ? '?' : fmt.tokens(result.tokensBefore)} → ${result.tokensAfter === undefined ? '?' : fmt.tokens(result.tokensAfter)} tokens)`)
+        rt.onCompacted('manual', result)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        // A session that compacts only inside a turn (Desktop's, a headless one): the /compact command does it.
+        if (isTurnOnlyCompact(message)) {
+          await host.compactCommand(instructions).catch(e => giveUp(e instanceof Error ? e.message : String(e)))
+          return
+        }
+        // The dropped prompt's dispatch had not settled yet: try again shortly.
+        if (n < COMPACT_TRIES && /\bturn\b|busy|in progress|running|loading|submit/i.test(message)) {
+          rt.trace(`cold resume: the compaction was refused (${clean(message, 100)}); trying again`)
+          host.after(1500 * n, () => void attempt(n + 1))
+          return
+        }
+        giveUp(message)
+      }
     }
+    host.after(COMPACT_AFTER_DROP_MS, () => void attempt(1))
   }
 
   /** A compaction finished: a message the Cold Resume Guard held for it goes now, as the person's. */
@@ -1246,13 +1313,22 @@ export class Operations {
     }
   }
 
+  /** A cost limit is set and not reached yet: the Runtime reads the session's cost as Claude works. */
+  isCostWatched(): boolean {
+    const b = this.current().budget
+    return b !== null && b.costUsd !== null && !b.reached.includes('cost')
+  }
+
+  /** A limit set to Ask or Finish is reached and the person has not said go on: automation waits for them. */
+  isBudgetHolding(): boolean {
+    const b = this.current().budget
+    if (b === null || b.atLimit === 'notify') return false
+    return Ops.checkBudget(b, this.metrics()).reached.some(k => !b.approved.includes(k))
+  }
+
   /** Whether automation may start a turn now: not past a limit set to Ask or Finish, unless the person said go on. */
   mayAutomate(what: string): boolean {
-    const b = this.current().budget
-    if (b === null || b.atLimit === 'notify') return true
-    const check = Ops.checkBudget(b, this.metrics())
-    const blocking = check.reached.filter(k => !b.approved.includes(k))
-    if (blocking.length === 0) return true
+    if (!this.isBudgetHolding()) return true
     if (this.budgetHeld !== what) {
       this.budgetHeld = what
       this.rt.trace(`ops: run budget reached, ${what} waits for you`)
@@ -1314,16 +1390,48 @@ export class Operations {
 
   noteSpawn(input: { agentId: string; model: string | null; isBackground: boolean; isFork: boolean; description: string; type: string; name: string | null; parentId: string | null }): void {
     noteSpawn(this.agentLedger, { ...input, at: Date.now() })
+    this.saveAgents()
     this.rt.publisher.mark('ops')
   }
 
   noteAgentModel(agentId: string, model: string): void {
-    noteModel(this.agentLedger, agentId, model)
+    if (noteModel(this.agentLedger, agentId, model)) this.saveAgents()
   }
 
   noteAgentEnd(agentId: string, reason: 'answer' | 'aborted' | 'refusal' | 'error', answer: string): void {
     noteEnd(this.agentLedger, agentId, { at: Date.now(), reason, answer })
+    this.saveAgents()
     this.rt.publisher.mark('ops', 'hud')
+  }
+
+  /**
+   * The ledger rides `$.state`: a reload of the plugin keeps what this session saw of its agents (seen
+   * live: after a reload a running background agent lost Stop and Message, and its time and model).
+   */
+  private saveAgents(): void {
+    void this.rt.host?.saveAgentLedger([...this.agentLedger.values()]).catch(() => undefined)
+  }
+
+  /** At a load: what the runtime before this one saw of the session's agents. */
+  async restoreAgents(): Promise<void> {
+    const host = this.rt.host
+    if (host === null) return
+    const n = restoreLedger(this.agentLedger, await host.loadAgentLedger().catch(() => null))
+    if (n > 0) this.rt.trace(`ops: ${n} agent${n === 1 ? '' : 's'} carried across the reload`)
+  }
+
+  /** What the person did to agents here, until Claude has been told (one note: a newer note of a kind replaces a waiting one). */
+  private agentActions: string[] = []
+
+  private tellAgents(action: string): void {
+    this.agentActions = [...this.agentActions, action].slice(-6)
+    this.rt.tell('agents', prompts.agentActionsNote(this.agentActions))
+  }
+
+  private agentName(id: string): string {
+    const listed = this.rt.agents.list.find(a => a.id === id)
+    const seen = this.agentLedger.get(id)
+    return clean(listed?.name ?? seen?.name ?? (listed?.description || seen?.description || id), 60)
   }
 
   /** Stop: Claude Code's TaskStop, which takes background agents and teammates by id. Its refusal is said as it words it. */
@@ -1335,6 +1443,7 @@ export class Operations {
     const refusal = 'deny' in result && result.deny !== undefined ? result.deny : 'isError' in result && result.isError === true ? (result.text ?? 'refused') : null
     this.log(refusal === null ? `Stopped agent ${id}` : `Claude Code did not stop agent ${id}: ${clean(String(refusal), 100)}`)
     if (refusal !== null) this.toast(`Could not stop the agent: ${clean(String(refusal), 100)}`)
+    else this.tellAgents(`stopped the agent "${this.agentName(id)}" (${id})`)
     await rt.refreshAgents()
   }
 
@@ -1346,6 +1455,7 @@ export class Operations {
     const result = await host.sendToAgent(id, t).catch(error => ({ isDelivered: false, reason: error instanceof Error ? error.message : String(error) }))
     this.log(result.isDelivered ? `Message sent to agent ${id}` : `Message to agent ${id} not delivered: ${clean(result.reason ?? 'refused', 100)}`)
     if (!result.isDelivered) this.toast(`Not delivered: ${clean(result.reason ?? 'refused', 100)}`)
+    else this.tellAgents(`sent the agent "${this.agentName(id)}" (${id}) this message: "${clean(t, 300)}"`)
   }
 
   // -------------------------------------------------------------------------
@@ -1362,7 +1472,11 @@ export class Operations {
       if (d.status === 'sending') return d.via === 'note' ? 'Goes with Claude’s next tool results' : 'On its way'
       if (d.status !== 'answered') return null
       if (rt.turn.isRunning) return 'Goes with Claude’s next tool results'
-      return d.isBlocking ? 'Goes to Claude now' : 'Goes with your next message (or Send now)'
+      if (d.isBlocking) return 'Goes to Claude now'
+      // A parked run: the wake carries it (the fresh context's first message, or the wake prompt as context).
+      const holder = Ops.holdingWatcher(ops)
+      if (holder !== null && holder.status === 'armed') return `Goes with ${holder.id}'s wake (${clockAhead(holder.wakeAt, now)}), or with your next message (or Send now)`
+      return 'Goes with your next message (or Send now)'
     }
     const dView = (d: Ops.Decision) => ({ id: d.id, question: d.question, context: d.context, options: d.options, allowText: d.allowText, urgency: d.urgency, isBlocking: d.isBlocking, milestone: d.milestone, status: d.status, answer: d.answer, createdAt: d.createdAt, answeredAt: d.answeredAt, deliveredAt: d.deliveredAt, route: route(d) })
     const wView = (w: Ops.Watcher) => {

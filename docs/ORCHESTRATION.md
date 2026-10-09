@@ -1,9 +1,9 @@
 # Orchestration (1.6.0)
 
-> **Status: released in 1.6.1** (1.6.0 was pushed, not tagged). Built as described here, tested over
-> the in-memory host and the engine (`tests/ops.test.ts`, `tests/operations.test.ts`,
-> `tests/opsui.test.ts`) and live with a real model (the changelog's *Verified live* lists what was
-> proven, and how).
+> **Status: released in 1.6.1** (1.6.0 was pushed, not tagged); **1.6.2** drove each part live and
+> fixed what that found. Built as described here, tested over the in-memory host and the engine
+> (`tests/ops.test.ts`, `tests/operations.test.ts`, `tests/opsui.test.ts`) and live with a real
+> model (the changelog's *Verified live* lists what was proven, and how).
 
 How Project Sentinel orchestrates a long run over time: work queued for later, decisions Claude
 leaves for the person, runs parked until a result is due, the cost of coming back to a cold cache,
@@ -177,21 +177,27 @@ Before a message is sent into a context whose prompt cache has surely lapsed, an
 context is large (100k tokens by default), Project Sentinel asks first, in Claude Code's own
 question dialog, and nothing has been sent yet:
 
-> **Cache cold** · The prompt cache expired: this session has 616k tokens of earlier context,
-> and continuing re-reads all of it before the cache is warm again (about $4.62 at Claude Code's
-> cache-write price for opus-5-5). Why: Keep warm was off. Continue?
+> **Cache cold** · 616k tokens need to be reprocessed: the prompt cache expired, and continuing
+> sends this session's earlier context again before the cache is warm. Claude Code currently
+> estimates at least ~$4.62. Why: its last answer was 3 hours ago, longer than the cache lasts.
+> Compact first reads it all once more to summarise it, then the context is smaller. Continue?
 >
 > **Continue full session** · **Start fresh from resume state** · **Compact first (reads it once)** · **Cancel**
 
 *Surely lapsed*: the cache's lifetime is known and its expiry passed, or more than an hour passed
 (longer than any lifetime), or Claude Code says so when a session is resumed
-(`prompt_cache_likely_expired`). A cache that may be warm is never called cold. The dollar figure is
-shown only from Claude Code's own estimate (`estimated_cache_write_usd`, which it computes from the
+(`prompt_cache_likely_expired`). A cache that may be warm is never called cold: Claude Code's own
+requests while the conversation idles (its away summary reads it all from the cache) count as
+keeping it warm. Tokens come first; the dollar figure is a floor (*at least ~*), and is shown only
+from Claude Code's own estimate (`estimated_cache_write_usd`, which it computes from the
 managed `modelPricing` or the list price) for this model, at a model switch or a resume; otherwise
 the dialog gives tokens only. Nothing is priced by Project Sentinel itself.
 
 *Start fresh* is offered only when the resume state is healthy (below). *Compact first* says what
-it is: compaction itself reads the old conversation once, and makes the context smaller after.
+it is: compaction itself reads the old conversation once, and makes the context smaller after; it
+starts once the held prompt is dropped, and the message goes once the compaction's own result is in
+(Claude Code does not run a plugin's own `session.compact` hook for its own compaction). After
+either, the copy Claude Code puts back in the prompt box is cleared, so the message goes once.
 *Cancel* sends nothing and puts the message back in the prompt box (or, where the box cannot take
 it, keeps it in Needs review with **Put back** and **Send now**). The guard is off for prompts typed
 while Claude works (its requests keep the cache warm) and where no one can be asked (a headless

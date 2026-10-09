@@ -79,7 +79,7 @@ function operationsCard(kit: Kit, data: PaneData): RenderElement | null {
     key: 'operations',
     title: 'Operations',
     accent: ACCENT.activity,
-    link: { label: 'Open', onPress: kit.actions.openOps },
+    link: { label: 'Open', onPress: () => kit.actions.openOps() },
     rows: k => [
       ops.review === 0
         ? null

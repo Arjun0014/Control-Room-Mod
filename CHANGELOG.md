@@ -6,7 +6,156 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and ver
 `plugins/project-sentinel/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/project-sentinel` checks this when tagging a release.
 
-## [Unreleased]
+## [1.6.2] - 2026-10-09
+
+A live verification pass over 1.6.1's orchestration layer: each system driven against real Claude
+Code 2.1.295 (a renamed copy of the plugin, every request through the recording proxy), and fixed
+where it fell short. Each fix has a test that fails without it.
+
+### Fixed
+
+- **Compact first did not compact.** The Cold Resume Guard asked Claude Code to compact from inside
+  the prompt it was holding back, where Claude Code refuses a compaction as a turn under way:
+  *Compact first* gave up at once and put the message back. It now compacts once that prompt is
+  dropped (and asks again while Claude Code still counts it as running; any other refusal is said,
+  with its reason).
+- **…and once it did, the message never went.** Claude Code does not run a plugin's own
+  `session.compact` hook for a compaction the plugin asked for, and the held message waited for
+  that hook. The compaction's own result now sends it. Seen live: 185k tokens compacted to 2.9k,
+  then the message went once. Context Autopilot's compact handoff had the same blind spot: the
+  context meter kept the old size and the next cache rebuild was not put down to the compaction.
+- **A message could be sent twice after Start fresh or Compact first.** Claude Code puts a dropped
+  prompt's text back in the prompt box; Project Sentinel delivers that same message itself, so one
+  Enter sent it a second time. The box is cleared while it still holds just that message (never a
+  draft typed since).
+- **The run's objective was lost at a fresh start.** Any longer follow-up message became the run's
+  objective in place of the one Claude stated with its milestones, and a fresh context (Start
+  fresh, a fresh wake, a handoff) carries only Claude's: the fresh context started with none. An
+  objective Claude stated now holds while any of its milestones is open.
+- **The Cold Resume Guard called a warm cache cold.** Claude Code's own requests while the
+  conversation idles (its away summary, seen live reading all 184k tokens three minutes into a
+  break) keep the cache warm, and Project Sentinel did not count them. A cost increase with no turn
+  running now counts as such a request: nothing calls the cache surely lapsed until that has
+  lapsed too.
+- **The cache lifetime Claude Code is configured to use was ignored.** On a claude.ai plan Project
+  Sentinel assumed the one-hour cache even where `FORCE_PROMPT_CACHING_5M`,
+  `CLAUDE_CODE_PROMPT_CACHE_TTL`, the `promptCacheTtl` setting or `ENABLE_PROMPT_CACHING_1H` say
+  otherwise (read in Claude Code's own order): the status bar read *1h left* on a five-minute
+  cache, and the guard stayed silent for the hour.
+- **Finish the milestone, then pause did not act on a cost limit mid-turn.** Claude Code measures the
+  session's cost after a turn, not after each step (seen live: one measurement in a 13-step turn), so
+  a cost limit crossed mid-turn went unnoticed until the turn ended. While a cost limit is set, the
+  cost is read as Claude works (at most every five seconds; the read costs nothing).
+- **Agents after a reload of the plugin.** A running background agent lost **Stop** and **Message**,
+  its elapsed time and its model: what the session saw of its agents now survives a reload.
+- **Claude was not told who stopped or messaged an agent.** Claude Code reports a plugin's
+  `TaskStop` as *stopped by Claude*, and Claude said it could not tell who did it. Claude is now told,
+  with its next tool results or prompt, what you did from the Agents panel.
+- **Keep warm's hold read as unproven.** A watcher woke six seconds after the third refresh of a
+  12-minute hold and read the whole 145k-token cache, yet the panel said *no proof yet*: only the
+  newest refresh was checked, and the conversation came back before the expiry that one replaced.
+  A read after the expiry the first refresh of the chain replaced proves the chain.
+- **A network blip could pause Keep warm with a false reason.** Claude Code retries a request that
+  fails to connect, so a refresh sent before the expiry can reach the API after it (seen live:
+  sent during a two-minute outage, answered after the cache had lapsed, rebuilding it). Project
+  Sentinel read that as *the fork found the cache gone before its expiry*, a failure; two would have
+  paused Keep warm. A missed refresh now counts as in time only if it was answered in time.
+- **A refused refresh read as "Keep warm was off".** When the API refused a watcher's refresh and the
+  cache went cold before the wake, the wake said *Keep warm was off*: the watcher holding the cache
+  is no longer armed at its own wake. It now says *Keep warm's refresh failed (The API refused the
+  refresh)*.
+- **Work queued for after the current milestone went at once while the run waited.** With no
+  milestone in progress and one waiting (*Wait for the reviewer*), *After the current milestone*
+  fell back to the next safe boundary, which is *now* when nothing runs (seen in an integrated live
+  run). A milestone the run waits on or is blocked on now counts as the one under way.
+- An answer waiting while a watcher parks the run said only *Goes with your next message*; the wake
+  carries it (into a fresh context, or with the wake prompt), and it now says so: *Goes with W-1's
+  wake (19:35), or with your next message*.
+- `/cr budget` printed a cost limit as a bare number (*Cost $1.43 of $1.2*); it reads as money.
+- `/cr queue` and `/cr watch` alone did not put you in their field while the Control Room panel was
+  already open: after a command the prompt box holds the keyboard, and Claude Code refuses to focus
+  a panel that does not (*that site does not hold the keyboard*; the refusal was not looked at).
+  Project Sentinel now asks for the keyboard first; seen live, what you type then goes into the field.
+- At a budget limit set to *Ask* or *Finish*, `/cr queue` and the queue said *Due: goes now* for work
+  that waits for you; they now say it waits, and how to let it go. *Queued work waits for you* starts
+  its sentence with a capital.
+
+### Changed
+
+- **The Cold Resume Guard leads with tokens.** *184k tokens need to be reprocessed …*, and a price
+  only as Claude Code's estimate, as a floor: *Claude Code currently estimates at least ~$0.46.*
+  (seen live: its $0.36 estimate cost $0.52). *Compact first* says it reads it all once more.
+- `/cr agents`, `/cr decisions` and the status bar's chips open Operations at their own card
+  (Agents, Needs review, Watchers, Mission Queue, Run budget), not at its top. The first try in a
+  live console opened it at its top: the scroll named the card, not the key the panel draws it
+  under. It now names that key (seen live: the budget chip opened a closed panel at its Run budget
+  card, `/cr decisions` brought Needs review to the top of an open one), tries again while a panel
+  opened a moment ago has not drawn the card yet (never once you moved the panel yourself), and
+  writes any refusal to Claude Code's debug log.
+- A watcher says how it resumes in a few words: *Keep warm · cache held to the wake*, *Fresh ·
+  nothing spent while it sleeps*, *Smart · wakes fresh* (was *Fresh: wakes fresh*).
+- Operations' log of recent steps stands apart from the Run budget card, as *Recent operations*: it
+  read as the budget's history.
+- The plugin's own README (its listing in a plugin directory) says how to install it in one step;
+  `claude plugin validate --strict` asked for that line.
+
+### Verified live
+
+Claude Code 2.1.295 (the newest; its Mod declarations are identical to 1.6.1's), Sonnet 5.5, a
+renamed copy of the plugin with its own store, every request through the recording proxy
+(fingerprints and token counts only; `.build/live/evidence/`, not in the repository). Where a run
+found a fault, it was fixed and run again.
+
+- **Cold Resume Guard, Start fresh** (CF1): a session of 185k tokens resumed after its five-minute
+  cache lapsed. Typing a message brought the question, and no request carried the old context:
+  `/clear`, then one fresh request (2 messages, Frontier Max and the policy section in it, the
+  `contextAutopilot` block) carrying the message once (once in the new transcript, never in the
+  old). The fresh context continued the same milestones, did the work queued for the handoff, got
+  the work queued after a milestone with its tool results when that milestone completed, and left
+  the open decision and the armed watcher alone.
+- **Cold Resume Guard, Compact first** (CF2 found both compaction faults; CF3 after the fixes): the
+  compaction ran once the prompt was dropped (185k → 2.9k tokens; the request sent 112k uncached
+  and read 72k), then the message went once; the copy in the prompt box was cleared; the cache
+  view read *Compacted · Expected*; run state, queue and decision intact.
+- **Agent Command Center** (AG1): two background agents listed with status, type, elapsed time,
+  model and what each was doing. **Message** to one (Claude Code's `SendMessage`): it ended *ALPHA
+  GOT PINEAPPLE*; the other never got it. **Stop** on the other (`TaskStop`): *Stopped before it
+  finished*, nothing left running. A third agent across a reload of the plugin kept its row (and,
+  after the fix, Stop, Message, time and model); Claude, told what you did, said who stopped it.
+- **Run Budget** (RB1–RB3): *Notify* said near once and reached once and changed nothing; *Ask* held
+  queued work (nothing in 20 s) until `/cr budget continue`, then sent it once, and asked before your
+  message (*Not now* kept it in the box, nothing sent; *Continue the run* sent it once, then the
+  held item); *Finish* (after the mid-turn fix) had Claude finish the milestone under way, write
+  its notes and stop with two milestones untouched, no tool call cut. The time limit said near at
+  80% and reached at 9 minutes; a handoff limit of 1 was reached by a fresh wake's `/clear`. The
+  budget survived `/clear` and a reload; a new run in the same project started with none.
+- **Watchers** (WA1–WA4): Smart chose *Keep warm · 18m wait · 145k context · a short hold of the
+  5-minute cache* and *Fresh · 6h wait · … costs more than a fresh start*. A Keep warm watcher held
+  a 145k cache for 12 minutes (three refreshes, each reading about 144,960 tokens and writing at
+  most 5); the wake read 144,965 from the cache, in this context, and Claude read the file it was
+  waiting for. A watcher whose run moved stood down at its time (nothing sent). With the refresh
+  refused by the API (a test proxy's 400), a Smart watcher woke fresh instead of re-reading 145k
+  (the fresh request wrote 38k), and a Keep warm watcher waited for you, sending nothing.
+- **One integrated run** (INT, the one-hour cache, Kit on): milestones, a background agent, a
+  decision, three queued items, a budget set to Ask, a Fresh watcher; the decision answered while the
+  run slept rode the fresh wake with the handoff's queued work; each item went once; progress went
+  on to 5 of 5 across the `/clear`; the run's cost carried on; no agent was left running.
+- **Not verified:** how Operations, the status bar and Kit draw in Claude Desktop (this environment
+  cannot look at the app; `tools/desktop-preview` was used); Stop and Message on a teammate.
+
+### Development
+
+- The in-memory host (`tests/fixtures/fake-host.ts`) plays more of Claude Code as it was seen live:
+  the prompt box Claude Code puts a dropped prompt back into (`box`, read by `$.prompt.read`), the
+  cache lifetime configuration (`ttlConfig`), a refresh answered late (`forkDelayMs`) or refused by
+  the API (`forkRefusal`), compactions refused while a turn is under way (`compactRefusals`), a panel
+  that has not drawn a card yet (`paneRefusals`), a panel already open (`isPaneOpen`) and each open
+  with whether it asked for the keyboard (`opens`), the scroll by the key a card is drawn under
+  (`scrolledTo`), and the agent ledger kept across a reload (`agentLedger`). The engine world keeps
+  the debug log (`logs`) and each open's `focus`: the test engine scrolls and focuses nothing, so a
+  test reads the key a scroll or focus asked for from its trace and finds it in the drawn panel.
+- Each fix above has a test that fails without it. 447 tests in 26 files, passing on Claude Code
+  2.1.295 and 2.1.289.
 
 ## [1.6.1] - 2026-10-09
 

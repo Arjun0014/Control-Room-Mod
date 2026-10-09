@@ -167,7 +167,7 @@ name (`✗ Lint failing`, red; not counted again as an issue), calls that need a
 (`▲ 2 issues`), the guard keeping Claude going, a busy machine in the terminal (`▲ RAM 92%`, amber
 near a ceiling, red at it; Desktop has its Machine cell instead), running agents, the Quest log's
 level. The orchestration layer adds four, each only while it has something to say, each a control
-that opens Activity → Operations: its mark in its tone, then its words as the button's label (Claude
+that opens Activity → Operations at its own card (the agents chip too, at Agents): its mark in its tone, then its words as the button's label (Claude
 Code 2.1.289 takes a button's label only; a button with styled text inside is refused there, and the
 whole status bar with it). `▲ Review 2` (an amber mark: decisions waiting for the person; when one
 blocks the run the headline says it instead), the run budget near or at a limit, `◷ Watcher 1h 42m`
@@ -382,14 +382,15 @@ person:
 2. **Needs review**: each decision with its id, milestone and whether it blocks; its context; a
    button per option and a field for free text; **Not needed**. An answered one says how it will
    reach Claude (`Goes with Claude's next tool results`, `Goes with your next message (or Send
-   now)`). Its footnote says permission prompts stay Claude Code's own.
+   now)`, `Goes with W-1's wake (19:35), or with your next message` while a watcher parks the run). Its footnote says permission prompts stay Claude Code's own.
 3. **Mission Queue**: *Add work for later* (one field, under its label at every width: the terminal
    draws a field as wide as its text, which beside the label squeezed it into a column of single
    words) and *Deliver* (next safe boundary, after this
    turn, after the current milestone, after the handoff), then the items in order with when each
    goes, ↑ ↓, **Edit**, **Deliver now**, **Delete**; the last few delivered.
-4. **Watchers**: each with its local time and countdown, its strategy and what Smart chose
-   (*Details* opens the reason, the checkpoint, where it came from), **Wake now**, **Edit**
+4. **Watchers**: each with its local time and countdown and how it resumes, in a few words (*Keep
+   warm · cache held to the wake*, *Fresh · nothing spent while it sleeps*, *Smart · wakes fresh*);
+   *Details* (Smart's reason, the checkpoint, where it came from), **Wake now**, **Edit**
    (reschedule, strategy), **Pause**, **Delete**; Claude Code's own wake-ups beside them, dim and
    read only. Then the form: *Waiting for*, *Wake* (`in 2h`, `at 14:00`, or **In 30m** · **1h** ·
    **2h** · **4h**; an ambiguous time offers both readings), *Resume* (Smart, Keep warm, Fresh); the
@@ -401,7 +402,11 @@ person:
    running ›*).
 6. **Run budget**: one quiet row (*No budget for this run · Set a budget ›*) until one is set; then
    a meter per limit, the limits' fields and stepper, *At a limit*, **Continue anyway** at a limit.
+7. **Recent operations**: one dim line of the last few steps (queued, delivered, armed, woke,
+   stopped), set apart from the Run budget card above it: beside it, it read as the budget's history.
 
+A status bar chip, `/cr agents` and `/cr decisions` open Operations at their card, scrolled to its
+top once the panel has drawn it; `/cr queue` and `/cr watch` alone focus the field to type in.
 An empty card is one line; a row's details open in place; every form field is one line.
 
 Every tool call, newest first, is the third view (*All tool calls*).

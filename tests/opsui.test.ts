@@ -257,6 +257,43 @@ describe('Operations: the status bar', () => {
     expect(hud.chips.find(c => c.key === 'review')).toMatchObject({ tone: 'warn', opens: 'ops' })
   })
 
+  test('a chip and /cr agents open Operations at their own card, by the key the panel draws it under (seen live: a chip opened it at its top)', async ($, on) => {
+    const w = world(on, { tokens: 300_000 })
+    const pub = published(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine' as const, ref: 0 }))
+    w.live.agents = [{ id: 'a1', type: 'Explore', description: 'Scan the cache code', status: 'running', name: 'scanner' }]
+    await boot($, w)
+    await fullRun($, w)
+    const pane = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'Pane', requestId: 'control-room', props: paneProps(66) })
+    const band = await $.ui.mount({ plugin: 'project-sentinel', surface: 'terminal', component: 'AbovePrompt', props: bandProps(120) })
+    // The test engine scrolls and focuses nothing (it refuses every `$.ui.scroll` and `$.ui.focus`), so each try is traced with the key it asked for.
+    const asked = (): string[] => [...new Set(w.kept.logs.flatMap(l => /^ops: scroll to (\S+) refused/.exec(l)?.[1] ?? []))]
+    // The panel is not open yet, as live: the chip opens it at Activity → Operations, then asks for its card.
+    expect(w.kept.opened).toEqual([])
+    await band.press({ key: 'chip-review' })
+    await w.clock.advance(3000)
+    expect(w.kept.opened).toEqual(['control-room'])
+    expect(pub.pane).toMatchObject({ tab: 'activity', activitySub: 'ops' })
+    await $.command.run(cmd('agents'))
+    await w.clock.advance(3000)
+    expect(asked()).toEqual(['card-ops-review', 'card-ops-agents'])
+    const drawn = keys(await pane.drawn())
+    for (const key of asked()) expect(drawn).toContain(key)
+    // /cr queue with the panel open: opened again with the keyboard (the prompt box has it after a
+    // command), then its field focused, by the key the panel draws it under.
+    await $.command.run(cmd('queue'))
+    await w.clock.advance(1000)
+    expect(w.kept.opens).toEqual([
+      { id: 'control-room', isFocus: true },
+      { id: 'control-room', isFocus: true },
+    ])
+    const focusedKey = w.kept.logs.flatMap(l => /^ops: focus (\S+) refused/.exec(l)?.[1] ?? [])
+    expect(focusedKey).toEqual(['ops-queue-input'])
+    expect(keys(await pane.drawn())).toContain('ops-queue-input')
+    await band.unmount()
+    await pane.unmount()
+  })
+
   test('sleeping: the headline says until when and why, the countdown is an instrument, the alert asks when a watcher waits for you', async ($, on) => {
     const w = world(on, { tokens: 300_000 })
     const pub = published(on)
@@ -387,8 +424,8 @@ describe('Operations: hooks', () => {
     const before = w.kept.submitted.length
     const result = await $.prompt.submit({ text: 'Now fix the tokenizer.', wait: false, origin: { kind: 'composer' } })
     expect(result).toMatchObject({ drop: 'Not sent. Your message is back in the prompt box.' })
-    expect(w.kept.asked.at(-1)).toContain('The prompt cache expired: this session has 616k tokens of earlier context')
-    expect(w.kept.asked.at(-1)).toContain("(about $4.62, Claude Code's own estimate)")
+    expect(w.kept.asked.at(-1)).toContain('616k tokens need to be reprocessed: the prompt cache expired')
+    expect(w.kept.asked.at(-1)).toContain('Claude Code currently estimates at least ~$4.62.')
     expect(w.kept.submitted).toHaveLength(before)
     await w.clock.advance(1000)
     expect(filled).toBe('Now fix the tokenizer.')

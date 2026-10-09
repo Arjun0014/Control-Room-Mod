@@ -14,6 +14,8 @@ import type { CommandRunResult } from 'claude-code'
 
 import type { AgentRowView, DecisionView, OpsView, QueueItemView, QueueTarget, ResumeView, WatchStrategy, WatcherView } from '../../types'
 import * as fmt from '../core/format'
+import { sentenceCase } from '../core/text'
+import { howWords } from '../features/ops'
 import { parseDuration, splitWatchArgs, untilWords, clockAhead } from '../features/when'
 import type { Runtime } from './runtime'
 
@@ -107,7 +109,7 @@ async function queueCommand(rt: Runtime, args: string, words: readonly string[])
 
 function watcherLines(w: WatcherView, now: number): string[] {
   const when = w.status === 'armed' ? `wakes ${clockAhead(w.wakeAt, now)} (in ${untilWords(w.wakeAt - now)})` : w.status === 'paused' ? `paused (was ${clockAhead(w.wakeAt, now)})` : w.status === 'waking' ? 'waking now' : 'due'
-  const how = w.decided === null ? `${STRATEGY_WORD[w.strategy]}: decides at the wake` : `${STRATEGY_WORD[w.strategy]}: ${w.decided.mode === 'fresh' ? 'wakes fresh' : w.decided.hold ? 'holds the cache warm' : 'wakes in this context'}`
+  const how = howWords(w)
   const lines = [`${w.id.padEnd(5)}${w.label} · ${when} · ${how}`]
   if (w.strategy === 'smart' && w.decided !== null) lines.push(`     Smart chose ${w.decided.mode === 'fresh' ? 'Fresh' : w.decided.hold ? 'Keep warm' : 'this context'}: ${w.decided.reason}`)
   if (w.needs !== null) lines.push(`     Waits for you: ${w.needs} (/cr watch now ${w.id}, or Check now in Operations)`)
@@ -245,6 +247,9 @@ export function agentsText(ops: OpsView, now: number): string {
 // ---------------------------------------------------------------------------
 // Run Budget
 
+/** A cost limit as money: "$30", "$1.20" (was "$1.2", seen live). */
+const limitWords = (usd: number): string => `$${Number.isInteger(usd) ? usd : usd.toFixed(2)}`
+
 /** A wall-clock span without its trailing zero: "6h", "2h 14m". */
 const span = (ms: number): string => fmt.duration(ms).replace(/ 0[sm]$/, '')
 
@@ -253,13 +258,13 @@ export function budgetText(ops: OpsView): string {
   if (!b.isSet) return '◆ Run budget · off\nSet one: /cr budget $30 · /cr budget 6h · /cr budget handoffs 5 · at a limit: /cr budget notify|ask|finish'
   const money = (n: number) => `$${n.toFixed(2)}${b.cost.isPartial === true ? '+' : ''}`
   const parts = [
-    b.cost.limit === null ? null : `Cost ${b.cost.used === null ? '—' : money(b.cost.used)} of $${b.cost.limit}`,
+    b.cost.limit === null ? null : `Cost ${b.cost.used === null ? '—' : money(b.cost.used)} of ${limitWords(b.cost.limit)}`,
     b.time.limit === null ? null : `Time ${span(b.time.used ?? 0)} of ${span(b.time.limit)}`,
     b.handoffs.limit === null ? null : `Handoffs ${b.handoffs.used ?? 0} of ${b.handoffs.limit}`,
   ].filter((p): p is string => p !== null)
   const at = { notify: 'Notify only', ask: 'Ask before continuing', finish: 'Finish the milestone, then pause' }[b.atLimit]
   const lines = [`◆ Run budget · ${b.state === 'reached' ? 'reached' : b.state === 'near' ? 'near a limit' : 'within limits'}`, `  ${parts.join(' · ')}`, `  At a limit: ${at}`]
-  if (b.reached.length > 0) lines.push(`  Reached: ${b.reached.join('; ')}${b.held === null ? '' : `. ${b.held} waits for you: /cr budget continue`}`)
+  if (b.reached.length > 0) lines.push(`  Reached: ${b.reached.join('; ')}${b.held === null ? '' : `. ${sentenceCase(b.held)} waits for you: /cr budget continue`}`)
   lines.push('Change: /cr budget $30 · 6h · handoffs 5 · notify|ask|finish · off')
   return lines.join('\n')
 }
@@ -340,7 +345,7 @@ export async function opsCommand(rt: Runtime, args: string, words: readonly stri
       return { text: watchersText(rt.ops.view(), rt.clock()) }
     case 'decisions':
     case 'review':
-      await rt.openOps()
+      await rt.openOps(undefined, 'ops-review')
       return { text: decisionsText(rt.ops.view()) }
     case 'decide':
     case 'answer':
@@ -348,7 +353,7 @@ export async function opsCommand(rt: Runtime, args: string, words: readonly stri
     case 'agents':
     case 'subagents':
       if (words.length > 1) return null
-      await rt.openOps()
+      await rt.openOps(undefined, 'ops-agents')
       return { text: agentsText(rt.ops.view(), Date.now()) }
     case 'budget':
       return budgetCommand(rt, words)

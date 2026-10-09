@@ -608,3 +608,13 @@ describe('agents: only what Claude Code reports', () => {
     expect(rows[0]).toMatchObject({ name: 'reviewer', startedAt: null, model: null, isBackground: true, canStop: true, canMessage: true })
   })
 })
+
+describe('watcher wording', () => {
+  test('how a watcher resumes the run, without repeating its strategy (live: "Fresh: wakes fresh")', () => {
+    expect(Ops.howWords({ strategy: 'warm', decided: null })).toBe('Keep warm · cache held to the wake')
+    expect(Ops.howWords({ strategy: 'fresh', decided: null })).toBe('Fresh · nothing spent while it sleeps')
+    expect(Ops.howWords({ strategy: 'smart', decided: null })).toBe('Smart · decides at the wake')
+    expect(Ops.howWords({ strategy: 'smart', decided: { mode: 'warm', hold: true } })).toBe('Smart · holds the cache warm')
+    expect(Ops.howWords({ strategy: 'smart', decided: { mode: 'fresh', hold: false } })).toBe('Smart · wakes fresh')
+  })
+})

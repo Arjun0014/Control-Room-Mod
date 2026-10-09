@@ -12,6 +12,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { CacheMissView, CacheView, ColdResumeView, Tone } from '../../../types'
 import * as fmt from '../../core/format'
+import { coldCostWords } from '../../features/cache'
 import type { Kit } from '../kit'
 import { apart, card, listItem, meterBar, note, pair, row, spaced, stepper, switchControl, textRuns } from '../primitives'
 import { ACCENT, G, clockGlyph } from '../theme'
@@ -21,7 +22,7 @@ const IDLE_STEPS = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480] as co
 
 const LIFETIME: Record<string, string> = { '5m': '5-minute', '1h': '1-hour' }
 
-const SOURCE: Record<string, string> = { engine: 'as Claude Code reports it', observed: 'observed', probe: 'learned by Keep warm', stored: 'learned earlier', plan: 'the plan’s default' }
+const SOURCE: Record<string, string> = { engine: 'as Claude Code reports it', config: 'as Claude Code is configured', observed: 'observed', probe: 'learned by Keep warm', stored: 'learned earlier', plan: 'the plan’s default' }
 
 /** The cache's state in one line, with the tone it needs. */
 export function cacheState(cache: CacheView, now: number): { glyph: string; text: string; tone: Tone; fraction: number | null } {
@@ -223,7 +224,7 @@ export function coldResumeCard(kit: Kit, cold: ColdResumeView, cache: CacheView,
         : tokens !== null && tokens < at && cache.warmth !== 'none'
           ? { text: `${fmt.tokens(tokens)} of context: under the ${fmt.tokens(at)} it asks above`, tone: 'muted' }
           : { text: 'Asks only when the cache has surely lapsed', tone: 'muted' }
-  const price = cold.usd !== null ? `About ${fmt.cost(cold.usd)} to re-cache, ${cold.priceNote ?? "Claude Code's estimate"}` : cold.isArmed ? 'Tokens only: Claude Code has given no price for this model in this session' : null
+  const price = coldCostWords(cold)?.short ?? (cold.isArmed ? 'Tokens only: Claude Code has given no price for this model in this session' : null)
   return card(kit, {
     key: 'cold-resume',
     title: 'Cold Resume Guard',

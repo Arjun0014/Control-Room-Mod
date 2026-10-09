@@ -34,11 +34,15 @@ export function world(
     toasts: [] as string[],
     statuses: [] as (string | undefined)[],
     opened: [] as string[],
+    /** Each `$.ui.open`, and whether it asked for the keyboard (`focus`). */
+    opens: [] as { id: string; isFocus: boolean }[],
     asked: [] as string[],
     spawned: [] as string[][],
     /** `$.process.run` calls, by their argument vectors. */
     ran: [] as string[][],
     invalidated: [] as string[],
+    /** The debug log's lines (`$.ui.log(text, { to: 'debug' })`: the trace, `ops: …`). */
+    logs: [] as string[],
   }
   const live = {
     sessionId: 'session-1',
@@ -153,13 +157,17 @@ export function world(
     kept.statuses.push(e.text)
     return { value: undefined }
   })
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', ($, e) => {
+    kept.logs.push(e.text)
+    return { value: undefined }
+  })
   on('ui.invalidate', ($, e) => {
     kept.invalidated.push(e.event)
     return { value: undefined }
   })
   on('ui.open', ($, e) => {
     kept.opened.push(e.id)
+    kept.opens.push({ id: e.id, isFocus: e.focus === true })
     return { value: { isPlaced: true as const } }
   })
   on('ui.close', () => ({ value: undefined }))

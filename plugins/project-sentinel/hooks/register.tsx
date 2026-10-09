@@ -46,6 +46,7 @@ const POLICY = { plugin: 'project-sentinel', key: 'policy' } as const
 const OPS = { plugin: 'project-sentinel', key: 'ops' } as const
 /** The prompt cache's last request in this context: a reload keeps knowing when it lapses. */
 const CACHE_MEMO = { plugin: 'project-sentinel', key: 'cacheMemo' } as const
+const AGENT_LEDGER = { plugin: 'project-sentinel', key: 'agents' } as const
 
 const blank = new Runtime()
 const hudAtom = atom(HUD, Views.hudOf(blank))
@@ -80,6 +81,7 @@ function hostOf($: EngineInterface): Host {
     submit: text => $.prompt.submit({ text }),
     submitAsUser: text => $.prompt.submit({ text, asUser: true }),
     fillPrompt: text => $.prompt.fill({ text }).then(r => ({ isFilled: r.isFilled, refusal: r.refusal })),
+    readPrompt: () => $.prompt.read().then(r => ({ text: r.text })),
     clearContext: () => $.command.run({ command: 'clear', args: '' }),
     compactCommand: instructions => $.command.run({ command: 'compact', args: instructions }),
     registerCommand: spec => $.command.register(spec),
@@ -99,7 +101,8 @@ function hostOf($: EngineInterface): Host {
     close: pane => $.ui.close(pane),
     panes: () => $.ui.panes(),
     scrollPaneToTop: () => $.ui.scroll({ in: PANE_ID, to: 'start' }).then(() => undefined),
-    focusPane: key => $.ui.focus({ requestId: PANE_ID, key }).then(r => r.deny === undefined),
+    scrollPaneTo: key => $.ui.scroll({ in: PANE_ID, to: { key }, block: 'start' }).then(r => r.deny ?? null),
+    focusPane: key => $.ui.focus({ requestId: PANE_ID, key }).then(r => r.deny ?? null),
     ask: (question, options, header) => $.ui.ask(question, header === undefined ? options : { options, header }),
     checkTool: (tool, input) => $.tool.check({ tool, input }),
     copy: (text, surface) => $.ui.copy({ text, surface }).then(r => r.isCopied),
@@ -113,6 +116,12 @@ function hostOf($: EngineInterface): Host {
     storeDelete: key => $.store.delete(key),
 
     settings: source => $.settings.read(source === undefined ? undefined : { source }),
+    cacheTtlConfig: async () => ({
+      force5m: await $.env.get('FORCE_PROMPT_CACHING_5M'),
+      envTtl: await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
+      setting: ((await $.settings.read().catch(() => ({}))) as Record<string, unknown>).promptCacheTtl,
+      enable1h: await $.env.get('ENABLE_PROMPT_CACHING_1H'),
+    }),
     configEnv: async () => ({
       claudeConfigDir: await $.env.get('CLAUDE_CONFIG_DIR'),
       userProfile: await $.env.get('USERPROFILE'),
@@ -148,6 +157,8 @@ function hostOf($: EngineInterface): Host {
     loadPolicyMemo: () => $.state.get(POLICY).then(read => read.value ?? null),
     saveCacheMemo: memo => $.state.set(CACHE_MEMO, memo).then(() => undefined),
     loadCacheMemo: () => $.state.get(CACHE_MEMO).then(read => read.value ?? null),
+    saveAgentLedger: list => $.state.set(AGENT_LEDGER, list).then(() => undefined),
+    loadAgentLedger: () => $.state.get(AGENT_LEDGER).then(read => read.value ?? null),
 
     invalidateDescribes: () => $.ui.invalidate('tool.describe'),
     invalidatePromptContext: () => $.ui.invalidate('prompt.context'),

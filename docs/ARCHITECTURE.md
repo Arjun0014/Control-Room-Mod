@@ -490,7 +490,7 @@ only. Unknown future events/props → passed through untouched.
 
 ## 9. Testing strategy
 
-* `claude plugin test` (430 tests in 26 files, run on 2.1.295, and in CI on the latest
+* `claude plugin test` (447 tests in 26 files, run on 2.1.295, and in CI on the latest
   Claude Code for Linux, Windows and macOS and on 2.1.289 for Linux). The
   tests live in the repository's `tests/`, outside the plugin folder (which
   Anthropic's directory scans, and which ships only the plugin);
@@ -656,14 +656,21 @@ Smart and healthy resume state allow a fresh wake.
 any context is added. It returns `{ drop }` for every choice but *Continue*, so nothing has entered
 when it asks; *Cancel* (and a dismissed dialog) puts the text back with `$.prompt.fill` after
 400 ms, or keeps it in memory where the host has no box. *Start fresh* and *Compact first* carry the
-message into the fresh or compacted context (`freshStart`'s prompt; `submitAsUser` after
-`session.compact`). Its state (`coldState`) is cold only when the cache's expiry is known and
-passed, an hour passed with no known lifetime, or Claude Code's resume facts say so; its price is
+message into the fresh or compacted context (`freshStart`'s prompt; `submitAsUser` once
+`$.session.compact` resolves, 600 ms after the drop: asked inside the held prompt's dispatch,
+Claude Code refuses it as a turn under way, and it never runs the caller's own `session.compact`
+hook for it), then clear the copy of the message Claude Code restores to the box (`$.prompt.read`,
+`$.prompt.fill('')`, only while the box holds just that text). Its state (`coldState`) is cold
+only when the cache's expiry is known and passed, an hour passed with no known lifetime, or Claude
+Code's resume facts say so, and no request of Claude Code's own (a `session.measure` whose cost
+grew with no turn running) came within the lifetime since; its price is
 `cache.v1`'s `writeRates` (Claude Code's `estimated_cache_write_usd ÷ context_tokens` per model and
 lifetime, `configured` or `catalog` pricing only).
 
 **The budget** (`checkBudget`) reads the run's totals (cost as reported, wall-clock time by the
-runtime's clock, handoffs) after each turn and each tick. `mayAutomate` gates every turn Project
+runtime's clock, handoffs) after each turn and each tick, and, while a cost limit is set, after
+main-thread steps (`$.session.usage()`, at most every five seconds: Claude Code raises
+`session.measure` after the turn, not after each step). `mayAutomate` gates every turn Project
 Sentinel would start by itself; `budgetGuard` asks once before the person's message; `Finish the
 milestone` adds a note with the next tool results. It never cancels anything.
 

@@ -34,6 +34,7 @@ import type {
 
 import type {
   ActivityView,
+  AgentMemo,
   AutopilotRecord,
   CacheMemo,
   ChainView,
@@ -46,6 +47,7 @@ import type {
   SpinnerModel,
 } from '../types'
 import type { ConfigEnv } from './app/formerStore'
+import type { TtlConfig } from './features/cache'
 
 export type SpawnStream = AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> & { readonly result: Promise<ProcessSpawnResult> }
 
@@ -76,6 +78,8 @@ export type Host = {
   submitAsUser(text: string): Promise<PromptSubmitResult>
   /** Puts text back in the prompt box as the person's draft (a message the Cold Resume Guard did not send). */
   fillPrompt(text: string): Promise<{ isFilled: boolean; refusal?: string }>
+  /** The prompt box's draft as it stands ('' where the session draws none). */
+  readPrompt(): Promise<{ text: string }>
   /** Runs /clear (an Autopilot handoff's fresh context). */
   clearContext(): Promise<CommandRunResult>
   /**
@@ -105,8 +109,13 @@ export type Host = {
   panes(): Promise<readonly UiPane[]>
   /** Brings the top of the Control Room pane into view (after a section change, or "Back to top"). */
   scrollPaneToTop(): Promise<void>
-  /** Moves the pane's focus ring onto one of its fields (the Mission Queue's, after `/cr queue`). */
-  focusPane(key: string): Promise<boolean>
+  /**
+   * Brings one of the pane's elements to the top of its view, by the key it is drawn under (an
+   * Operations card's `card-ops-agents`). Resolves to why Claude Code did not move it, or null once it did.
+   */
+  scrollPaneTo(key: string): Promise<string | null>
+  /** Moves the pane's focus ring onto one of its fields (the Mission Queue's, after `/cr queue`): why not, or null once it did. */
+  focusPane(key: string): Promise<string | null>
   /** Asks the person in Claude Code's own question dialog (AskUserQuestion); rejects when dismissed or with nobody to ask. */
   ask(question: string, options: readonly string[], header?: string): Promise<string>
   /** What Claude Code's own permission check would decide for a call (its rules and the mode), running nothing. */
@@ -122,6 +131,8 @@ export type Host = {
   storeDelete(key: string): Promise<void>
 
   settings(source?: 'policy' | 'user' | 'project' | 'local'): Promise<EngineSettings>
+  /** What sets the main conversation's cache lifetime in Claude Code: its environment variables and the `promptCacheTtl` setting. */
+  cacheTtlConfig(): Promise<TtlConfig>
   /** `CLAUDE_CONFIG_DIR`, `USERPROFILE` and `HOME`: only to find the store kept under the former name. */
   configEnv(): Promise<ConfigEnv>
   /** The status bar Control Room (the former name) last published in this session's `$.state`, or undefined. */
@@ -163,6 +174,9 @@ export type Host = {
   /** The prompt cache's last request, in `$.state`: a reload keeps knowing when the cache lapses. */
   saveCacheMemo(memo: CacheMemo | null): Promise<void>
   loadCacheMemo(): Promise<CacheMemo | null>
+  /** What this session saw of its agents, in `$.state`: a reload keeps it (gone at a restart, as the agents are). */
+  saveAgentLedger(list: AgentMemo[]): Promise<void>
+  loadAgentLedger(): Promise<AgentMemo[] | null>
 
   /** Re-runs agent listings (Subagent Control changed what is offered). */
   invalidateDescribes(): void

@@ -78,4 +78,7 @@ export function sentencesOf(text: string): string[] {
   return found.map(s => s.trim()).filter(s => s.length > 0)
 }
 
+/** Starts a sentence: its first letter upper case ("queued work" → "Queued work"). */
+export const sentenceCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
 export const isBlank = (s: string | undefined | null): boolean => s === undefined || s === null || s.trim() === ''

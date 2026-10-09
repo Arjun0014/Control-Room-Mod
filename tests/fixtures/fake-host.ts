@@ -40,6 +40,8 @@ export function fakeHost(
     dirs?: string[]
     /** What Control Room, the former name, published as its status bar in this session. */
     formerHud?: unknown
+    /** What Claude Code's environment and settings say of the cache lifetime (nothing by default). */
+    ttlConfig?: import('../../hooks/features/cache').TtlConfig
   } = {},
 ) {
   let time = 1_000_000
@@ -57,6 +59,8 @@ export function fakeHost(
     ran: [] as string[],
     compacted: 0,
     scrolledToTop: 0,
+    /** The pane elements scrolled into view, by the key each is drawn under (an Operations card's `card-ops-agents`). */
+    scrolledTo: [] as string[],
     registeredTools: [] as string[],
     /** Keep warm's forks, by the time they went out. */
     forks: [] as number[],
@@ -70,9 +74,13 @@ export function fakeHost(
     policyMemo: null as { sessionId: string; text: string } | null,
     /** `$.state`'s cache memo: the cache's last request, kept across a reload. */
     cacheMemo: null as import('../../types').CacheMemo | null,
+    /** `$.state`'s agent ledger: what the session saw of its agents, kept across a reload. */
+    agentLedger: null as import('../../types').AgentMemo[] | null,
     /** What went back into the prompt box (the Cold Resume Guard's Cancel), and the person's words submitted as theirs. */
     filled: [] as string[],
     submittedAsUser: [] as string[],
+    /** Each `$.ui.open` of the pane, and whether it asked for the keyboard (`focus`). */
+    opens: [] as { id: string; isFocus: boolean }[],
     /** Messages sent to agents, and the pane fields focused. */
     sentToAgents: [] as { agentId: string; text: string }[],
     focused: [] as string[],
@@ -88,15 +96,23 @@ export function fakeHost(
     sessionId: 'S1',
     /** Whether the prompt box takes text back (the terminal's does; an SDK host has none). */
     isPromptBox: true,
+    /** The prompt box's draft. Claude Code puts a dropped prompt's text back here; a test does that by hand. */
+    box: '',
     /** The tools the session offers: no task list tool by default, as in Claude Code 2.1.29x. */
     tools: ['Bash', 'Read', 'Edit', 'Write'] as string[],
     /** What a fork reads from the cache: the whole prompt by default (a hit). */
     forkRead: 300_000,
+    /** How long a fork takes to answer (Claude Code retrying it through a network outage); none by default. */
+    forkDelayMs: 0,
+    /** The API refuses forks with this kind of error (as a test proxy's 400 did live); null: forks are answered. */
+    forkRefusal: null as string | null,
     /** The repository the session is in (none by default), and what `git status` says there. */
     repo: null as string | null,
     gitStatus: '## main...origin/main\n',
     /** `$.session.compact` refuses, as in a headless or SDK session (Desktop's host protocol). */
     isCompactTurnOnly: false,
+    /** Refusals `$.session.compact` answers first, one per call (a turn under way, as while a prompt is still being dropped). */
+    compactRefusals: [] as string[],
     /**
      * How the person answers Claude Code's question dialog: an option's words, a function of the
      * question, or null (dismissed, or a headless run: it rejects). Undefined: 'Deny', as before.
@@ -107,6 +123,10 @@ export function fakeHost(
     stopResult: { result: 'stopped' } as import('claude-code').ToolCallResult,
     /** What `$.prompt.submit` answers: a drop reason keeps the prompt out. */
     submitDrop: null as string | null,
+    /** Refusals the pane's scroll and focus answer first, one per call (a panel that has not drawn Operations yet). */
+    paneRefusals: [] as string[],
+    /** Whether `$.ui.panes()` lists the Control Room pane as open (none is by default). */
+    isPaneOpen: false,
   }
   const schedule = (ms: number, fn: () => void, every: number | null) => {
     const t = { id: ++seq, at: time + ms, every, fn, isCancelled: false }
@@ -130,6 +150,8 @@ export function fakeHost(
     compact: async () => {
       // A headless or SDK session (Claude Code 2.1.295): compaction runs only inside a turn, as a /compact prompt.
       if (live.isCompactTurnOnly) throw new Error('$.session.compact: not available in a headless (-p / SDK) session yet: compaction here runs inside a turn (a /compact prompt); catch it and carry on')
+      const refusal = live.compactRefusals.shift()
+      if (refusal !== undefined) throw new Error(refusal)
       kept.compacted += 1
       return { messages: [], tokensBefore: 900_000, tokensAfter: 40_000 }
     },
@@ -143,15 +165,19 @@ export function fakeHost(
     },
     fillPrompt: async text => {
       kept.filled.push(text)
+      if (live.isPromptBox) live.box = text
       return { isFilled: live.isPromptBox }
     },
+    readPrompt: async () => ({ text: live.isPromptBox ? live.box : '' }),
     sendToAgent: async (agentId, text) => {
       kept.sentToAgents.push({ agentId, text })
       return { isDelivered: true }
     },
     focusPane: async key => {
+      const refusal = live.paneRefusals.shift()
+      if (refusal !== undefined) return refusal
       kept.focused.push(key)
-      return true
+      return null
     },
     clearContext: async () => {
       kept.commands.push('clear')
@@ -176,15 +202,26 @@ export function fakeHost(
     classify: async () => 'premature',
     fork: async () => {
       kept.forks.push(time)
+      if (live.forkDelayMs > 0) await new Promise<void>(resolve => schedule(live.forkDelayMs, resolve, null))
+      if (live.forkRefusal !== null) return { isAnswered: false as const, reason: 'api-error' as const, status: 400, error: live.forkRefusal as never, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } as never
       return { isAnswered: true as const, text: 'ok', usage: { input_tokens: 20, output_tokens: 2, cache_read_input_tokens: live.forkRead, cache_creation_input_tokens: live.forkRead === 0 ? 300_000 : 0 } }
     },
     toast: text => void kept.toasts.push(text),
     status: text => void kept.statuses.push(text),
     trace: text => void kept.traces.push(text),
-    open: async () => ({ isPlaced: true }),
+    open: async pane => {
+      kept.opens.push({ id: pane.id, isFocus: pane.focus === true })
+      return { isPlaced: true }
+    },
     close: async () => undefined,
-    panes: async () => [],
+    panes: async () => (live.isPaneOpen ? [{ id: 'control-room', title: 'Control Room', isShown: true, isFocused: false, isPlaced: true }] : []),
     scrollPaneToTop: async () => void (kept.scrolledToTop += 1),
+    scrollPaneTo: async key => {
+      const refusal = live.paneRefusals.shift()
+      if (refusal !== undefined) return refusal
+      kept.scrolledTo.push(key)
+      return null
+    },
     ask: async (question, options, header) => {
       kept.asked.push({ question, options, header })
       const a = typeof live.answer === 'function' ? live.answer(question, options) : live.answer
@@ -209,6 +246,7 @@ export function fakeHost(
     storeSet: async (key, value) => void (kept.store[key] = JSON.parse(JSON.stringify(value))),
     storeDelete: async key => void delete kept.store[key],
     settings: async () => ({}),
+    cacheTtlConfig: async () => options.ttlConfig ?? {},
     configEnv: async () => options.configEnv ?? { claudeConfigDir: undefined, userProfile: undefined, home: undefined },
     formerHud: async () => options.formerHud,
     isStandbyNoted: async () => kept.isStandbyNoted,
@@ -253,6 +291,8 @@ export function fakeHost(
     loadPolicyMemo: async () => kept.policyMemo,
     saveCacheMemo: async memo => void (kept.cacheMemo = memo === null ? null : { ...memo }),
     loadCacheMemo: async () => kept.cacheMemo,
+    saveAgentLedger: async list => void (kept.agentLedger = JSON.parse(JSON.stringify(list))),
+    loadAgentLedger: async () => kept.agentLedger,
     invalidateDescribes: () => undefined,
     invalidatePromptContext: () => undefined,
   }

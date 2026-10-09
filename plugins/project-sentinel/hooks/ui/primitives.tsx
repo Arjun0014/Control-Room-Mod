@@ -79,6 +79,9 @@ export const clip = (kit: Kit): { minWidth?: number; overflow?: 'hidden' } => (k
  * box's inside (its width less the border and padding). The title takes the
  * section's accent; `link` puts a quiet "Open ›" at its right.
  */
+/** The key a card is drawn under, the one `$.ui.scroll` finds it by: `card-ops-agents` for `ops-agents`. */
+export const cardKey = (key: string): string => `card-${key}`
+
 export function card(
   kit: Kit,
   input: {
@@ -96,7 +99,7 @@ export function card(
   const rows = present(input.rows(inner))
   const hasHead = input.title !== undefined || input.aside !== undefined || input.link !== undefined
   return (
-    <Box key={`card-${input.key}`} flexDirection="column" marginTop={1}>
+    <Box key={cardKey(input.key)} flexDirection="column" marginTop={1}>
       {hasHead ? (
         <Box key={`card-${input.key}-head`} flexDirection="row" justifyContent="space-between" alignItems="center">
           <Text bold color={input.accent} dimColor={input.accent === undefined ? true : undefined}>

@@ -102,6 +102,40 @@ describe('Cache Guardian', () => {
     expect(kept.forks).toEqual([])
   })
 
+  test('a chain of refreshes is proven by the conversation reading the cache after the expiry the first one replaced (seen live: a wake six seconds after the third refresh read as unproven)', async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), FIVE_MINUTES)
+    const { rt, kept, advance } = f
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    const t0 = rt.cache.state.lastRequestAt ?? 0
+    // Three refreshes, four minutes apart; the conversation is back six seconds after the third.
+    await advance(12 * MIN + 6_000)
+    expect(kept.forks.map(at => Math.round((at - t0) / MIN))).toEqual([4, 8, 12])
+    await turn(f, rt, [{ prompt: 300_500, read: 300_000 }])
+    const newest = rt.cache.state.keepWarm.log[0]!
+    expect(newest.status).toBe('verified')
+    expect(newest.note).toContain("when it would have lapsed without Keep warm's refreshes")
+    expect(rt.cache.state.keepWarm.verified).toBe('yes')
+    // A new chain starts with the next refresh: back early after one refresh proves nothing yet.
+    await advance(4 * MIN + 6_000)
+    await turn(f, rt, [{ prompt: 301_000, read: 300_500 }])
+    expect(rt.cache.state.keepWarm.log[0]!.status).toBe('consistent')
+  })
+
+  test('a refresh sent in time but answered after the expiry (Claude Code retried it through an outage, seen live) is no failure of Keep warm', async () => {
+    const f = await started(s => void (s.cache.keepWarm = true), FIVE_MINUTES)
+    const { rt, live, advance } = f
+    await turn(f, rt, [{ prompt: 300_000, read: 0 }])
+    // Sent at four minutes; its reply comes two minutes later, after the five-minute expiry, having rebuilt the cache.
+    live.forkDelayMs = 2 * MIN
+    live.forkRead = 0
+    await advance(6 * MIN + 10_000)
+    const r = rt.cache.state.keepWarm.log[0]!
+    expect(r.status).toBe('missed')
+    expect(r.note).toStartWith('Sent before the expiry, answered after it (2 min later: Claude Code retried it)')
+    expect(rt.cache.state.keepWarm.failures).toBe(0)
+    expect(rt.cache.state.keepWarm.verified).toBe('unknown')
+  })
+
   test('the five-minute cache is refreshed every four minutes, for 45 idle minutes at most', async () => {
     const f = await started(s => void (s.cache.keepWarm = true), FIVE_MINUTES)
     const { rt, kept, advance } = f

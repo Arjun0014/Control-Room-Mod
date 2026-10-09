@@ -223,6 +223,9 @@ describe('runtime', () => {
     await advance(16_000)
     expect(rt.autopilot.lastError).toBe('the context was not cleared')
     expect(kept.compacted).toBe(1)
+    // Its own compaction never reaches its own session.compact hook: the context meter still takes the compacted size.
+    expect(rt.run?.sessions.at(-1)?.transitions.at(-1)).toMatchObject({ kind: 'handoff-compact' })
+    expect(rt.usage.tokens).toBe(40_000)
   })
 
   test('a session that compacts only inside a turn (headless, SDK: seen live): the handoff runs /compact as a command, and carries on once the engine has compacted', async () => {

@@ -476,6 +476,11 @@ export function parkPrompt(input: { id: string; label: string; wakeAt: number; h
 }
 
 /** The run budget reached, mid-turn: finish the milestone, then stop (Finish the milestone, then pause). */
+/** What the person did to agents from Project Sentinel's Operations: Claude Code reports a plugin's TaskStop as Claude's own (seen live). */
+export function agentActionsNote(actions: readonly string[]): string {
+  return `Project Sentinel · From the Agents panel, the user ${actions.join('; then the user ')}. These were the user's actions, not yours.`
+}
+
 export function budgetNote(reached: readonly string[]): string {
   return `Project Sentinel · Run budget reached (${reached.join('; ')}). Finish the milestone you are on and leave the work in a clean, consistent state, then end your turn with a short summary and wait for the user. Do not start the next milestone.`
 }

@@ -27,17 +27,52 @@
 
 export type TtlValue = '5m' | '1h'
 /**
- * Where the lifetime came from: Claude Code reported it (a model switch), Keep warm's probe or a
+ * Where the lifetime came from: Claude Code reported it (a model switch), Claude Code is configured
+ * to use it (an environment variable or the `promptCacheTtl` setting), Keep warm's probe or a
  * request's gap proved it, an earlier session learned it (a hint), or the plan's default (a hint):
  * Claude Code gives a claude.ai plan's main conversation the one-hour cache unless a setting or an
  * environment variable says otherwise, and the session reports the plan's rate-limit windows.
  */
-export type TtlSource = 'engine' | 'observed' | 'probe' | 'stored' | 'plan'
+export type TtlSource = 'engine' | 'config' | 'observed' | 'probe' | 'stored' | 'plan'
 
 /** A lifetime that is only a hint: what this context observes corrects it. */
 export const isTtlHint = (source: TtlSource | undefined): boolean => source === 'stored' || source === 'plan'
 
 export const TTL_MS: Record<TtlValue, number> = { '5m': 300_000, '1h': 3_600_000 }
+
+/**
+ * The Cold Resume Guard's price in words: an estimate, and a floor (the re-read also sends what is
+ * new, and Claude Code's estimate leaves out the answer; seen live: its $0.36 cost $0.52). Null with
+ * no price from Claude Code. `sentence` follows the token count in the question; `short` is the
+ * Cache card's line.
+ */
+export function coldCostWords(cold: { usd: number | null; priceNote: string | null }): { sentence: string; short: string } | null {
+  if (cold.usd === null || !Number.isFinite(cold.usd)) return null
+  const usd = `~${cold.usd < 0.01 ? '$0.01' : `$${cold.usd.toFixed(2)}`}`
+  const note = cold.priceNote
+  if (note !== null && note.startsWith('at ')) return { sentence: `At ${note.slice(3)}, that is at least ${usd}.`, short: `At least ${usd} to re-cache, ${note}` }
+  return { sentence: `Claude Code currently estimates at least ${usd}.`, short: `At least ${usd} to re-cache: Claude Code's own estimate` }
+}
+
+/** What Claude Code's environment and settings say of the main conversation's cache lifetime, as read. */
+export type TtlConfig = { force5m?: string; envTtl?: string; setting?: unknown; enable1h?: string }
+
+/** An environment variable Claude Code reads as on. */
+const isEnvOn = (v: string | undefined): boolean => v !== undefined && ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase())
+
+/**
+ * The lifetime Claude Code is configured to give the main conversation, by its own precedence
+ * (2.1.295): `FORCE_PROMPT_CACHING_5M`, then `CLAUDE_CODE_PROMPT_CACHE_TTL`, then the
+ * `promptCacheTtl` setting, then `ENABLE_PROMPT_CACHING_1H`. Null where none is set: the
+ * account's default applies (the plan's hint).
+ */
+export function configuredTtl(c: TtlConfig): TtlValue | null {
+  if (isEnvOn(c.force5m)) return '5m'
+  const env = c.envTtl?.trim()
+  if (env === '5m' || env === '1h') return env
+  if (c.setting === '5m' || c.setting === '1h') return c.setting
+  return isEnvOn(c.enable1h) ? '1h' : null
+}
 
 /** Below this, a request's prompt is not worth calling a miss over (and may sit under the model's cache minimum). */
 export const MIN_PREFIX = 4096
@@ -176,6 +211,13 @@ export type KeepWarmState = {
   verified: 'unknown' | 'yes' | 'no'
   /** The expiry a refresh replaced: the first request after it proves (or disproves) the refresh. */
   provingAfter: number | null
+  /**
+   * The expiry the first refresh since the conversation's last request replaced, while every refresh
+   * since read the cache: a read by the conversation after it proves the refreshes held the cache,
+   * though the newest refresh may be too recent to prove by itself (seen live: a watcher woke six
+   * seconds after the third refresh of a 12-minute hold, and the hold read as unproven).
+   */
+  chainFrom?: number | null
   /** Refreshes sent before the expiry that still found the cache gone: two and Keep warm stops. */
   failures: number
   /** The refreshes of this context, newest first. */
@@ -215,6 +257,7 @@ export const emptyKeepWarm = (verified: KeepWarmState['verified'] = 'unknown'): 
   lastHit: null,
   verified,
   provingAfter: null,
+  chainFrom: null,
   failures: 0,
   log: [],
   pausedReason: null,
@@ -247,7 +290,7 @@ export function noteChange(state: CacheState, event: CacheEvent): CacheState {
 
 /** The TTL as the engine reported it (a model switch), which outranks anything observed. */
 export function withTtl(state: CacheState, value: TtlValue, source: TtlSource): CacheState {
-  const rank: Record<TtlSource, number> = { engine: 4, probe: 3, observed: 2, stored: 1, plan: 0 }
+  const rank: Record<TtlSource, number> = { engine: 4, config: 3, probe: 3, observed: 2, stored: 1, plan: 0 }
   if (state.ttl !== null && state.ttl.value === value && rank[state.ttl.source] >= rank[source]) return state
   if (state.ttl !== null && rank[state.ttl.source] > rank[source]) return state
   return { ...state, ttl: { value, source } }
@@ -368,17 +411,26 @@ export type Observed = {
 function settleRefresh(
   record: RefreshRecord,
   req: { at: number; read: number; written: number; input: number },
-  input: { isMiss: boolean; changed: string[]; missDetail: string | null },
+  input: { isMiss: boolean; changed: string[]; missDetail: string | null; chainFrom?: number | null },
 ): RefreshRecord {
   const phase: RefreshPhase =
     record.oldExpiry !== null && req.at <= record.oldExpiry ? 'before-old-expiry' : record.newExpiry !== null && req.at <= record.newExpiry ? 'after-old-expiry' : 'after-new-expiry'
   const main = { at: req.at, read: req.read, written: req.written, input: req.input, phase, changed: input.changed }
   if (!input.isMiss) {
+    // Back before this refresh's old expiry, but after the expiry the first of its chain replaced: the chain held it.
+    const isChainProof = phase === 'before-old-expiry' && input.chainFrom != null && req.at > input.chainFrom
     return {
       ...record,
       main,
-      status: phase === 'after-old-expiry' ? 'verified' : 'consistent',
-      note: phase === 'after-old-expiry' ? 'The conversation read the cache after the expiry this refresh replaced' : phase === 'before-old-expiry' ? 'The conversation came back before the old expiry and read the cache: no proof yet' : 'The conversation read the cache after this refresh’s expiry (a later refresh or a longer lifetime)',
+      status: phase === 'after-old-expiry' || isChainProof ? 'verified' : 'consistent',
+      note:
+        phase === 'after-old-expiry'
+          ? 'The conversation read the cache after the expiry this refresh replaced'
+          : isChainProof
+            ? `The conversation read the cache after ${clockOf(input.chainFrom!)}, when it would have lapsed without Keep warm's refreshes`
+            : phase === 'before-old-expiry'
+              ? 'The conversation came back before the old expiry and read the cache: no proof yet'
+              : 'The conversation read the cache after this refresh’s expiry (a later refresh or a longer lifetime)',
     }
   }
   if (input.changed.length > 0) return { ...record, main, status: 'untested', note: `The request changed: ${input.changed.join(', ')}` }
@@ -409,6 +461,12 @@ export function observeRequest(
     isProbe?: boolean
     /** A refresh: when its timer was set for. */
     plannedAt?: number | null
+    /**
+     * A refresh: when its reply came. Claude Code retries a request that fails to connect, so a refresh
+     * sent before the expiry may reach the API after it (seen live: sent during a network outage, it
+     * was answered 2 minutes later, after the cache had lapsed): it is in time only if answered in time.
+     */
+    endAt?: number
     /** A main request: what its prompt was made of. */
     fingerprint?: CacheFingerprint | null
   },
@@ -458,7 +516,7 @@ export function observeRequest(
       // Everything seen to change since the request the fork re-sent: a rebuild after any of it does not test Keep warm.
       const seen = next.pending.map(p => CHANGE_WORD[p.cause])
       const changed = [...new Set([...fingerprintChanges(record.fingerprint, req.fingerprint ?? null), ...seen])]
-      const settled = settleRefresh(record, req, { isMiss, changed, missDetail: null })
+      const settled = settleRefresh(record, req, { isMiss, changed, missDetail: null, chainFrom: kw.chainFrom ?? null })
       kw.log[waiting] = settled
       if (settled.status === 'verified' && kw.verified !== 'yes') {
         kw.verified = 'yes'
@@ -482,11 +540,15 @@ export function observeRequest(
       }
       kw.provingAfter = null
     }
+    // The conversation's own request: the next refresh starts a new chain.
+    kw.chainFrom = null
   }
 
   if (isRefresh) {
     const oldExpiry = expiresAt(state)
-    const isInTime = oldExpiry !== null && req.at < oldExpiry
+    // A hit read the cache, so it was in time; a miss was in time only if it was answered before the expiry.
+    const isInTime = oldExpiry !== null && (isMiss ? (req.endAt ?? req.at) : req.at) < oldExpiry
+    const isLate = oldExpiry !== null && req.at < oldExpiry && !isInTime
     const ttl = ttlMs(next)
     // Earlier refreshes still waiting are taken over by this one.
     kw.log = kw.log.map(r => (r.status === 'awaiting' ? { ...r, status: 'renewed' as const, note: 'A later refresh took over before the conversation came back' } : r))
@@ -505,7 +567,13 @@ export function observeRequest(
       fingerprint: state.fingerprint,
       status: !isMiss ? 'awaiting' : 'missed',
       main: null,
-      note: isMiss ? (isInTime ? 'The fork found the cache gone before its expiry' : 'The fork came after the expiry') : null,
+      note: isMiss
+        ? isInTime
+          ? 'The fork found the cache gone before its expiry'
+          : isLate
+            ? `Sent before the expiry, answered after it (${durationWords((req.endAt ?? req.at) - req.at)} later: Claude Code retried it): the cache had lapsed, so it tests nothing`
+            : 'The fork came after the expiry'
+        : null,
     }
     kw.log = [record, ...kw.log].slice(0, REFRESHES_KEPT)
     kw.refreshes += 1
@@ -514,6 +582,8 @@ export function observeRequest(
     kw.lastHit = !isMiss
     // A refresh that read the cache before it lapsed is what the next request will test.
     if (!isMiss && isInTime && kw.verified !== 'yes') kw.provingAfter = oldExpiry
+    // The chain since the conversation's last request: its first refresh's old expiry, while each one read the cache in time.
+    kw.chainFrom = !isMiss && isInTime ? (kw.chainFrom ?? oldExpiry) : null
     // A refresh timed by a remembered lifetime that proved wrong: the lifetime is corrected, and the
     // refresh it rebuilt is the test, so one more miss in time is conclusive.
     if (isMiss && wasTtlWrong) kw.failures = Math.max(kw.failures, 1)

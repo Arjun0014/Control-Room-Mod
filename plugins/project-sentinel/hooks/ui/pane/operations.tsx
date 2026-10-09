@@ -15,6 +15,8 @@ import type { RenderElement } from 'claude-code'
 
 import type { AgentRowView, DecisionView, OpsView, PaneModel, QueueItemView, QueueTarget, Tone, WatchStrategy, WatcherView } from '../../../types'
 import * as fmt from '../../core/format'
+import { sentenceCase } from '../../core/text'
+import { howWords } from '../../features/ops'
 import { clockAhead, untilWords } from '../../features/when'
 import type { Kit } from '../kit'
 import { buttons, callout, card, clip, footnote, isNative, link, listItem, meterBar, note, picker, row, spaced, stepper, switchControl } from '../primitives'
@@ -223,7 +225,7 @@ function watcherBlock(k: Kit, ops: OpsView, w: WatcherView): RenderElement {
   const { Box, Input, Text } = k.ui
   const look = STATUS_LOOK[w.status] ?? STATUS_LOOK.armed!
   const left = w.status === 'armed' ? `in ${untilWords(w.wakeAt - k.now)}` : w.status === 'paused' ? 'paused' : w.status === 'waking' ? 'waking' : 'due'
-  const how = w.decided === null ? `${STRATEGY_WORD[w.strategy]}: decides at the wake` : `${STRATEGY_WORD[w.strategy]}: ${w.decided.mode === 'fresh' ? 'wakes fresh' : w.decided.hold ? 'holds the cache warm' : 'wakes in this context'}`
+  const how = howWords(w)
   const isEditing = ops.ui.rescheduling === w.id
   return (
     <Box key={`w-${w.id}`} flexDirection="column" rowGap={isNative(k) ? 1 : 0}>
@@ -261,8 +263,6 @@ function watcherBlock(k: Kit, ops: OpsView, w: WatcherView): RenderElement {
     </Box>
   )
 }
-
-const STRATEGY_WORD: Record<WatchStrategy, string> = { smart: 'Smart', warm: 'Keep warm', fresh: 'Fresh' }
 
 function watchersCard(kit: Kit, pane: PaneModel, ops: OpsView): RenderElement {
   const { Box, Input } = kit.ui
@@ -443,7 +443,7 @@ function budgetCard(kit: Kit, ops: OpsView): RenderElement {
             meter(k, 'cost', 'Cost', b.cost.used, b.cost.limit, b.cost.tone, n => `$${n.toFixed(2)}${b.cost.isPartial === true ? '+' : ''}`),
             meter(k, 'time', 'Time', b.time.used, b.time.limit, b.time.tone, span),
             meter(k, 'handoffs', 'Handoffs', b.handoffs.used, b.handoffs.limit, b.handoffs.tone, n => String(n)),
-            b.reached.length === 0 ? null : note(k, `Reached: ${b.reached.join('; ')}${b.held === null ? '' : `. ${b.held} waits for you.`}`, 'budget-reached', 'warn'),
+            b.reached.length === 0 ? null : note(k, `Reached: ${b.reached.join('; ')}${b.held === null ? '' : `. ${sentenceCase(b.held)} waits for you.`}`, 'budget-reached', 'warn'),
             Input === undefined
               ? null
               : row(k, {
@@ -548,7 +548,12 @@ export function operationsPage(kit: Kit, pane: PaneModel, ops: OpsView | undefin
       {budgetCard(kit, ops)}
       {ops.log.length === 0
         ? null
-        : footnote(kit, { key: 'ops-log', text: `Lately: ${ops.log.slice(0, 4).map(e => `${fmt.clock(e.at)} ${e.text}`).join(' · ')}` })}
+        : (
+          // Apart from the Run budget card it follows: the run's operations, not the budget's (read as budget history in review).
+          <Box key="ops-log-wrap" marginTop={1} flexDirection="column">
+            {footnote(kit, { key: 'ops-log', text: `Recent operations: ${ops.log.slice(0, 4).map(e => `${fmt.clock(e.at)} ${e.text}`).join(' · ')}` })}
+          </Box>
+        )}
     </Box>
   )
 }

@@ -157,12 +157,39 @@ def select(p):
     return f'<span class="field"><button class="select"><span>{html.escape(str(shown))}</span>{caret}</button></span>'
 
 
+def module_fault(n):
+    """Why the app's page refuses a surface module's tree, or None. Its check (Claude Desktop 2.26454)
+    is stricter than the hooks module's: an Svg needs a width and a height, each 1 to 4096 px."""
+    if isinstance(n, str) or not isinstance(n, dict):
+        return None
+    t, p = n.get('type'), n.get('props') or {}
+    if t == 'Svg':
+        for k in ('width', 'height'):
+            if not (num(p.get(k)) and 0 < p[k] <= 4096):
+                return f'an Svg with no {k} (or past 4096 px)'
+        if not str(p.get('alt', '')).strip():
+            return 'an Svg with no alt'
+        return None
+    if t not in ('Box', 'Text', 'div', 'span', 'b', 'Button', 'Input', 'Select'):
+        return f'a {t}, which a surface module cannot draw'
+    for c in n.get('children') or []:
+        fault = module_fault(c)
+        if fault is not None:
+            return fault
+    return None
+
+
 def render(n):
     if isinstance(n, str):
         return html.escape(n)
     if not isinstance(n, dict):
         return ''
     t, p, kids = n.get('type'), n.get('props') or {}, n.get('children') or []
+    if t == 'Box' and p.get('key') == 'kit-region':
+        # The app draws a surface module's tree only if its page's check passes; else its fault line.
+        fault = next((f for f in (module_fault(c) for c in kids) if f is not None), None)
+        if fault is not None:
+            return f'<div style="{box_style(p)}"><span style="color:#9B9A97;font-size:13px">project-sentinel: Client hooks/kit.client.tsx: returned a tree the page cannot draw ({html.escape(fault)})</span></div>'
     if t == 'Box':
         # The app marks a row box that sets no alignment; its texts, buttons and images centre on the row.
         is_row = str(p.get('flexDirection', 'row')).startswith('row') and 'alignItems' not in p

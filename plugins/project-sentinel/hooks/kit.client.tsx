@@ -2765,6 +2765,13 @@ const SPIN_RING: Pt[] = [[1, 0], [2, 0], [3, 1], [3, 2], [2, 3], [1, 3], [0, 2],
 /** The widest Desktop lane, in CSS pixels: wider than any status bar, a bound on the image. */
 export const D_MAX_LANE_PX = 3200
 
+/**
+ * The widest image Desktop draws, in CSS pixels. Its page takes a surface module's `Svg` only with
+ * a `width` and a `height`, each at most this (it refuses the whole tree otherwise: "returned a
+ * tree the page cannot draw"), and draws it `max-width: 100%`.
+ */
+export const D_MAX_IMAGE_PX = 4096
+
 /** The width of the Desktop lane, in CSS pixels, for a region `columns` cells wide: the whole of it. */
 export function desktopLanePx(columns: number): number {
   if (columns <= 0) return 360
@@ -2821,11 +2828,11 @@ export function desktopLane(d: Drawable, px: number): { grid: (string | null)[][
 /**
  * The whole lane on Desktop as one SVG: a soft shadow, then one path per color (crisp pixels).
  *
- * `isFill`: the image fills the box it is given, however wide (its own width is half as wide again
- * as the lane, so the box is the slot, and the drawing stretches to it). Desktop counts a region in
- * cells of its own font and never says how wide a cell is; filled, Kit's lane is always the whole
- * status bar, and a touch's share of the region is its share of the lane. Without it (VS Code's
- * still image) it is drawn at its size.
+ * `isFill`: the image fills the box it is given, however wide (its own width, `desktopFillSize`, is
+ * half as wide again as the lane, so `max-width: 100%` makes the region's width its own, and the
+ * drawing stretches to it). Desktop counts a region in cells of its own font and never says how wide
+ * a cell is; filled, Kit's lane is always the whole status bar, and a touch's share of the region is
+ * its share of the lane. Without it (VS Code's still image) it is drawn at its size.
  */
 export function desktopSvg(d: Drawable, px: number, isFill = false): string {
   const { grid, x0, w, shadow } = desktopLane(d, px)
@@ -2849,7 +2856,7 @@ export function desktopSvg(d: Drawable, px: number, isFill = false): string {
       : `<ellipse cx="${shadow.cx * D_PX}" cy="${(ht - 1) * D_PX}" rx="${(shadow.rx * D_PX).toFixed(1)}" ry="${(1.5 * D_PX).toFixed(1)}" fill="#000" fill-opacity="${shadow.opacity.toFixed(2)}" shape-rendering="auto"/>`
   let body = ''
   for (const [color, dPath] of paths) body += `<path fill="${color}" d="${dPath}"/>`
-  const size = isFill ? `width="${Math.round(w * D_PX * 1.5)}" height="${ht * D_PX}" preserveAspectRatio="none"` : `width="${w * D_PX}" height="${ht * D_PX}"`
+  const size = isFill ? `width="${desktopFillSize(px).width}" height="${ht * D_PX}" preserveAspectRatio="none"` : `width="${w * D_PX}" height="${ht * D_PX}"`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" ${size} viewBox="0 0 ${w * D_PX} ${ht * D_PX}" shape-rendering="crispEdges">` +
     `<style>:root{color-scheme:light dark}</style><title>${title}</title>${ground}<g transform="scale(${D_PX})">${body}</g></svg>`
@@ -2858,6 +2865,15 @@ export function desktopSvg(d: Drawable, px: number, isFill = false): string {
 
 /** The Desktop lane's image size for a lane `px` wide: whole art pixels. */
 export const desktopSize = (px: number): { width: number; height: number } => ({ width: Math.max(KIT_W * 2, Math.floor(px / D_PX)) * D_PX, height: D_LANE_H * D_PX })
+
+/**
+ * The size the filling image asks for: half as wide again as the lane (never past what Desktop
+ * draws), the lane's height. Drawn `max-width: 100%`, its box is then the region's width.
+ */
+export const desktopFillSize = (px: number): { width: number; height: number } => ({
+  width: Math.min(D_MAX_IMAGE_PX, Math.round(desktopSize(px).width * 1.5)),
+  height: desktopSize(px).height,
+})
 
 /** Kit held still in its mood's pose, as one image: where a surface draws no surface module (VS Code). */
 export function kitStillSvg(view: CompanionView, px: number): { source: string; width: number; height: number } {
@@ -2994,8 +3010,9 @@ export default function KitClient(props: KitProps, surface: ClientSurface<View>)
     const lane = inst.lane
     const d = drawableOf(inst.state, props)
     if (props.surface === 'desktop') {
-      // No width: the box is the region's width (the image fills it); the height is the lane's.
-      const art = { type: 'Svg', props: { source: desktopSvg(d, lane.px, true), alt: props.caption, height: desktopSize(lane.px).height } } as unknown as RenderElement
+      // Wider than the region, so `max-width: 100%` gives it the region's width (the drawing fills
+      // it); the height is the lane's. Desktop refuses a module's image without both.
+      const art = { type: 'Svg', props: { source: desktopSvg(d, lane.px, true), alt: props.caption || 'Kit', ...desktopFillSize(lane.px) } } as unknown as RenderElement
       return (
         <Box key="kit" flexDirection="row">
           {art}

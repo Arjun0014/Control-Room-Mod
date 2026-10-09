@@ -4,6 +4,7 @@ import { CAPTION, type Mood, type MoodInput, companionView, moodOf } from '../ho
 import {
   COOLDOWN_MS,
   D_H,
+  D_MAX_IMAGE_PX,
   D_MAX_LANE_PX,
   D_W,
   DIZZY_REST_MS,
@@ -20,6 +21,7 @@ import {
   type KitProps,
   type KitState,
   createKit,
+  desktopFillSize,
   desktopLanePx,
   desktopLaneUnits,
   desktopSprite,
@@ -35,6 +37,7 @@ import {
   terminalSprite,
   touchKit,
 } from '../hooks/kit.client'
+import { desktopClientFault } from './fixtures/desktop'
 
 const MOODS: readonly Mood[] = ['idle', 'think', 'work', 'search', 'test', 'celebrate', 'worried', 'waiting', 'handoff', 'wake', 'sleepy', 'dim', 'sleep', 'tend', 'tired']
 
@@ -467,6 +470,15 @@ describe('companion', () => {
     const still = createKit(props(), { lane: desktopLaneUnits(808), home: 2, seed: 1, isEntering: false })
     expect(desktopSvg(drawableOf(still, props()), 808, true)).toContain('width="1211" height="84" preserveAspectRatio="none" viewBox="0 0 807 84"')
     expect(desktopSvg(drawableOf(still, props()), 808)).toContain('width="807" height="84" viewBox="0 0 807 84"')
+    // The size the image asks for matches its markup, and never passes the 4096 px Desktop draws.
+    expect(desktopFillSize(808)).toEqual({ width: 1211, height: 84 })
+    expect(desktopFillSize(D_MAX_LANE_PX)).toEqual({ width: D_MAX_IMAGE_PX, height: 84 })
+    expect(desktopSvg(drawableOf(still, props()), D_MAX_LANE_PX, true)).toContain(`width="${D_MAX_IMAGE_PX}" height="84" preserveAspectRatio="none"`)
+    // The page refuses a module's image without a width (1.5.0's lane), and takes it with one.
+    const art = (size: object) => ({ type: 'Box', props: { key: 'kit', flexDirection: 'row' }, children: [{ type: 'Svg', props: { source: '<svg xmlns="http://www.w3.org/2000/svg"/>', alt: 'Kit sits by', ...size } }] })
+    expect(desktopClientFault(art({ height: 84 }))).toContain('width')
+    expect(desktopClientFault(art({ width: 5000, height: 84 }))).toContain('width')
+    expect(desktopClientFault(art(desktopFillSize(808)))).toBeNull()
     // The busiest frames of a dance and a nap, at 400 and at 3200 px: the same drawing, only the size differs.
     const p = props({ mood: 'celebrate' })
     const frames = run(kitOf(props(), { x: 30 }), () => p, 3000)

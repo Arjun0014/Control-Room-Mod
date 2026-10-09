@@ -17,7 +17,10 @@ the app's bundle, Claude Desktop 2.26454):
 - a row box that sets no `alignItems` centers its texts, buttons, images and pickers on the row;
 - a `Text` wraps unless it truncates;
 - a `Button` is the app's button, a `Select` its picker (as wide as its value), an `Svg` an image of
-  its given size.
+  its given size;
+- a surface module's tree (Kit's region) is drawn only if it passes the page's own check, where an
+  `Svg` needs a `width` and a `height`; otherwise the preview shows the app's fault line instead, as
+  the app does.
 
 ```bash
 python tools/desktop-preview/preview.py

@@ -6,6 +6,23 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and ver
 `plugins/project-sentinel/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/project-sentinel` checks this when tagging a release.
 
+## [1.5.1] - 2026-10-09
+
+### Fixed
+
+- **Kit draws on Claude Desktop again.** 1.5.0 widened Kit's lane to the whole status bar by giving
+  its image a height and no width, so the box would be the region's. Claude Desktop's page checks a
+  surface module's tree more strictly than a hooks module's: there an image needs both a width and a
+  height, and a tree that fails the check is not drawn at all. In the app, Kit's lane showed
+  *project-sentinel: Client hooks/kit.client.tsx: returned a tree the page cannot draw (malformed or
+  past its bounds)* instead of Kit (seen by the person in Claude Desktop 2.26454). The image now asks
+  for a width half as wide again as its region (at most 4096 pixels, the most the page draws), and
+  the page's own `max-width: 100%` fits it to the region, so the lane still spans the status bar.
+  Checked with the page's own code, taken from the app's bundle: every Kit tree the tests draw, at
+  five widths, through a touch, is drawn; 1.5.0's is refused. The tests now hold the page's check
+  (`tests/fixtures/desktop.ts`) and run Kit's Desktop frames through it, and `tools/desktop-preview`
+  shows the app's fault line for a tree the page would refuse.
+
 ## [1.5.0] - 2026-10-09
 
 A reliability pass: what Project Sentinel says it does, proven against real requests (a recording

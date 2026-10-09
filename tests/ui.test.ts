@@ -7,6 +7,7 @@ import { cacheState, cacheSummary, lifetimeWords } from '../hooks/ui/pane/cache'
 import { MAX_COLUMNS, TABS } from '../hooks/ui/pane/frame'
 import { navRowColumns } from '../hooks/ui/primitives'
 import { ACCENT, TIMELINE, meter } from '../hooks/ui/theme'
+import { desktopClientFault } from './fixtures/desktop'
 import { typeperfLine } from './fixtures/fake-host'
 import { SESSION, world } from './fixtures/world'
 
@@ -978,15 +979,24 @@ describe('ui', () => {
     expect(String(art?.props?.source)).toContain('<path')
     expect(String(art?.props?.source)).not.toContain('<animate')
     expect(art?.props?.isInteractive).toBeUndefined()
-    // The whole width of the status bar, no longer a strip of it: no width, so the box is the region's,
-    // and the drawing (100 cells of lane) stretches to fill it whatever a Desktop cell measures.
-    expect(art?.props?.width).toBeUndefined()
+    // The whole width of the status bar, no longer a strip of it: wider than the region, so the page's
+    // `max-width: 100%` makes its box the region's, and the drawing (100 cells of lane) stretches to
+    // fill it whatever a Desktop cell measures. Desktop's page refuses a module's image without both a
+    // width and a height (1.5.0 sent no width: "returned a tree the page cannot draw").
+    expect(art?.props?.width).toBe(1211)
     expect(art?.props?.height).toBe(84)
     expect(String(art?.props?.source)).toContain('viewBox="0 0 807 84"')
     expect(String(art?.props?.source)).toContain('width="1211" height="84" preserveAspectRatio="none"')
+    expect(desktopClientFault(await desktop.drawn({ in: 'kit' }))).toBeNull()
     const first = String(art?.props?.source)
     await desktop.advance(3000)
     expect(String((await findArt())?.props?.source)).not.toBe(first)
+    expect(desktopClientFault(await desktop.drawn({ in: 'kit' }))).toBeNull()
+    // At the widest lane too: the width stays within what the page draws.
+    await desktop.resize({ columns: 500, rows: 4, in: 'kit' })
+    await desktop.advance(400)
+    expect((await findArt())?.props?.width).toBe(4096)
+    expect(desktopClientFault(await desktop.drawn({ in: 'kit' }))).toBeNull()
     await desktop.pointer({ type: 'down', x: 8, y: 2, button: 'left', in: 'kit' })
     await desktop.advance(300)
     expect(w.kept.opened).not.toContain('control-room')

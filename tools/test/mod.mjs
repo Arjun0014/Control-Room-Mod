@@ -9,11 +9,13 @@
 //   node tools/test/mod.mjs assemble    writes .build/mod and prints its path
 //   node tools/test/mod.mjs typecheck   assembles, then `tsc -p .build/mod`
 //   node tools/test/mod.mjs test        assembles, then `claude plugin test .build/mod`
+//   node tools/test/mod.mjs test ui cache   the same, with only the test files those words name
+//                                       (`ui.test.ts`, `cache.test.ts`)
 //
 // The plugin folder is the one the marketplace names (`.claude-plugin/marketplace.json`).
 
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -27,12 +29,18 @@ function pluginFolder() {
   return resolve(REPO, source)
 }
 
-function assemble() {
+function assemble(only = []) {
   const plugin = pluginFolder()
   rmSync(SCRATCH, { recursive: true, force: true })
   mkdirSync(dirname(SCRATCH), { recursive: true })
   cpSync(plugin, SCRATCH, { recursive: true })
   cpSync(join(REPO, 'tests'), join(SCRATCH, 'tests'), { recursive: true })
+  if (only.length > 0) {
+    const tests = join(SCRATCH, 'tests')
+    const kept = readdirSync(tests).filter(name => /\.test\.tsx?$/.test(name) && only.some(word => name.startsWith(`${word}.`)))
+    if (kept.length === 0) throw new Error(`no test file is named ${only.join(', ')}`)
+    for (const name of readdirSync(tests)) if (/\.test\.tsx?$/.test(name) && !kept.includes(name)) rmSync(join(tests, name))
+  }
   return SCRATCH
 }
 
@@ -64,7 +72,7 @@ if (what === 'assemble') {
   }
   process.exit(run(process.execPath, [join(REPO, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', mod]))
 } else if (what === 'test') {
-  process.exit(run('claude', ['plugin', 'test', assemble()]))
+  process.exit(run('claude', ['plugin', 'test', assemble(process.argv.slice(3))]))
 } else {
   console.error('usage: node tools/test/mod.mjs assemble | typecheck | test')
   process.exit(2)

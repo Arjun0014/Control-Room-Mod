@@ -302,27 +302,28 @@ function chipsThatFit(chips: readonly HudChip[], room: number): HudChip[] {
 
 /**
  * A chip: its mark in its tone, then its words. One that `opens` is a control: pressed, it opens
- * Activity → Operations (Review, a watcher's countdown, queued work, agents, the budget).
+ * Activity → Operations (Review, a watcher's countdown, queued work, agents, the budget). Its words
+ * are the Button's label and its mark sits beside it: Claude Code 2.1.289 takes a Button's label
+ * only, and refuses one with Text children by skipping the whole status bar.
  */
 function chipEl(kit: Kit, chip: HudChip): RenderElement {
-  const { Text, Button } = kit.ui
+  const { Box, Text, Button } = kit.ui
   const mark = chip.key === 'failing' ? G.fail : chip.tone === 'bad' || chip.tone === 'warn' ? G.warn : chip.key === 'quest' ? G.star : chip.key === 'watcher' ? G.wait : G.dot
-  const parts = [
-    <Text key={`chip-${chip.key}-mark`} {...toneProps(chip.tone)}>{`${mark} `}</Text>,
-    <Text key={`chip-${chip.key}-text`} {...toneProps(chip.tone === 'info' || chip.tone === 'accent' ? 'normal' : chip.tone)} bold={chip.tone === 'bad' ? true : undefined}>
-      {chip.text}
-    </Text>,
-  ]
+  const markEl = <Text key={`chip-${chip.key}-mark`} {...toneProps(chip.tone)}>{`${mark} `}</Text>
   if (chip.opens === 'ops') {
     return (
-      <Button key={`chip-${chip.key}`} label={chip.text} plain onPress={kit.actions.openOps}>
-        {parts}
-      </Button>
+      <Box key={`chip-${chip.key}-box`} flexDirection="row" flexShrink={0}>
+        {markEl}
+        <Button key={`chip-${chip.key}`} label={chip.text} plain onPress={kit.actions.openOps} />
+      </Box>
     )
   }
   return (
     <Text key={`chip-${chip.key}`} wrap="truncate-end">
-      {parts}
+      {markEl}
+      <Text key={`chip-${chip.key}-text`} {...toneProps(chip.tone === 'info' || chip.tone === 'accent' ? 'normal' : chip.tone)} bold={chip.tone === 'bad' ? true : undefined}>
+        {chip.text}
+      </Text>
     </Text>
   )
 }

@@ -32,6 +32,14 @@ const keys = (tree: unknown): string[] => {
   return out
 }
 
+/** Buttons with children other than one string: Claude Code 2.1.289 refuses them, and skips the whole tree. */
+const richButtons = (tree: unknown): string[] => {
+  const out: string[] = []
+  each(tree, n => {
+    if (n.type === 'Button' && (n.children ?? []).some(c => typeof c !== 'string')) out.push(keyOf(n))
+  })
+  return out
+}
 const bandProps = (bodyColumns: number) => ({ hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns, scroll: { offset: 0, bodyRows: 6 }, view: {} })
 const paneProps = (bodyColumns: number, placement: 'dock' | 'inline' = 'dock') => ({ title: 'Control Room', isFocused: true, bodyColumns, placement, scroll: { offset: 0, bodyRows: 60 }, view: {} })
 
@@ -117,6 +125,7 @@ describe('Operations: the panel', () => {
         for (const card of ['card-ops-review', 'card-ops-queue', 'card-ops-watchers', 'card-ops-agents', 'card-ops-budget']) expect(all, `${surface} ${columns}: ${card}`).toContain(card)
         // The queue's field takes the row under its label: beside it, its text would squeeze the label into a column.
         if (surface !== 'mobile') expect(all, `${surface} ${columns}`).toContain('ops-queue-input-stacked')
+        expect(richButtons(tree), `${surface} ${columns}`).toEqual([])
         const text = textOf(tree)
         expect(text, `${surface} ${columns}`).toContain('Postgres or SQLite for the cache store?')
         expect(text).toContain('Carry the cache findings into the README')
@@ -235,7 +244,8 @@ describe('Operations: the status bar', () => {
       const chip = await band.find({ key: 'chip-review' })
       expect(chip, surface).toBeDefined()
       expect(chip?.type, surface).toBe('Button')
-      expect(textOf(await band.drawn())).toContain('Review 1')
+      expect(chip?.props?.label ?? textOf(chip), surface).toBe('Review 1')
+      expect(richButtons(await band.drawn()), surface).toEqual([])
       if (surface === 'desktop') expect(monospaceOffenders(await band.drawn(), 'status bar')).toEqual([])
       await band.press({ key: 'chip-review' })
       await w.clock.advance(300)

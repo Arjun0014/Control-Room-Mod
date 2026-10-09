@@ -91,6 +91,12 @@ and nothing of an ended run leaks into a new one. 430 tests.
   verified to fail without the fix). An immediate write now supersedes the waiting one.
 - Kit sleeps or tends its fire while a watcher parks the run even in a context with no turn yet,
   ahead of the fresh context's walk-in.
+- **The status bar on Claude Code 2.1.289.** The chips that open Operations drew their mark and
+  words as styled text inside a button. Claude Code 2.1.289 takes a button's label only, refuses one
+  with anything inside, and then skips the whole status bar: on that engine the bar vanished whenever
+  a chip showed (found by CI on 2.1.289 for the first push of 1.6.0, `36d60de`, before it was
+  tagged). The words are the button's label now, the mark beside it in its color; the tests refuse
+  such a button on every engine.
 - **"Some saved settings were invalid" for settings that were only incomplete.** Since 1.4.0,
   stored settings with no permissions group (written by hand or by a tool) were reported as repaired
   at each start until a setting was changed, though nothing in them was invalid: the check for a

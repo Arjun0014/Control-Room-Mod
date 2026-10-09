@@ -167,7 +167,9 @@ name (`✗ Lint failing`, red; not counted again as an issue), calls that need a
 (`▲ 2 issues`), the guard keeping Claude going, a busy machine in the terminal (`▲ RAM 92%`, amber
 near a ceiling, red at it; Desktop has its Machine cell instead), running agents, the Quest log's
 level. The orchestration layer adds four, each only while it has something to say, each a control
-that opens Activity → Operations: `▲ Review 2` (amber: decisions waiting for the person; when one
+that opens Activity → Operations: its mark in its tone, then its words as the button's label (Claude
+Code 2.1.289 takes a button's label only; a button with styled text inside is refused there, and the
+whole status bar with it). `▲ Review 2` (an amber mark: decisions waiting for the person; when one
 blocks the run the headline says it instead), the run budget near or at a limit, `◷ Watcher 1h 42m`
 (a watcher armed while the run is not asleep: Claude works, or the person does), and `● Queued 3`
 (queued work due when the turn ends, shown only while Claude works). There is no constant count:

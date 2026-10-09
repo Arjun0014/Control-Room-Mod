@@ -1,8 +1,9 @@
 # Orchestration (1.6.0)
 
-> **Status: released in 1.6.0.** Built as described here, tested over the in-memory host and the
-> engine (`tests/ops.test.ts`, `tests/operations.test.ts`, `tests/opsui.test.ts`) and live with a real
-> model (the changelog's *Verified live* lists what was proven, and how).
+> **Status: released in 1.6.1** (1.6.0 was pushed, not tagged). Built as described here, tested over
+> the in-memory host and the engine (`tests/ops.test.ts`, `tests/operations.test.ts`,
+> `tests/opsui.test.ts`) and live with a real model (the changelog's *Verified live* lists what was
+> proven, and how).
 
 How Project Sentinel orchestrates a long run over time: work queued for later, decisions Claude
 leaves for the person, runs parked until a result is due, the cost of coming back to a cold cache,

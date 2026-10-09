@@ -5,7 +5,7 @@
  * transitions pure makes every path unit-testable without an engine.
  *
  *   off → armed → pending → requested → handoff → verifying → clearing → resuming → armed
- *                                                    ↘ compacting ↗
+ *                                          ↘ waiting-background ↗   ↘ compacting ↗
  *   any failure that cannot be recovered automatically → awaiting (START FRESH CONTEXT)
  *
  * Every step is moved on by an event, never by a timer: the turn that crossed
@@ -13,6 +13,14 @@
  * and ending, the notes checked on disk, the fresh session reported, the
  * continuation turn starting. A turn that is not Control Room's own (a prompt
  * the person queued) never moves a handoff step on.
+ *
+ * A handoff turn that stops while background work still runs (a render, a
+ * test run) waits in `waiting-background`. Claude Code says what is in flight
+ * at every turn's Stop and reports each task's end with a notification (a
+ * prompt whose origin is `task-notification`, starting a turn of its own when
+ * the session is idle). The wait ends at the first turn's end, whoever's turn
+ * it was, at which Claude Code lists no background work in flight: the notes
+ * are then checked and the context cleared. The turn's text never decides it.
  */
 
 import type { ContinuationMethod } from '../core/settings'
@@ -23,11 +31,15 @@ export type AutopilotState =
   | 'pending'
   | 'requested'
   | 'handoff'
+  | 'waiting-background'
   | 'verifying'
   | 'clearing'
   | 'compacting'
   | 'resuming'
   | 'awaiting'
+
+/** One task of background work Claude Code reports in flight (a shell, an agent, a monitor): its id and what it is. */
+export type BackgroundTask = { id: string; description: string }
 
 export type Autopilot = {
   state: AutopilotState
@@ -39,6 +51,20 @@ export type Autopilot = {
   triggeredAt: number | null
   /** When the handoff prompt was submitted: the handoff file must be newer. */
   handoffSince: number | null
+  /** The handoff turn's id (the first one, not a retry's), once it began. */
+  handoffTurnId: string | null
+  /**
+   * The background work a handoff waits for, as Claude Code reports it: what its Stop listed in
+   * flight as the handoff turn ended, less each task a notification (or a TaskStop) reported
+   * ended, replaced by every later turn's Stop. Empty outside `waiting-background`.
+   */
+  background: BackgroundTask[]
+  /** How many background tasks this handoff waited for (0 when it waited for none). */
+  waitedFor: number
+  /** When the last of that work was reported ended: the notes can be compared with it. */
+  backgroundEndedAt: number | null
+  /** While the handoff waits: whether the notes were on disk, written for this handoff, at the last look (null before one). */
+  notesWritten: boolean | null
   retries: number
   /** Do not trigger again until the context passes this many tokens. */
   snoozeUntil: number | null
@@ -58,10 +84,12 @@ export type Autopilot = {
 
 /**
  * Whose turn it is: the person's, Control Room's own handoff, retry or
- * continuation, another (no typed prompt), or unknown (it began before a
+ * continuation, one a background task's notification began (Claude Code
+ * submits it with the origin `task-notification` when the task ends while the
+ * session is idle), another (no typed prompt), or unknown (it began before a
  * reload of the plugin, so its start was never seen).
  */
-export type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'other' | 'unknown' | OpsTurnKind
+export type TurnKind = 'person' | 'handoff' | 'retry' | 'continuation' | 'notification' | 'other' | 'unknown' | OpsTurnKind
 
 /**
  * Project Sentinel's own turns outside a handoff (app/operations.ts): a watcher's wake, a fresh
@@ -82,9 +110,20 @@ export type AutopilotConfig = {
 export type AutopilotEvent =
   | { kind: 'configure'; enabled: boolean; threshold: number | null; isClamped: boolean }
   | { kind: 'context'; tokens: number; window: number | undefined; isInTurn: boolean; now: number }
-  | { kind: 'turnComplete'; reason: 'answer' | 'aborted' | 'refusal' | 'error'; turn: TurnKind; now: number }
+  | {
+      kind: 'turnComplete'
+      reason: 'answer' | 'aborted' | 'refusal' | 'error'
+      turn: TurnKind
+      now: number
+      /** The background work Claude Code listed in flight at this turn's Stop; null or absent when no Stop was seen (an interrupt). */
+      background?: readonly BackgroundTask[] | null
+    }
   /** The handoff prompt's turn began (recognised by its text at turn.start). */
-  | { kind: 'handoffStarted'; now: number }
+  | { kind: 'handoffStarted'; now: number; turnId?: string }
+  /** Claude Code reported a background task ended: its notification (completed, failed, killed), or a TaskStop that stopped it. */
+  | { kind: 'backgroundEnded'; id: string; status: string | null; now: number }
+  /** The notes, as last looked at while the handoff waits: written for this handoff, or not (yet). */
+  | { kind: 'notesSeen'; isWritten: boolean }
   /** The person started a turn of their own while the fresh context waited for the continuation. */
   | { kind: 'personTookOver'; now: number }
   | { kind: 'handoffVerified'; isOk: boolean; now: number }
@@ -97,7 +136,9 @@ export type AutopilotEvent =
   /** A fresh context started working (its first milestones, edit or agent), or ended a turn without: its size then. */
   | { kind: 'oriented'; tokens: number }
   | { kind: 'engineCompacted' }
-  | { kind: 'manualHandoff'; now: number }
+  /** `/cr handoff` or Hand off now. `isRestart`: a handoff whose turn ended unseen and left no notes is begun again (handoffVerdict). */
+  | { kind: 'manualHandoff'; now: number; isRestart?: boolean }
+  /** `/cr fresh` or Start fresh context, once freshVerdict found it safe: the notes written, nothing in flight, no turn running. */
   | { kind: 'manualFresh'; now: number }
   | { kind: 'snooze'; tokens: number; window: number | undefined }
   | { kind: 'externalClear' }
@@ -107,6 +148,8 @@ export type AutopilotEffect =
   | { kind: 'submitHandoff' }
   | { kind: 'submitRetry' }
   | { kind: 'verifyHandoff' }
+  /** Look at the notes (written for this handoff or not) while it waits for background work: the words shown depend on it. */
+  | { kind: 'checkNotes' }
   | { kind: 'clear' }
   | { kind: 'compact' }
   | { kind: 'submitContinuation'; via: 'clear' | 'compact' }
@@ -122,6 +165,11 @@ export function initialAutopilot(): Autopilot {
     triggeredTokens: null,
     triggeredAt: null,
     handoffSince: null,
+    handoffTurnId: null,
+    background: [],
+    waitedFor: 0,
+    backgroundEndedAt: null,
+    notesWritten: null,
     retries: 0,
     snoozeUntil: null,
     isFreshContext: false,
@@ -189,13 +237,39 @@ export function resolveThreshold(input: {
   return { threshold, isClamped }
 }
 
-const BUSY: readonly AutopilotState[] = ['requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming']
+const BUSY: readonly AutopilotState[] = ['requested', 'handoff', 'waiting-background', 'verifying', 'clearing', 'compacting', 'resuming']
 
 /** States in which the autopilot wants Claude to stop rather than continue. */
 export const isHandoffActive = (state: AutopilotState): boolean =>
   state === 'pending' || BUSY.includes(state)
 
 const set = (model: Autopilot, patch: Partial<Autopilot>): Autopilot => ({ ...model, ...patch })
+
+/** Nothing of a handoff's background wait, as a handoff that is over (or never began) leaves it. */
+const noWait: Pick<Autopilot, 'background' | 'waitedFor' | 'backgroundEndedAt' | 'notesWritten' | 'handoffTurnId'> = {
+  background: [],
+  waitedFor: 0,
+  backgroundEndedAt: null,
+  notesWritten: null,
+  handoffTurnId: null,
+}
+
+/** "Render the 16:9 master", or "2 background tasks". */
+export function backgroundWords(tasks: readonly BackgroundTask[]): string {
+  const first = tasks[0]
+  if (first === undefined) return 'no background work'
+  return tasks.length === 1 ? first.description : `${tasks.length} background tasks`
+}
+
+/** The line Control Room shows while a handoff waits for background work. */
+function waitingNote(tasks: readonly BackgroundTask[], notesWritten: boolean | null): string {
+  const lead = notesWritten === true ? 'Handoff written. ' : ''
+  if (tasks.length === 0) return `${lead}Background work finished. Claude records its result`
+  return `${lead}Waiting for background work: ${backgroundWords(tasks)}`
+}
+
+/** The tasks Claude Code listed, as the model keeps them (a description cut to a line). */
+const tasksOf = (tasks: readonly BackgroundTask[]): BackgroundTask[] => tasks.map(t => ({ id: t.id, description: t.description.slice(0, 120) })).slice(0, 8)
 
 function proceedAfterHandoff(model: Autopilot, cfg: AutopilotConfig): Step {
   switch (cfg.continuation) {
@@ -226,9 +300,14 @@ export type AutopilotRecord = {
   lastError: string | null
   note: string
   at: number
+  /** 1.6.3: the handoff turn's id, and the background work the handoff waits for (absent in a record written before). */
+  handoffTurnId?: string | null
+  background?: BackgroundTask[]
+  waitedFor?: number
+  backgroundEndedAt?: number | null
 }
 
-const STATES: readonly AutopilotState[] = ['off', 'armed', 'pending', 'requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming', 'awaiting']
+const STATES: readonly AutopilotState[] = ['off', 'armed', 'pending', 'requested', 'handoff', 'waiting-background', 'verifying', 'clearing', 'compacting', 'resuming', 'awaiting']
 
 /**
  * What must outlive a reload: nothing while plainly watching, the handoff's
@@ -248,8 +327,18 @@ export function recordOf(model: Autopilot, sessionId: string | null, now: number
     lastError: model.lastError,
     note: model.note,
     at: now,
+    handoffTurnId: model.handoffTurnId,
+    background: model.background,
+    waitedFor: model.waitedFor,
+    backgroundEndedAt: model.backgroundEndedAt,
   }
 }
+
+/** A record's background list as written, or none: a record from before 1.6.3, or one changed by hand, never throws. */
+const recordedTasks = (value: unknown): BackgroundTask[] =>
+  Array.isArray(value)
+    ? tasksOf(value.filter((t): t is BackgroundTask => typeof t === 'object' && t !== null && typeof (t as BackgroundTask).id === 'string' && typeof (t as BackgroundTask).description === 'string'))
+    : []
 
 /**
  * A fresh runtime after a reload picks the handoff up where the record left
@@ -267,6 +356,9 @@ export function recover(model: Autopilot, record: AutopilotRecord, ctx: { sessio
     triggeredTokens: record.triggeredTokens,
     triggeredAt: record.triggeredAt,
     handoffSince: record.handoffSince,
+    handoffTurnId: typeof record.handoffTurnId === 'string' ? record.handoffTurnId : null,
+    waitedFor: typeof record.waitedFor === 'number' ? record.waitedFor : 0,
+    backgroundEndedAt: typeof record.backgroundEndedAt === 'number' ? record.backgroundEndedAt : null,
     retries: record.retries,
     snoozeUntil: record.snoozeUntil,
     lastError: record.lastError,
@@ -281,6 +373,14 @@ export function recover(model: Autopilot, record: AutopilotRecord, ctx: { sessio
     case 'awaiting':
       // Nothing was left half-done: the turn under way (or the person) moves it on.
       return { model: set(kept, { state, note: record.note }), effects: none }
+    case 'waiting-background': {
+      // Still waiting: the next turn whose Stop lists nothing in flight finishes the handoff, as before the reload.
+      const background = recordedTasks(record.background)
+      return {
+        model: set(kept, { state, background, waitedFor: Math.max(kept.waitedFor, background.length), note: record.note }),
+        effects: [{ kind: 'checkNotes' }],
+      }
+    }
     case 'verifying':
       return { model: set(kept, { state: 'verifying', note: 'Checking the handoff notes' }), effects: [{ kind: 'verifyHandoff' }] }
     case 'clearing':
@@ -294,7 +394,7 @@ export function recover(model: Autopilot, record: AutopilotRecord, ctx: { sessio
       }
     case 'resuming':
       return {
-        model: set(kept, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, ...fresh, note: 'Watching the context' }),
+        model: set(kept, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, ...noWait, ...fresh, note: 'Watching the context' }),
         effects: [{ kind: 'notify', text: 'Control Room reloaded as the fresh context began. If Claude is idle, ask it to continue from the handoff notes.', level: 'info' }],
       }
   }
@@ -367,6 +467,8 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
         }
         return { model: set(model, { state: 'requested', note: 'Step finished. Starting the handoff' }), effects: [{ kind: 'submitHandoff' }] }
       }
+      // What Claude Code listed in flight as this turn stopped; unknown without a Stop (an interrupt).
+      const inFlight = event.background === undefined || event.background === null ? null : tasksOf(event.background)
       // Only the handoff turn's own end moves the handoff on; a turn the person queued before it does not.
       if (model.state === 'handoff' && isHandoffTurn(event.turn)) {
         if (event.reason === 'aborted') {
@@ -375,10 +477,54 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
             effects: [{ kind: 'notify', text: 'Handoff interrupted. Resume it from Control Room when you’re ready.', level: 'warn' }],
           }
         }
+        if (inFlight !== null && inFlight.length > 0) {
+          // The notes are not checked, and nothing is cleared, under work still running: its result may belong in them.
+          return {
+            model: set(model, { state: 'waiting-background', background: inFlight, waitedFor: inFlight.length, backgroundEndedAt: null, notesWritten: null, note: waitingNote(inFlight, null) }),
+            effects: [
+              { kind: 'checkNotes' },
+              { kind: 'notify', text: `The handoff waits for background work to finish (${backgroundWords(inFlight)}), then checks the notes and starts the fresh context.`, level: 'info' },
+            ],
+          }
+        }
         return { model: set(model, { state: 'verifying', note: 'Checking the handoff notes' }), effects: [{ kind: 'verifyHandoff' }] }
+      }
+      if (model.state === 'waiting-background') {
+        // Whoever's turn this was (the one a task's notification began, the person's, an unseen one):
+        // Claude Code's list at its Stop is what decides, never the turn's text.
+        const still = inFlight ?? model.background
+        if (still.length > 0) {
+          const added = still.filter(t => !model.background.some(b => b.id === t.id)).length
+          return { model: set(model, { background: still, waitedFor: model.waitedFor + added, note: waitingNote(still, model.notesWritten) }), effects: [{ kind: 'checkNotes' }] }
+        }
+        if (event.reason === 'aborted') {
+          return {
+            model: set(model, { state: 'awaiting', background: [], backgroundEndedAt: model.backgroundEndedAt ?? event.now, note: 'Handoff interrupted. Start fresh when you’re ready' }),
+            effects: [{ kind: 'notify', text: 'The turn that took in the background result was interrupted, so the handoff waits for you: /cr fresh checks the notes and starts the fresh context.', level: 'warn' }],
+          }
+        }
+        return {
+          model: set(model, { state: 'verifying', background: [], backgroundEndedAt: model.backgroundEndedAt ?? event.now, note: 'Background work finished. Checking the handoff notes' }),
+          effects: [{ kind: 'verifyHandoff' }],
+        }
       }
       return { model, effects: none }
     }
+
+    case 'backgroundEnded': {
+      // Inside the handoff turn a task's end changes nothing: its Stop says what is still in flight.
+      if (model.state !== 'waiting-background') return { model, effects: none }
+      const left = model.background.filter(t => t.id !== event.id)
+      if (left.length === model.background.length) return { model, effects: none }
+      return {
+        model: set(model, { background: left, backgroundEndedAt: left.length === 0 ? event.now : model.backgroundEndedAt, note: waitingNote(left, model.notesWritten) }),
+        effects: none,
+      }
+    }
+
+    case 'notesSeen':
+      if (model.state !== 'waiting-background') return { model, effects: none }
+      return { model: set(model, { notesWritten: event.isWritten, note: waitingNote(model.background, event.isWritten) }), effects: none }
 
     case 'oriented': {
       if (!model.isFreshContext) return { model, effects: none }
@@ -400,12 +546,15 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
     case 'handoffStarted':
       // From awaiting too: a reload left the handoff waiting, then its prompt's turn began after all.
       if (model.state !== 'requested' && model.state !== 'awaiting') return { model, effects: none }
-      return { model: set(model, { state: 'handoff', handoffSince: event.now, lastError: null, note: 'Claude is writing the handoff' }), effects: none }
+      return {
+        model: set(model, { state: 'handoff', handoffSince: event.now, ...noWait, handoffTurnId: event.turnId ?? null, lastError: null, note: 'Claude is writing the handoff' }),
+        effects: none,
+      }
 
     case 'personTookOver':
       if (model.state !== 'resuming') return { model, effects: none }
       return {
-        model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, ...fresh, note: 'Watching the context' }),
+        model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, triggeredAt: null, handoffSince: null, ...noWait, ...fresh, note: 'Watching the context' }),
         effects: none,
       }
 
@@ -432,11 +581,11 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (model.state !== 'clearing') return { model, effects: none }
       if (!cfg.autoContinue) {
         return {
-          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, ...fresh, note: 'Fresh context ready. Continue when you are' }),
+          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, ...noWait, ...fresh, note: 'Fresh context ready. Continue when you are' }),
           effects: [{ kind: 'notify', text: 'Fresh context ready. Carry on by itself is off, so Claude waits for you.', level: 'info' }],
         }
       }
-      return { model: set(model, { state: 'resuming', ...fresh, note: 'Continuing in the fresh context' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
+      return { model: set(model, { state: 'resuming', ...noWait, ...fresh, note: 'Continuing in the fresh context' }), effects: [{ kind: 'submitContinuation', via: 'clear' }] }
 
     case 'clearFailed':
       if (model.state !== 'clearing') return { model, effects: none }
@@ -455,11 +604,11 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       if (model.state !== 'compacting') return { model, effects: none }
       if (!cfg.autoContinue) {
         return {
-          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, ...fresh, note: 'Context compacted. Continue when you are' }),
+          model: set(model, { state: 'armed', completed: model.completed + 1, triggeredTokens: null, ...noWait, ...fresh, note: 'Context compacted. Continue when you are' }),
           effects: none,
         }
       }
-      return { model: set(model, { state: 'resuming', ...fresh, note: 'Context compacted. Continuing the work' }), effects: [{ kind: 'submitContinuation', via: 'compact' }] }
+      return { model: set(model, { state: 'resuming', ...noWait, ...fresh, note: 'Context compacted. Continuing the work' }), effects: [{ kind: 'submitContinuation', via: 'compact' }] }
 
     case 'compactFailed':
       if (model.state !== 'compacting') return { model, effects: none }
@@ -484,6 +633,7 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           triggeredTokens: null,
           triggeredAt: null,
           handoffSince: null,
+          ...noWait,
           note: 'Watching the context',
         }),
         effects: none,
@@ -495,22 +645,27 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
       }
       return { model, effects: none }
 
-    case 'manualHandoff':
-      if (BUSY.includes(model.state)) return { model, effects: none }
+    case 'manualHandoff': {
+      // A handoff under way is never asked for twice; one whose turn ended unseen without notes is begun again.
+      const isRestart = event.isRestart === true && (model.state === 'handoff' || model.state === 'waiting-background')
+      if (BUSY.includes(model.state) && !isRestart) return { model, effects: none }
       return {
-        model: set(model, { state: 'requested', triggeredAt: event.now, retries: 0, lastError: null, note: 'Handoff requested' }),
+        model: set(model, { state: 'requested', triggeredAt: event.now, retries: 0, lastError: null, ...noWait, note: 'Handoff requested' }),
         effects: [{ kind: 'submitHandoff' }],
       }
+    }
 
     case 'manualFresh':
-      if (model.state === 'clearing' || model.state === 'compacting' || model.state === 'resuming') return { model, effects: none }
-      return { model: set(model, { state: 'clearing', lastError: null, note: 'Starting a fresh context' }), effects: [{ kind: 'clear' }] }
+      // Only a handoff the person may finish: one waiting for them, or one whose end Claude Code's events left unseen.
+      // freshVerdict decides whether that is safe (the notes written, nothing in flight, no turn running).
+      if (model.state !== 'awaiting' && model.state !== 'handoff' && model.state !== 'waiting-background') return { model, effects: none }
+      return { model: set(model, { state: 'clearing', lastError: null, background: [], note: 'Starting a fresh context' }), effects: [{ kind: 'clear' }] }
 
     case 'snooze': {
       const margin = event.window === undefined ? 50_000 : Math.round(event.window * 0.1)
       if (model.state !== 'pending' && model.state !== 'awaiting') return { model, effects: none }
       return {
-        model: set(model, { state: 'armed', snoozeUntil: event.tokens + margin, note: 'Snoozed until the context grows further' }),
+        model: set(model, { state: 'armed', snoozeUntil: event.tokens + margin, ...noWait, note: 'Snoozed until the context grows further' }),
         effects: none,
       }
     }
@@ -524,12 +679,161 @@ export function step(model: Autopilot, event: AutopilotEvent, cfg: AutopilotConf
           handoffSince: null,
           snoozeUntil: null,
           retries: 0,
+          ...noWait,
           ...fresh,
           note: 'Watching the context',
         }),
         effects: none,
       }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The person finishing a handoff: /cr handoff and /cr fresh
+
+/**
+ * What a look at the notes found: written since this handoff began, present but written before it,
+ * present but empty, absent; `present` where no handoff began in this context (nothing to compare).
+ */
+export type NotesState = 'fresh' | 'stale' | 'empty' | 'missing' | 'present'
+
+/** What the runtime knows when the person asks: everything a safe fresh start depends on. */
+export type HandoffFacts = {
+  isTurnRunning: boolean
+  /**
+   * Claude Code's background work in flight as it last reported it (the last turn's Stop, less what
+   * a notification since said ended); null when no Stop was seen since the plugin loaded. While a
+   * handoff waits for background work the machine's own list is used instead.
+   */
+  inFlight: readonly BackgroundTask[] | null
+  notes: NotesState
+  handoffFile: string
+}
+
+/**
+ * What a `/cr handoff` or `/cr fresh` does, and the words that say so: start a fresh context (the
+ * verified clear path), hand off (the handoff prompt), or nothing. Never a success-looking word for
+ * nothing: each says what is true now.
+ */
+export type Verdict = { action: 'start-fresh' | 'hand-off' | 'none'; text: string }
+
+const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
+
+const namesOf = (tasks: readonly BackgroundTask[]): string => `${tasks.slice(0, 3).map(t => t.description).join('; ')}${tasks.length > 3 ? '; …' : ''}`
+
+const runningWords = (tasks: readonly BackgroundTask[]): string => `${plural(tasks.length, 'background task')} ${tasks.length === 1 ? 'is' : 'are'} still running (${namesOf(tasks)})`
+
+/** "1 background task to finish before starting fresh (Render the 16:9 master)". */
+const waitWords = (tasks: readonly BackgroundTask[]): string => `${plural(tasks.length, 'background task')} to finish before starting fresh (${namesOf(tasks)})`
+
+/** What keeps a handoff the person asked to finish from starting the fresh context, or null when it is safe. */
+function blockerOf(model: Autopilot, facts: HandoffFacts): string | null {
+  const running = model.state === 'waiting-background' ? model.background : (facts.inFlight ?? [])
+  if (running.length > 0) {
+    return `${runningWords(running)}. Fresh context was not started: the handoff finishes by itself when ${running.length === 1 ? 'it ends' : 'they end'} (stop ${running.length === 1 ? 'it' : 'them'} with /tasks to end the wait sooner).`
+  }
+  const file = facts.handoffFile
+  switch (facts.notes) {
+    case 'fresh':
+      return null
+    case 'present':
+      // No handoff began in this context (a reload stopped one before its turn, a fresh context that filled up first):
+      // only the last case has notes to start from, the ones the fresh context was handed.
+      return model.lastError === 'handoff point too low' ? null : `No handoff notes were written in this context, so it was kept. Run /cr handoff to have Claude write ${file}.`
+    case 'missing':
+      return `${file} was not found, so the context was kept. Run /cr handoff to have Claude write it.`
+    case 'empty':
+      return `${file} is empty, so the context was kept. Run /cr handoff to have Claude write it.`
+    case 'stale':
+      return `${file} has not been updated for this handoff, so the context was kept. Run /cr handoff to have Claude write it.`
+  }
+}
+
+/** `/cr fresh` and Start fresh context: the fresh context, through the checks a handoff's own path makes. */
+export function freshVerdict(model: Autopilot, facts: HandoffFacts): Verdict {
+  const none = (text: string): Verdict => ({ action: 'none', text })
+  switch (model.state) {
+    case 'off':
+      return none('Context Autopilot is off, so no handoff is waiting. Run /cr handoff (it turns Autopilot on, writes the notes, then continues fresh), or /clear to discard this context.')
+    case 'armed':
+      return none('No handoff is under way. Run /cr handoff first (it writes the notes, then continues fresh), or /clear to discard this context.')
+    case 'pending':
+      return none('A handoff is due: Claude finishes the current step, then writes the notes. Run /cr handoff to start it now.')
+    case 'requested':
+      return none('A handoff is starting: Claude writes the notes next, then the fresh context starts by itself.')
+    case 'verifying':
+      return none('Handoff is complete; Sentinel is checking the notes.')
+    case 'clearing':
+    case 'compacting':
+      return none('Handoff is complete; Sentinel is starting the fresh context.')
+    case 'resuming':
+      return none('The fresh context has started; Claude is picking up the work from the notes.')
+    case 'handoff':
+      if (facts.isTurnRunning) return none('A handoff is in progress. Claude is writing the notes; the fresh context starts by itself once they are checked.')
+      break
+    case 'waiting-background':
+      if (facts.isTurnRunning && model.background.length === 0) return none('The background work has finished and Claude is recording its result. The fresh context starts when this turn ends.')
+      break
+    case 'awaiting':
+      if (facts.isTurnRunning) return none('A turn is running. Run /cr fresh again when it ends.')
+      break
+  }
+  const blocker = blockerOf(model, facts)
+  if (blocker !== null) return none(blocker)
+  if (model.state === 'awaiting') return { action: 'start-fresh', text: 'Handoff notes are valid. Starting the fresh context.' }
+  if (model.state === 'handoff' && facts.inFlight === null) {
+    return { action: 'start-fresh', text: 'Handoff notes are valid. Starting the fresh context (Sentinel has not seen Claude Code’s list of background work since it reloaded).' }
+  }
+  return { action: 'start-fresh', text: `Handoff notes are valid and ${model.waitedFor > 0 ? 'the background work has finished' : 'no background work is running'}. Starting the fresh context.` }
+}
+
+/** `/cr handoff` and Hand off now: a handoff when none is under way; otherwise what the one under way is doing. */
+export function handoffVerdict(model: Autopilot, facts: HandoffFacts): Verdict {
+  const none = (text: string): Verdict => ({ action: 'none', text })
+  switch (model.state) {
+    case 'off':
+    case 'armed':
+    case 'pending':
+    case 'awaiting':
+      return { action: 'hand-off', text: facts.isTurnRunning ? 'Handing off: Claude writes the handoff notes when the current turn ends.' : 'Handing off: Claude is writing the handoff notes.' }
+    case 'requested':
+      return none('A handoff is already starting: Claude writes the notes next.')
+    case 'verifying':
+      return none('Handoff is complete; Sentinel is checking the notes.')
+    case 'clearing':
+    case 'compacting':
+      return none('Handoff is complete; Sentinel is starting the fresh context.')
+    case 'resuming':
+      return none('The handoff is done: Claude is continuing the work in the fresh context.')
+    case 'waiting-background': {
+      const left = model.background
+      if (left.length > 0) {
+        return none(
+          model.notesWritten === false ? `The handoff is waiting for ${waitWords(left)}; the notes are not written yet.` : `Handoff notes are written; waiting for ${waitWords(left)}.`,
+        )
+      }
+      if (facts.isTurnRunning) return none('The background work has finished and Claude is recording its result. The fresh context starts when this turn ends.')
+      break
+    }
+    case 'handoff':
+      if (facts.isTurnRunning) return none('A handoff is already in progress. Claude is writing the notes.')
+      break
+  }
+  // A handoff whose turn ended unseen (a reload, a record from before 1.6.3): finished when that is safe, begun again when no notes were written.
+  const blocker = blockerOf(model, facts)
+  if (blocker === null) return { action: 'start-fresh', text: 'The handoff turn has ended and its notes are current. Starting the fresh context.' }
+  const running = model.state === 'waiting-background' ? model.background : (facts.inFlight ?? [])
+  if (running.length > 0) return none(`Handoff notes are ${facts.notes === 'fresh' ? 'written' : 'not written yet'}; waiting for ${waitWords(running)}.`)
+  return { action: 'hand-off', text: 'The handoff turn ended without current notes. Handing off again: Claude is writing the handoff notes.' }
+}
+
+/** A background task's notification as Claude Code words it (`<task-notification>` with the task's id and status); null for any other text. */
+export function notificationTask(text: string): { id: string; status: string | null } | null {
+  if (!/^\s*<task-notification>/.test(text)) return null
+  const id = /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(text)?.[1]
+  if (id === undefined) return null
+  const status = /<status>\s*([^<]+?)\s*<\/status>/.exec(text)?.[1] ?? null
+  return { id, status }
 }
 
 const kTokens = (n: number): string => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M` : `${Math.round(n / 1000)}k`)

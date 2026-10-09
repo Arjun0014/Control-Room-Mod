@@ -183,7 +183,7 @@ describe('handoff and continuity, end to end', () => {
     await rt.onTurnComplete({ agentId: undefined, reason: 'answer', answer: 'progress' })
 
     // The handoff turn: milestones sent again, a doc updated, the notes written.
-    rt.requestHandoff()
+    void rt.requestHandoff()
     await f.advance(300)
     const prompt = f.kept.submitted.at(-1) ?? ''
     expect(prompt).toContain('`mcp__project-sentinel__milestones`')

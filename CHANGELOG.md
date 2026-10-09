@@ -6,6 +6,108 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and ver
 `plugins/project-sentinel/.claude-plugin/plugin.json` and in `.claude-plugin/marketplace.json` must
 match. `claude plugin tag plugins/project-sentinel` checks this when tagging a release.
 
+## [1.6.3] - 2026-10-09
+
+A continuity fix found in a real 801k-token run: a Context Autopilot handoff whose turn ended while
+background work still ran never finished, and the commands meant to recover it did not.
+
+### Fixed
+
+- **A handoff waiting for background work was stranded.** The handoff turn wrote its notes and
+  ended while a render was still running, so 1.6.2 rightly held the clear and expected "the turn
+  that work brings back" to finish the handoff. Claude Code does bring a turn back, but not as the
+  handoff's: when a background task ends while the session is idle, it submits the task's
+  notification as a prompt of its own, origin `task-notification`, and that prompt starts a turn
+  whose text is the engine's `<task-notification>` report (seen in the run's transcript, then
+  reproduced live on Claude Code 2.1.295 with an event probe: `prompt.submit origin=task-notification`,
+  `turn.start text="<task-notification>…"`, `classic.Stop background=[]`, `turn.complete`). 1.6.2
+  classified turns by their text alone, so a turn with text that was not its own was the person's,
+  and a person's turn never moves a handoff on: Autopilot stayed in `handoff` for good, the status
+  bar said *Claude is writing the handoff* long after Claude had finished, and no event was left to
+  move it. A reload during the wait lost the hold altogether (it was not in the saved record).
+  Autopilot now has an explicit state for it, `waiting-background`, entered when the handoff turn's
+  Stop lists work in flight. Each task's notification strikes it off the list (and asks Claude, with
+  the notification, to record the result in the notes and end its turn); the first turn of any kind
+  to end with Claude Code listing nothing in flight finishes the handoff: the notes are checked, the
+  context cleared and the work continued, once each. A person's turn that ends with the work still
+  running never finishes it, work started meanwhile is waited for too, a task that failed or was
+  stopped ends the wait as one that completed, and the wait survives a reload of the plugin.
+- **`/cr handoff` said *Handing off* when it did nothing.** It ignored the request during a handoff
+  and answered as if it had started one. It now says what really happened: *Handing off: Claude is
+  writing the handoff notes*, or *A handoff is already in progress*, *Handoff notes are written;
+  waiting for 1 background task to finish before starting fresh (Render the 16:9 master)*, *Handoff
+  is complete; Sentinel is checking the notes*, *… starting the fresh context*. A handoff whose turn
+  ended unseen is finished when that is safe, and begun again only when it left no notes.
+- **`/cr fresh` refused a healthy written handoff.** It started a fresh context only from the
+  *waiting for you* state, so a stranded handoff with current notes had only `/clear` left, which
+  loses the continuation. It now recovers any handoff no event will move on (`handoff`,
+  `waiting-background`, `awaiting`) through the verified clear path, never blindly: background work
+  still running (named), or `NEXT_SESSION_PROMPT.md` missing, empty or not written since this
+  handoff began, keeps the context and says so. Start fresh context in Context does the same, and is
+  offered in those states. A session 1.6.2 left stuck recovers with `/cr fresh` after the update.
+- **The turn a background task's notification starts was taken for the person's.** Besides the
+  handoff, that counted it as a turn of the person's for watchers, judged it against the
+  notification's text as if it were a request, and kept the task in the background list until the
+  next turn's end (the resource notice could name work that had finished). Such a turn is now its
+  own kind (`notification`), judged against the person's last request, and the task leaves the list
+  as its notification arrives.
+
+### Changed
+
+- While a handoff waits for background work, the status bar reads *Handoff written · waiting for
+  background work* with the task and *running*, then *Handoff complete · checking the notes* and
+  *Handoff complete · starting the fresh context*; Context names the state *Waiting for background
+  work* and lists each task with **Stop**. Keep warm stands down, queued work waits, the Scout
+  suggests no watcher and the lazy-exit guard stays stood down for the whole wait.
+- The handoff prompt says what happens to work left running: say so in the notes; the fresh context
+  starts only after it finishes and its result is recorded.
+- Handoff Health gains *Background work recorded* for a handoff that waited: whether the notes were
+  written again after the last task ended.
+
+### Verified live
+
+Claude Code 2.1.295, headless (`stream-json`, the protocol Claude Desktop's sessions use), Sonnet
+5.5, a renamed copy of the plugin beside a probe plugin that logs each engine event to the debug log.
+Claude started a 150-second "render" in the background, then `/cr handoff`:
+
+- **1.6.2, the failure reproduced.** The handoff turn wrote the notes and stopped with the render in
+  flight (`classic.Stop background=[biokpqbh6:shell:running]`). When the render ended Claude Code
+  raised `prompt.submit origin={"kind":"task-notification"}` with no `turnId`, then `turn.start` with
+  the `<task-notification>` text; 1.6.2 logged `turn … started (person)`. Claude checked the render
+  and updated the notes; the turn ended with `background=[]`. Nothing followed in 45 seconds;
+  `/cr status` still said *Claude is writing the handoff*, `/cr fresh` said *No written handoff is
+  waiting*, `/cr handoff` said *Handing off* and nothing happened in 20 seconds.
+- **1.6.3, the same run.** `autopilot: turnComplete · handoff → waiting-background`; `/cr status`
+  read *Waiting for background work · Handoff written. Waiting for background work: Simulate long
+  video render*, `/cr handoff` *Handoff notes are written; waiting for 1 background task to finish
+  before starting fresh (…)*, `/cr fresh` *1 background task is still running (…). Fresh context was
+  not started*. At the render's end: `background: bokbrwxzk ended (completed), as its notification
+  says`, `turn … started (notification)`; Claude recorded the result in the notes and the
+  milestones; `turn … completed (notification, answer; background in flight: none)`,
+  `waiting-background → verifying`, `notes … written (… modified 151 s after the handoff began;
+  updated after the background work ended)`, `verifying → clearing`, the fresh session after
+  `/clear`, `clearDone → resuming`, `turn … started (continuation)`, `resuming → armed`, all within
+  ten seconds of the render's end, with no message from the person. One handoff prompt, one
+  `/clear`, one continuation. Session 2 read the notes, finished the two remaining milestones and
+  wrote the report; `/cr status`: Run 1 · Session 2, Autopilot watching again.
+
+### Development
+
+- `features/autopilot.ts`: the `waiting-background` state, the `backgroundEnded` and `notesSeen`
+  events, the `checkNotes` effect, `turnComplete` carrying the Stop's list, the record carrying the
+  wait (older records still load), and `handoffVerdict` / `freshVerdict` (pure: what `/cr handoff`
+  and `/cr fresh` do, and the words). Every step of a task's end is traced (`background: <id> ended
+  (completed), as its notification says`; `turn … completed (notification, answer; background in
+  flight: none)`).
+- `tests/background.test.ts` replays the real run's event order through the hooks (the render and its
+  waiter, the second notification delivered into the first's turn), plus two tasks ending
+  separately, a failed and a stopped task, the person typing while the handoff waits, the render
+  ending inside a turn of the person's, every `/cr handoff` and `/cr fresh` answer, a reload while
+  waiting and during the notification's turn, the stuck record 1.6.2 left, the queue, decisions and
+  milestones carried through, Handoff Health and the status bar. `tests/autopilot.test.ts` covers the
+  machine. The core of them fails on 1.6.2 (no clear, `/cr fresh` refusing, `/cr handoff` claiming
+  a handoff) and passes now. The test world can age the notes (`notesAt`).
+
 ## [1.6.2] - 2026-10-09
 
 A live verification pass over 1.6.1's orchestration layer: each system driven against real Claude

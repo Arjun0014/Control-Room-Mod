@@ -50,7 +50,7 @@ export type MoodInput = {
   sleep?: 'warm' | 'parked' | null
 }
 
-const HANDOFF_STATES = new Set(['requested', 'handoff', 'verifying', 'clearing', 'compacting', 'resuming'])
+const HANDOFF_STATES = new Set(['requested', 'handoff', 'waiting-background', 'verifying', 'clearing', 'compacting', 'resuming'])
 
 /** A fresh context: Kit walks in when it is drawn within this long of the context's start. */
 export const FRESH_MS = 60_000

@@ -461,8 +461,11 @@ export type AutopilotView = {
   lastError: string | null
   completed: number
   canHandoff: boolean
+  /** Start fresh context is offered: a handoff waiting for the person, or one whose end went unseen (the press checks the notes first). */
   canFresh: boolean
   canSnooze: boolean
+  /** While a written handoff waits for background work: each task Claude Code reports still running. */
+  background: { id: string; description: string }[]
 }
 
 export type SystemId = 'autopilot' | 'frontier' | 'qa' | 'guard' | 'router' | 'subagents' | 'load' | 'focus' | 'answers'
@@ -740,6 +743,13 @@ export type AutopilotRecord = {
   lastError: string | null
   note: string
   at: number
+  /** The handoff turn's id, once it began (1.6.3; absent in a record written before). */
+  handoffTurnId?: string | null
+  /** The background work a written handoff waits for, as Claude Code last reported it (1.6.3). */
+  background?: { id: string; description: string }[]
+  /** How many background tasks the handoff waited for, and when the last of them ended (1.6.3). */
+  waitedFor?: number
+  backgroundEndedAt?: number | null
 }
 
 // ---------------------------------------------------------------------------

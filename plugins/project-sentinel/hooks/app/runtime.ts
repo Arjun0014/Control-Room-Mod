@@ -88,6 +88,8 @@ const OWN_PLUGIN = 'project-sentinel'
 const ANNOUNCE_DELAY_MS = 1500
 /** While a cost limit is set, the session's cost is read mid-turn at most this often (`$.session.usage()` costs nothing). */
 const BUDGET_COST_EVERY_MS = 5_000
+/** The notes count as written for a handoff when modified no earlier than this before it began (clocks, file systems). */
+const NOTES_SLACK_MS = 5000
 /** Operations opened at a card or field: the first try this long after, each later one this much later again. */
 const OPS_DRAWN_MS = 300
 const OPS_SCROLL_TRIES = 3
@@ -226,8 +228,12 @@ export class Runtime {
 
   /** The clear a handoff owes, held back while a turn runs (a prompt the person queued): the turn's end carries it out. */
   private isClearOwed = false
-  /** The handoff turn ended with background work running: the turn that work brings back is still the handoff's. */
-  private handoffBackground = false
+  /**
+   * What the next turn to start begins with, as `prompt.submit` named it: a background task's
+   * notification (origin `task-notification`, no running turn), so that turn is known for what it is
+   * whatever its text; null for any other prompt. `turn.start` follows the submit that starts it.
+   */
+  private nextTurn: 'notification' | null = null
   private startSource: { source: string; sessionId: string } | null = null
   /** True from Control Room's own /clear until the fresh session it makes is seen (or the wait ends). */
   private isOwnClear = false
@@ -290,7 +296,7 @@ export class Runtime {
     const tokens = this.usage.tokens ?? 0
     const point = Autopilot.handoffPoint(ap)
     const isPastThreshold = ap.state === 'armed' && point !== null && tokens >= point && (ap.snoozeUntil === null || tokens >= ap.snoozeUntil)
-    const isComing = ap.state === 'pending' || ap.state === 'requested' || ap.state === 'handoff' || ap.state === 'verifying' || isPastThreshold
+    const isComing = ap.state === 'pending' || ap.state === 'requested' || ap.state === 'handoff' || ap.state === 'waiting-background' || ap.state === 'verifying' || isPastThreshold
     if (!isComing || a.continuation === 'compact') return null
     return isPastThreshold ? 'Past the handoff point: the next turn hands off to a fresh context' : 'A handoff will start a fresh context, so this cache is about to be discarded'
   }
@@ -567,7 +573,8 @@ export class Runtime {
     // A milestone done mid-turn is a boundary for work queued after it.
     this.ops.onPlanChanged(previous, plan)
     const after = this.progress()
-    if (this.turn.isRunning && (this.turn.kind === 'handoff' || this.turn.kind === 'retry')) this.handoffTurn.isPlanUpdated = true
+    // Part of the handoff: its own turn, a retry, or a turn while it waits for background work (the result recorded).
+    if (this.turn.isRunning && (this.turn.kind === 'handoff' || this.turn.kind === 'retry' || this.autopilot.state === 'waiting-background')) this.handoffTurn.isPlanUpdated = true
     for (const t of plan.tasks) {
       if (t.status === 'completed' && !wasDone.has(t.key)) this.questEvent('milestone', `Milestone: ${t.subject}`, t.key)
     }
@@ -1027,6 +1034,12 @@ export class Runtime {
     this.applyAutopilot(result)
   }
 
+  /** The engine's clock (`$.clock.now()`), which times the handoff's steps; the system clock when it cannot be read. */
+  engineNow(): Promise<number> {
+    const host = this.host
+    return host === null ? Promise.resolve(this.clock()) : host.now().catch(() => this.clock())
+  }
+
   /** One line in Claude Code's debug log (claude --debug), never on screen: how a handoff or a refresh went, step by step. */
   trace(text: string): void {
     this.host?.trace?.(text)
@@ -1104,10 +1117,15 @@ export class Runtime {
         return
       }
       case 'verifyHandoff': {
-        const isOk = await this.verifyHandoff()
-        if (isOk) this.questEvent('handoff', 'Clean handoff: notes verified')
-        this.recordHandoffHealth(isOk)
-        this.stepAutopilot({ kind: 'handoffVerified', isOk, now: await host.now() })
+        const notes = await this.verifyHandoff()
+        if (notes.isOk) this.questEvent('handoff', 'Clean handoff: notes verified')
+        this.recordHandoffHealth(notes.isOk, notes.mtimeMs)
+        this.stepAutopilot({ kind: 'handoffVerified', isOk: notes.isOk, now: await host.now() })
+        return
+      }
+      case 'checkNotes': {
+        const state = await this.notesState(this.autopilot.handoffSince)
+        this.stepAutopilot({ kind: 'notesSeen', isWritten: state === 'fresh' })
         return
       }
       case 'clear':
@@ -1158,9 +1176,10 @@ export class Runtime {
    * left in each of the four places (the milestones, the project's docs,
    * CLAUDE.md, the notes), and whether a check ran in this context.
    */
-  private recordHandoffHealth(isNotesWritten: boolean): void {
+  private recordHandoffHealth(isNotesWritten: boolean, notesAt: number | null = null): void {
     if (this.run === null) return
     const p = this.progress()
+    const ap = this.autopilot
     const ctx = { root: this.root, handoffFile: this.settings.autopilot.handoffFile }
     const from = this.handoffTurn.fromTurn
     const changed = from < 0 ? [] : this.activity.changeList().filter(f => f.lastTurn >= from)
@@ -1184,6 +1203,11 @@ export class Runtime {
         docsEdited: changed.filter(f => groupOf(f.path, ctx) === 'docs' && !isClaudeMd(f.path)).map(f => f.path),
         checks,
         isClaudeMdEdited: changed.some(f => isClaudeMd(f.path)),
+        // A handoff that waited for background work: whether the notes were written again after it ended.
+        background:
+          ap.waitedFor === 0
+            ? null
+            : { tasks: ap.waitedFor, isNotesAfter: notesAt !== null && ap.backgroundEndedAt !== null && notesAt >= ap.backgroundEndedAt - 1000 },
       }),
       currentKey: p.current?.key ?? null,
       currentSubject: p.current?.subject ?? null,
@@ -1229,19 +1253,40 @@ export class Runtime {
     if (this.settings.ui.toasts) this.host?.toast(Handoff.continuityToast(continuity), 6000)
   }
 
-  private async verifyHandoff(): Promise<boolean> {
+  private async verifyHandoff(): Promise<{ isOk: boolean; mtimeMs: number | null }> {
     const host = this.host
-    if (host === null) return false
-    const since = this.autopilot.handoffSince ?? 0
+    if (host === null) return { isOk: false, mtimeMs: null }
+    const ap = this.autopilot
+    const since = ap.handoffSince ?? 0
     try {
       const stat = await host.stat(this.handoffPath(), false)
-      const isOk = stat.kind === 'file' && stat.size > 0 && stat.mtimeMs >= since - 5000
-      this.trace(`autopilot: notes ${this.handoffPath()} ${isOk ? 'written' : 'not fresh'} (${stat.size} bytes, modified ${Math.round((stat.mtimeMs - since) / 1000)} s after the handoff began)`)
-      return isOk
+      const isOk = stat.kind === 'file' && stat.size > 0 && stat.mtimeMs >= since - NOTES_SLACK_MS
+      // After a wait for background work: were the notes written again once it ended (its result recorded)?
+      const after = ap.backgroundEndedAt === null ? '' : `; ${stat.mtimeMs >= ap.backgroundEndedAt - 1000 ? 'updated' : 'not updated'} after the background work ended`
+      this.trace(`autopilot: notes ${this.handoffPath()} ${isOk ? 'written' : 'not fresh'} (${stat.size} bytes, modified ${Math.round((stat.mtimeMs - since) / 1000)} s after the handoff began${after})`)
+      return { isOk, mtimeMs: stat.mtimeMs }
     } catch {
       this.trace(`autopilot: notes ${this.handoffPath()} not found`)
-      return false
+      return { isOk: false, mtimeMs: null }
     }
+  }
+
+  /** The notes as a look at the disk finds them, against the handoff that began at `since` (null: none began in this context), and when they were last written. */
+  private async lookAtNotes(since: number | null): Promise<{ state: Autopilot.NotesState; mtimeMs: number | null }> {
+    const host = this.host
+    if (host === null) return { state: 'missing', mtimeMs: null }
+    try {
+      const stat = await host.stat(this.handoffPath(), false)
+      if (stat.kind !== 'file') return { state: 'missing', mtimeMs: null }
+      const state: Autopilot.NotesState = stat.size <= 0 ? 'empty' : since === null ? 'present' : stat.mtimeMs >= since - NOTES_SLACK_MS ? 'fresh' : 'stale'
+      return { state, mtimeMs: stat.mtimeMs }
+    } catch {
+      return { state: 'missing', mtimeMs: null }
+    }
+  }
+
+  private async notesState(since: number | null): Promise<Autopilot.NotesState> {
+    return (await this.lookAtNotes(since)).state
   }
 
   /**
@@ -1413,9 +1458,19 @@ export class Runtime {
    * policies themselves where the system prompt's hook is not reached. Part of the prompt's own
    * message, so the conversation reads the same at every later request.
    */
-  onPromptSubmit(text: string, origin: PromptOrigin | undefined): string[] {
+  onPromptSubmit(text: string, origin: PromptOrigin | undefined, turnId?: string, at: number = this.clock()): string[] {
     const context: string[] = []
     const isOwn = isOwnPrompt(origin)
+    // Without a running turn the prompt starts the next one: a notification's is that turn's whatever its text.
+    if (turnId === undefined) this.nextTurn = origin?.kind === 'task-notification' ? 'notification' : null
+    if (origin?.kind === 'task-notification') {
+      // Claude Code's own word that a background task ended (completed, failed, killed), as it is delivered.
+      const task = Autopilot.notificationTask(text)
+      this.trace(`background: a task notification ${turnId === undefined ? 'starts a turn' : `is delivered into turn ${turnId}`}${task === null ? '' : ` (${task.id}${task.status === null ? '' : `, ${task.status}`})`}`)
+      if (task !== null) this.noteTaskEnded(task.id, task.status, 'its notification', at)
+      const hold = this.backgroundHoldNote()
+      if (hold !== null) context.push(hold)
+    }
     if (!isOwn && isPersonOrigin(origin)) {
       this.turn.request = text
       this.noteObjective(text)
@@ -1565,15 +1620,44 @@ export class Runtime {
     this.publisher.mark('pane', 'hud')
   }
 
+  /**
+   * A background task ended, as Claude Code reported it: its notification, or a TaskStop that stopped
+   * it. The list of work in flight (the last Stop's) drops it, and a handoff waiting for it hears.
+   */
+  noteTaskEnded(id: string, status: string | null, via: string, now: number): void {
+    this.activity.backgroundEnded(id)
+    if (this.lastStop !== null && this.lastStop.background.some(b => b.id === id)) {
+      this.lastStop = { ...this.lastStop, background: this.lastStop.background.filter(b => b.id !== id) }
+    }
+    this.trace(`background: ${id} ended${status === null ? '' : ` (${status})`}, as ${via} says`)
+    if (this.settings.autopilot.enabled) this.stepAutopilot({ kind: 'backgroundEnded', id, status, now })
+    this.publisher.mark('hud', 'activity', 'pane', 'resources')
+  }
+
+  /** While a written handoff waits for background work: what Claude is asked to do with a task's result as it comes in. */
+  private backgroundHoldNote(): string | null {
+    if (!this.settings.autopilot.enabled || this.autopilot.state !== 'waiting-background') return null
+    return prompts.backgroundResultNote({
+      handoffFile: this.settings.autopilot.handoffFile,
+      planTool: this.planSource === 'milestones' ? this.milestonesTool : this.planSource === 'tasks' ? 'your task list' : null,
+      left: this.autopilot.background.map(t => t.description),
+    })
+  }
+
   async onTurnStart(input: { turnId: string; text: string }): Promise<void> {
-    // Whose turn this is, from the prompt it began with: Control Room's own prompts are recognised by their text.
-    const kind: TurnKind = prompts.ownPromptKind(input.text) ?? (input.text === '' ? 'other' : 'person')
+    // Whose turn this is: Control Room's own prompts are recognised by their text; a background task's
+    // notification by the origin its prompt was submitted with (its text, the engine's own frame, as a fallback).
+    const begun = this.nextTurn
+    this.nextTurn = null
+    const isNotification = begun === 'notification' || Autopilot.notificationTask(input.text) !== null
+    const kind: TurnKind = prompts.ownPromptKind(input.text) ?? (isNotification ? 'notification' : input.text === '' ? 'other' : 'person')
     this.lastStop = null
     this.turn = {
       id: input.turnId,
       isRunning: true,
       kind,
-      request: kind === 'person' ? input.text || this.turn.request : input.text,
+      // A notification's text is the engine's report, not a request: the person's last request stays the one the guard reads.
+      request: kind === 'person' ? input.text || this.turn.request : kind === 'notification' ? this.turn.request : input.text,
       toolCount: 0,
       editCount: 0,
     }
@@ -1593,7 +1677,7 @@ export class Runtime {
     // The handoff and the continuation move on when their own turns begin, not when their prompts were sent.
     if (kind === 'handoff' || kind === 'continuation' || (kind === 'person' && this.autopilot.state === 'resuming')) {
       const now = host === null ? Date.now() : await host.now()
-      this.stepAutopilot(kind === 'handoff' ? { kind: 'handoffStarted', now } : kind === 'continuation' ? { kind: 'continuationStarted', now } : { kind: 'personTookOver', now })
+      this.stepAutopilot(kind === 'handoff' ? { kind: 'handoffStarted', now, turnId: input.turnId } : kind === 'continuation' ? { kind: 'continuationStarted', now } : { kind: 'personTookOver', now })
     }
   }
 
@@ -1709,23 +1793,15 @@ export class Runtime {
     const host = this.host
     const now = host === null ? Date.now() : await host.now()
     // A turn whose start this runtime never saw began before a reload of the plugin.
-    let turnKind: TurnKind = this.turn.id === null ? 'unknown' : this.turn.kind
-    this.trace(`turn ${this.turn.id ?? '?'} completed (${turnKind}, ${input.reason})`)
+    const turnKind: TurnKind = this.turn.id === null ? 'unknown' : this.turn.kind
+    // What Claude Code listed in flight as this turn stopped (its Stop comes before turn.complete); none seen: an interrupt.
+    const inFlight = this.lastStop?.background ?? null
+    this.trace(`turn ${this.turn.id ?? '?'} completed (${turnKind}, ${input.reason}; background in flight: ${inFlight === null ? 'no Stop seen' : inFlight.length === 0 ? 'none' : inFlight.map(b => b.id).join(', ')})`)
     // A fresh context's turn that ended without starting work: it is read in now, room counts from here.
     this.noteWorkStarted()
-    // The handoff turn ended with background work still running (its Stop listed it): Claude Code
-    // brings the turn back when that work ends, and only the end of that turn finishes the handoff.
-    // The notes are not checked, and nothing is cleared, under work still running.
-    const isHandoffPart = turnKind === 'handoff' || turnKind === 'retry' || (this.handoffBackground && turnKind !== 'person')
-    const background = this.lastStop?.background.length ?? 0
-    if (this.autopilot.state === 'handoff' && isHandoffPart && input.reason !== 'aborted' && background > 0) {
-      this.handoffBackground = true
-      this.trace(`autopilot: the handoff turn ended with ${background} background job${background === 1 ? '' : 's'} still running; the notes are checked when the turn they bring back ends`)
-    } else {
-      if (this.handoffBackground && isHandoffPart) turnKind = 'handoff'
-      this.handoffBackground = false
-      this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, turn: turnKind, now })
-    }
+    // A handoff turn that stops under background work waits for it (waiting-background); while it waits,
+    // the first turn of any kind to end with nothing in flight finishes it (features/autopilot.ts).
+    this.stepAutopilot({ kind: 'turnComplete', reason: input.reason, turn: turnKind, now, background: inFlight })
     // A clear held back while this turn ran (one the person queued behind the handoff) is carried out now.
     if (this.isClearOwed && this.autopilot.state === 'clearing') {
       this.isClearOwed = false
@@ -1854,7 +1930,8 @@ export class Runtime {
       if (this.settings.guard.enabled) this.trace(`guard: stands down (${eff.guard.reason ?? 'inactive'})`)
       return null
     }
-    if (!['person', 'continuation', 'queued', 'answer', 'wake', 'resume'].includes(this.turn.kind)) {
+    // A notification's turn is judged against the person's last request, as the turn of theirs it carries on.
+    if (!['person', 'notification', 'continuation', 'queued', 'answer', 'wake', 'resume'].includes(this.turn.kind)) {
       this.trace(`guard: stands down for the ${this.turn.kind} turn`)
       return null
     }
@@ -2025,7 +2102,8 @@ export class Runtime {
     if (tool === 'Read' && status === 'ok' && agentId === undefined && typeof input.file_path === 'string') this.reads = [...this.reads, input.file_path].slice(-200)
     if (tool === 'TaskStop' && status === 'ok') {
       const taskId = typeof input.task_id === 'string' ? input.task_id : typeof input.shell_id === 'string' ? input.shell_id : null
-      if (taskId !== null) this.activity.backgroundEnded(taskId)
+      // Timed by the engine's clock, as the handoff's other steps (and the notes it is compared with) are.
+      if (taskId !== null) void this.engineNow().then(now => this.noteTaskEnded(taskId, 'killed', "Claude's TaskStop", now))
     }
     if (tool === 'Agent') void this.refreshAgents()
     this.publisher.mark('activity', 'spinner', 'hud', 'resources', 'pane')
@@ -2389,17 +2467,78 @@ export class Runtime {
     this.publisher.mark('focus')
   }
 
-  requestHandoff(): void {
-    if (!this.settings.autopilot.enabled) {
+  /**
+   * What `/cr handoff` and `/cr fresh` decide from: whether a turn runs, the background work in flight
+   * as Claude Code last reported it, and the notes on disk against this handoff.
+   */
+  async handoffFacts(): Promise<Autopilot.HandoffFacts & { notesAt: number | null }> {
+    const notes = await this.lookAtNotes(this.autopilot.handoffSince)
+    return {
+      isTurnRunning: this.turn.isRunning,
+      inFlight: this.lastStop === null ? null : this.lastStop.background,
+      notes: notes.state,
+      notesAt: notes.mtimeMs,
+      handoffFile: this.settings.autopilot.handoffFile,
+    }
+  }
+
+  /**
+   * `/cr handoff` and Hand off now: hands off when no handoff is under way, finishes one whose end
+   * went unseen, and otherwise says what the one under way is doing. The words say what happened.
+   */
+  async requestHandoff(): Promise<string> {
+    const host = this.host
+    if (host === null) return 'Project Sentinel is not ready yet.'
+    const wasOff = !this.settings.autopilot.enabled
+    if (wasOff) {
       this.update(s => {
         s.autopilot.enabled = true
       })
     }
-    void this.host?.now().then(now => this.stepAutopilot({ kind: 'manualHandoff', now }))
+    const facts = await this.handoffFacts()
+    const now = await host.now()
+    // Decided on the state as it is now, after the awaits: a second request meanwhile sees the first one's step.
+    const state = this.autopilot.state
+    const verdict = Autopilot.handoffVerdict(this.autopilot, facts)
+    this.trace(`autopilot: /cr handoff in ${state} (notes ${facts.notes}, ${facts.isTurnRunning ? 'a turn running' : 'idle'}): ${verdict.action}`)
+    if (verdict.action === 'hand-off') this.stepAutopilot({ kind: 'manualHandoff', now, isRestart: state === 'handoff' || state === 'waiting-background' })
+    if (verdict.action === 'start-fresh') this.startFreshNow(now, facts.notesAt)
+    return wasOff ? `Context Autopilot is on. ${verdict.text}` : verdict.text
   }
 
-  startFreshContext(): void {
-    void this.host?.now().then(now => this.stepAutopilot({ kind: 'manualFresh', now }))
+  /**
+   * `/cr fresh` and Start fresh context: the fresh context, only when it is safe (no turn running,
+   * no background work in flight, the notes written for this handoff), through the verified clear
+   * path. A handoff whose end went unseen is recovered here instead of being refused.
+   */
+  async startFreshContext(): Promise<string> {
+    const host = this.host
+    if (host === null) return 'Project Sentinel is not ready yet.'
+    const facts = await this.handoffFacts()
+    const now = await host.now()
+    const verdict = Autopilot.freshVerdict(this.autopilot, facts)
+    this.trace(`autopilot: /cr fresh in ${this.autopilot.state} (notes ${facts.notes}, ${facts.isTurnRunning ? 'a turn running' : 'idle'}, in flight ${facts.inFlight === null ? 'unknown' : facts.inFlight.length}): ${verdict.action}`)
+    if (verdict.action === 'start-fresh') this.startFreshNow(now, facts.notesAt)
+    return verdict.text
+  }
+
+  /**
+   * Starts the fresh context of a handoff the person finished. A handoff whose notes the normal path
+   * never checked (its end went unseen, or it waited for background work) records its health now.
+   */
+  private startFreshNow(now: number, notesAt: number | null): void {
+    const state = this.autopilot.state
+    if (state !== 'awaiting' && state !== 'handoff' && state !== 'waiting-background') return
+    if (state !== 'awaiting') {
+      this.questEvent('handoff', 'Clean handoff: notes verified')
+      this.recordHandoffHealth(true, notesAt)
+    }
+    this.stepAutopilot({ kind: 'manualFresh', now })
+  }
+
+  /** A button's answer (Hand off now, Start fresh context): what happened, as a toast. */
+  sayToPerson(text: string): void {
+    if (this.settings.ui.toasts) this.host?.toast(text, 6000)
   }
 
   snoozeAutopilot(): void {
@@ -2410,7 +2549,7 @@ export class Runtime {
     const host = this.host
     if (host === null) return
     const result = await host.stopTask(taskId).catch(() => null)
-    if (result !== null && result.deny === undefined) this.activity.backgroundEnded(taskId)
+    if (result !== null && result.deny === undefined) this.noteTaskEnded(taskId, 'killed', 'your Stop', await this.engineNow())
     this.publisher.mark('resources', 'activity')
   }
 

@@ -63,6 +63,8 @@ export type HealthFacts = {
   /** Checks run in this context, the latest first (label and outcome). */
   checks: readonly { label: string; status: string }[]
   isClaudeMdEdited: boolean
+  /** A handoff that waited for background work: how many tasks, and whether the notes were written again after the last ended. */
+  background?: { tasks: number; isNotesAfter: boolean } | null
 }
 
 /** A handoff at a clean boundary: the last milestone finished, the next not begun, and the list sent again to say so. */
@@ -116,6 +118,16 @@ export function healthOf(f: HealthFacts): Check[] {
       state: f.isClaudeMdEdited ? 'ok' : 'none',
       detail: f.isClaudeMdEdited ? 'Updated' : 'No update needed',
     },
+    ...(f.background === undefined || f.background === null
+      ? []
+      : [
+          {
+            id: 'background',
+            label: 'Background work recorded',
+            state: f.background.isNotesAfter ? ('ok' as const) : ('missing' as const),
+            detail: `${f.background.tasks === 1 ? '1 task' : `${f.background.tasks} tasks`} finished · ${f.background.isNotesAfter ? 'notes updated after' : 'notes not updated after'}`,
+          },
+        ]),
   ]
 }
 

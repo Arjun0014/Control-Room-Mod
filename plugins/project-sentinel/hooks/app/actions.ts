@@ -39,8 +39,8 @@ export function actionsOf(rt: Runtime): Actions {
       rt.host?.toast(`Profile “${clean}” saved`, 3000)
     },
     deleteProfile: id => rt.update(s => deleteCustomProfile(s, id)),
-    handoff: () => rt.requestHandoff(),
-    fresh: () => rt.startFreshContext(),
+    handoff: () => void rt.requestHandoff().then(text => rt.sayToPerson(text)),
+    fresh: () => void rt.startFreshContext().then(text => rt.sayToPerson(text)),
     snooze: () => rt.snoozeAutopilot(),
     stopTask: taskId => void rt.stopBackgroundTask(taskId),
     selectFile: path => rt.selectChangedFile(path),

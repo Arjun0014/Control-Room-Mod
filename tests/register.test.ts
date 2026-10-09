@@ -444,7 +444,7 @@ describe('register', () => {
     expect(w.kept.commandsRun.map(c => c.command)).toContain('clear')
   })
 
-  test('a handoff turn that ends with background work running is not over: the notes are checked and the context cleared only after the turn that work brings back', async ($, on) => {
+  test('a handoff turn that ends with background work running is not over: the notes are checked and the context cleared only after a turn ends with none in flight', async ($, on) => {
     const w = world(on, { settings: withSettings(s => void (s.autopilot.enabled = true)) })
     on('turn.start', ($, e) => ({ turnId: e.turnId }))
     on('turn.complete', ($, e) => ({ text: e.answer }))
@@ -457,8 +457,9 @@ describe('register', () => {
     await $.turn.complete({ answer: 'The checks run in the background.', durationMs: 1, isAborted: false, turnId: 'h1', reason: 'answer' })
     await w.clock.advance(5000)
     expect(w.kept.commandsRun.map(c => c.command)).not.toContain('clear')
-    expect((await $.command.run(cmd('cr', 'status'))).text).toContain('Writing the handoff')
-    // The job ends: Claude Code brings the turn back with its result, and that turn ends with nothing running.
+    expect((await $.command.run(cmd('cr', 'status'))).text).toContain('Waiting for background work')
+    // The job ends and a turn follows (here one whose prompt went unseen, its text empty); it ends with nothing running.
+    // The real lifecycle (a task-notification prompt and turn) is in background.test.ts.
     await $.turn.start({ text: '', turnId: 'h2' })
     await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Checks pass. Handoff written.', background_tasks: [] })
     await $.turn.complete({ answer: 'Checks pass. Handoff written.', durationMs: 1, isAborted: false, turnId: 'h2', reason: 'answer' })

@@ -215,8 +215,9 @@ describe('runtime', () => {
     const { rt, kept, advance } = await started(s => {
       s.autopilot.enabled = true
     })
-    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
-    rt.startFreshContext()
+    // A handoff waiting for the person, its notes written (Start fresh checks them first).
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting', handoffSince: rt.clock() }
+    void rt.startFreshContext()
     await advance(2000)
     expect(kept.commands).toContain('clear')
     expect(rt.autopilot.state).toBe('clearing')
@@ -233,8 +234,9 @@ describe('runtime', () => {
       s.autopilot.enabled = true
     })
     live.isCompactTurnOnly = true
-    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
-    rt.startFreshContext()
+    // A handoff waiting for the person, its notes written (Start fresh checks them first).
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting', handoffSince: rt.clock() }
+    void rt.startFreshContext()
     await advance(2000)
     // The /clear does not take: compaction takes over, as the /compact command (never a prompt: a plugin's prompt may not run a command).
     await advance(16_000)
@@ -257,8 +259,9 @@ describe('runtime', () => {
       s.autopilot.enabled = true
     })
     live.isCompactTurnOnly = true
-    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
-    rt.startFreshContext()
+    // A handoff waiting for the person, its notes written (Start fresh checks them first).
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting', handoffSince: rt.clock() }
+    void rt.startFreshContext()
     await advance(18_000)
     expect(rt.autopilot.state).toBe('compacting')
     await advance(10 * 60_000)
@@ -269,8 +272,9 @@ describe('runtime', () => {
     const { rt, kept, live, advance } = await started(s => {
       s.autopilot.enabled = true
     })
-    rt.autopilot = { ...rt.autopilot, state: 'awaiting' }
-    rt.startFreshContext()
+    // A handoff waiting for the person, its notes written (Start fresh checks them first).
+    rt.autopilot = { ...rt.autopilot, state: 'awaiting', handoffSince: rt.clock() }
+    void rt.startFreshContext()
     await advance(2000)
     live.sessionId = 'S2'
     await advance(16_000)

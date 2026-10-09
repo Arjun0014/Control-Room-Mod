@@ -34,10 +34,34 @@ export const LONG_CALL_MS = 20_000
 const HANDOFF_WORDS: Record<string, string> = {
   requested: 'Handing off: Claude writes the notes next',
   handoff: 'Writing the handoff notes',
-  verifying: 'Checking the handoff notes',
-  clearing: 'Starting a fresh context',
-  compacting: 'Compacting the context',
+  verifying: 'Handoff complete · checking the notes',
+  clearing: 'Handoff complete · starting the fresh context',
+  compacting: 'Handoff complete · compacting the context',
   resuming: 'Resuming in the fresh context',
+}
+
+/**
+ * A written handoff waiting for background work, as the status bar says it: what it waits for and
+ * that it runs, never "writing the handoff" while Claude Code reports a render still going.
+ */
+function waitingLine(rt: Runtime): HudHeadline {
+  const a = rt.autopilot
+  const first = a.background[0]
+  if (first === undefined) {
+    return {
+      state: 'handoff',
+      text: 'Handoff · background work finished',
+      detail: rt.turn.isRunning ? 'Claude records the result, then the notes are checked' : 'then the notes are checked',
+      tone: 'accent',
+    }
+  }
+  const more = a.background.length > 1 ? ` · ${a.background.length - 1} more` : ''
+  return {
+    state: 'handoff',
+    text: a.notesWritten === true ? 'Handoff written · waiting for background work' : 'Handoff · waiting for background work',
+    detail: `${clean(first.description, 80)} · running${more}`,
+    tone: 'accent',
+  }
 }
 
 const TRACK: Record<PlanStatus, TrackStop> = { completed: 'done', in_progress: 'now', verifying: 'verify', waiting: 'held', blocked: 'held', pending: 'open' }
@@ -84,6 +108,7 @@ export function headlineOf(rt: Runtime, now: number, summary: { text: string; du
   const ap = rt.settings.autopilot.enabled ? rt.autopilot.state : 'off'
   const p = rt.progress()
   const tasks = rt.plan().tasks
+  if (ap === 'waiting-background') return waitingLine(rt)
   const handoff = HANDOFF_WORDS[ap]
   if (handoff !== undefined) return { state: 'handoff', text: handoff, detail: rt.run === null ? null : `run ${rt.run.number}`, tone: 'accent' }
 

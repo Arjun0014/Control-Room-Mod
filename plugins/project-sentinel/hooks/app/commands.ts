@@ -27,7 +27,7 @@ const HELP = [
   '  /cr profile [name]        list profiles, or switch (normal, frontier, low-resource, release-qa, yours)',
   '  /cr autopilot on|off|70%|700k',
   '  /cr handoff               hand off now, then continue in a fresh context',
-  '  /cr fresh                 start the fresh context when a handoff is waiting',
+  '  /cr fresh                 start the fresh context of a written handoff (the notes and background work are checked first)',
   '  /cr frontier|guard|qa|focus on|off',
   '  /cr resources off|low|medium|high|60/80',
   '  /cr agents                what is running (Activity → Operations) · /cr agents unlimited|off|ask|<n>: what Claude may start',
@@ -224,15 +224,11 @@ export async function handleCommand(rt: Runtime, args: string): Promise<CommandR
       })
       return { text: `Autopilot on. Hands off at ${m[2] === '%' ? `${rt.settings.autopilot.thresholdPercent}%` : fmt.tokens(rt.settings.autopilot.thresholdTokens)}.` }
     }
+    // Each says what really happened: a handoff begun, a fresh context started, or why not.
     case 'handoff':
-      rt.requestHandoff()
-      return { text: 'Handing off: Claude writes the handoff notes, then the work continues in a fresh context.' }
+      return { text: await rt.requestHandoff() }
     case 'fresh':
-      if (rt.autopilot.state !== 'awaiting') {
-        return { text: 'No written handoff is waiting. Run /cr handoff first (it writes the notes, then continues fresh), or /clear to discard this context.' }
-      }
-      rt.startFreshContext()
-      return { text: 'Starting a fresh context…' }
+      return { text: await rt.startFreshContext() }
     case 'frontier':
     case 'guard':
     case 'qa':

@@ -90,8 +90,11 @@ export function autopilotStatus(rt: Runtime): StatusView {
       return { text: 'Handoff soon', tone: 'warn' }
     case 'requested':
     case 'handoff':
-    case 'verifying':
       return { text: 'Writing the handoff', tone: 'accent' }
+    case 'waiting-background':
+      return { text: 'Waiting for background work', tone: 'accent' }
+    case 'verifying':
+      return { text: 'Checking the notes', tone: 'accent' }
     case 'clearing':
     case 'compacting':
       return { text: 'Starting fresh', tone: 'accent' }
@@ -493,8 +496,9 @@ export function paneOf(rt: Runtime): PaneModel {
       lastError: a.lastError,
       completed: a.completed,
       canHandoff: rt.settings.autopilot.enabled && !isBusy,
-      canFresh: a.state === 'awaiting' || a.state === 'armed' || a.state === 'pending',
+      canFresh: canFreshOf(rt),
       canSnooze: a.state === 'pending' || a.state === 'awaiting',
+      background: a.state === 'waiting-background' ? a.background.map(t => ({ id: t.id, description: t.description })) : [],
     },
     agents: {
       running: rt.agents.list
@@ -531,6 +535,19 @@ export function paneOf(rt: Runtime): PaneModel {
     cache: rt.cache.view(rt.clock()),
     handoff: handoffOf(rt),
   }
+}
+
+/**
+ * Whether Start fresh context is offered: a handoff waiting for the person, or one no event will move
+ * on by itself (its turn ended unseen, or its background work ended with no turn left to end). The
+ * press checks the notes and what is in flight first, and says why when it does not start.
+ */
+function canFreshOf(rt: Runtime): boolean {
+  if (!rt.settings.autopilot.enabled || rt.turn.isRunning) return false
+  const a = rt.autopilot
+  if (a.state === 'awaiting') return true
+  if (a.state === 'waiting-background') return a.background.length === 0
+  return a.state === 'handoff' && rt.turn.kind !== 'handoff' && rt.turn.kind !== 'retry'
 }
 
 /** The run's latest handoff, as Context shows it. */

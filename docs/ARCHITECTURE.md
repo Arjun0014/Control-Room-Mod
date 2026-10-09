@@ -218,15 +218,22 @@ The UI's design decisions are recorded in [DESIGN.md](DESIGN.md).
 ```
 off ─enable→ armed ─(context ≥ threshold: mid-turn from turn.step usage, or after the turn)→
 pending ─(main turn completes, not aborted)→ requested ─($.prompt.submit handoff prompt)→
-handoff ─(handoff turn completes)→ verifying ─(NEXT_SESSION_PROMPT.md freshly written)→
+handoff ─(handoff turn completes, its Stop lists nothing in flight)→ verifying ─(NEXT_SESSION_PROMPT.md freshly written)→
 clearing ─($.command.run clear; classic.SessionStart{clear}, before or after it resolves; prompt.context seeds the fresh context)→
 resuming ─(continuation prompt submitted, turn starts)→ armed (new session, same run)
+
+handoff ─(handoff turn completes, its Stop lists background work in flight)→ waiting-background
+waiting-background ─(a task's notification: prompt.submit origin task-notification)→ waiting-background (that task struck off)
+waiting-background ─(any turn completes, its Stop lists nothing in flight)→ verifying
+waiting-background ─(any turn completes with work still in flight)→ waiting-background (Claude Code's list replaces it)
+waiting-background ─(the turn that took the result in was interrupted)→ awaiting
 
 clearing ✗ (refused, or no fresh session in 15 s) → compacting (if allowed) → resuming
                                                → else awaiting [Start fresh context · /cr fresh]
 verifying ✗ (file not written)        → one corrective prompt, then awaiting (no clear)
 continuation = manual                 → awaiting after a verified handoff
 aborted by the person                 → stays pending (no auto action) + HUD actions
+handoff / waiting-background / awaiting, nothing moving it → /cr fresh: checked, then clearing (or why not)
 ```
 
 The reducer (`features/autopilot.ts`) is pure: `step(model, event, cfg)`
@@ -249,13 +256,47 @@ step and every turn's start and end is written to Claude Code's debug log
 (`$.ui.log` with `to: 'debug'`; `claude --debug-file <path>`), never on
 screen.
 
+**A handoff turn that stops under background work** (1.6.3). The notes are
+not checked, and nothing is cleared, while work the handoff turn left running
+(a render, a test run) may still change what they should say. The machine
+waits in `waiting-background` with the tasks Claude Code listed in flight at
+the handoff turn's Stop (`classic.Stop` `background_tasks`). Claude Code
+reports each task's end itself: a notification it submits as a prompt with
+the origin `task-notification` (`prompt.submit`; seen live on 2.1.295), with
+no `turnId` when the session is idle, so the notification starts a turn of
+its own whose text is the engine's `<task-notification>` report, or with the
+running turn's `turnId` when it is delivered into one. That task is struck off
+the list (`backgroundEnded`), and the notification carries a note asking
+Claude to record the result in the notes and end its turn. The wait ends at
+the first turn's end, whoever's turn it was, at which Claude Code's Stop lists
+nothing in flight: then the notes are checked and the context cleared. A
+person's turn that ends with the work still running never ends it, and new
+work started meanwhile is waited for too. The turn a notification begins is
+recognised by that origin (`notification`), never by its text: 1.6.2 counted
+it as the person's (its text is not empty) and waited forever for "the handoff
+turn" to end again (seen in an 801k-token run, and reproduced live). The
+status bar says *Handoff written · waiting for background work* with the task
+and that it runs; Context lists each task with **Stop**.
+
+**Finishing a handoff by hand.** `/cr handoff` and `/cr fresh` (and their
+buttons) decide from the facts (`handoffVerdict`, `freshVerdict`): whether a
+turn runs, the background work Claude Code last listed in flight, and the
+notes on disk against this handoff. Each answers what really happened: a
+handoff begun, a fresh context started, or why not (already writing, waiting
+for named work, checking, starting fresh). `/cr fresh` recovers a handoff
+no event will move on (`handoff` after its turn ended unseen, `waiting-background`
+with nothing left in flight, `awaiting`) through the same verified clear
+path, never blindly: work in flight, or notes not written since the handoff
+began, keep the context, and the words say which.
+
 **A reload mid-handoff.** A hot reload or `/reload-plugins` starts a fresh
 Runtime, whose module memory is empty. Every step of the machine is
 therefore mirrored into `$.state` (`recordOf`), which outlives a reload but
 not a restart or `/clear`, so a record can only ever apply to the context it
 was written in. At session start a fresh Runtime replays it (`recover`):
 `pending`, `handoff` and `awaiting` resume as they were and the turn under
-way moves them on; an owed check or `/clear` is carried out; a step that may
+way moves them on; `waiting-background` resumes with the tasks it waits for
+(the record carries them) and looks at the notes again; an owed check or `/clear` is carried out; a step that may
 or may not have happened (`requested`: the handoff prompt about to go out;
 `compacting`) waits for the person instead of being repeated. The context
 crossing the threshold again never starts a second handoff.
@@ -291,7 +332,7 @@ crossing the threshold again never starts a second handoff.
   counted from tool calls only, kept in the run record (`lastHandoff`) and
   shown in Context → *Last handoff*.
 * Keep warm stands down while a handoff will clear the context (pending,
-  under way, waiting for the person, or past the threshold), since `/clear`
+  under way, waiting for background work or for the person, or past the threshold), since `/clear`
   throws the cache away; a handoff that compacts keeps it.
 * After `/clear`: `classic.SessionStart{clear}` marks the fresh context
   (and is passed on unchanged); the plugin invalidates `prompt.context`, and

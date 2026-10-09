@@ -301,7 +301,21 @@ export function handoffPrompt(input: {
     `   - \`${input.handoffFile}\` at the project root: the prompt you would want to receive to continue this work effectively. You decide its contents from the project and its documentation.`,
     '',
     'Do not start new feature work in this turn. When the handoff is written, end your turn with a short summary.',
+    'If background work is still running when you end the turn (a build, a render, a test run), leave it running and say so in the notes: the fresh context starts only after it finishes and you have recorded its result.',
   ].join('\n')
+}
+
+/**
+ * Rides a background task's notification while a written handoff waits for background work (as the
+ * prompt's context): Claude records the result where the fresh session looks, then ends its turn.
+ */
+export function backgroundResultNote(input: { handoffFile: string; planTool: string | null; left: readonly string[] }): string {
+  const plan = input.planTool === null ? '' : ` and the milestones (${input.planTool.startsWith('mcp__') ? `\`${input.planTool}\`` : input.planTool})`
+  const after =
+    input.left.length === 0
+      ? 'The context is cleared after this turn and a fresh session continues from the notes.'
+      : `${input.left.length === 1 ? 'Other background work is' : `${input.left.length} other background tasks are`} still running (${input.left.slice(0, 3).join('; ')}): the context is cleared after the last of it finishes and you have recorded it.`
+  return `Control Room · Context Autopilot: the handoff is waiting for this background work. Record its outcome where the fresh session will look (\`${input.handoffFile}\` at the project root${plan}), without starting new work, then end your turn. ${after}`
 }
 
 export function handoffRetryPrompt(handoffFile: string): string {

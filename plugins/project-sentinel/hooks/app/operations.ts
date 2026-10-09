@@ -929,7 +929,8 @@ export class Operations {
     const message = this.stopMessage
     this.stopMessage = ''
     if (mode === 'off' || !rt.settings.ops.watchers || this.current().watchers.some(Ops.isWatcherOpen)) return
-    if (kind === 'park' || kind === 'handoff' || kind === 'retry') return
+    // A handoff under way (or waiting for background work) ends this context: no watcher is suggested into it.
+    if (kind === 'park' || kind === 'handoff' || kind === 'retry' || rt.effective().autopilot.isHandoff) return
     // Claude Code's own wake-up already brings the run back: no watcher on top of it.
     if ((rt.lastStop?.wakeups.length ?? 0) > 0 || (rt.lastStop?.background.length ?? 0) > 0) return
     const p = rt.progress()
@@ -1443,7 +1444,11 @@ export class Operations {
     const refusal = 'deny' in result && result.deny !== undefined ? result.deny : 'isError' in result && result.isError === true ? (result.text ?? 'refused') : null
     this.log(refusal === null ? `Stopped agent ${id}` : `Claude Code did not stop agent ${id}: ${clean(String(refusal), 100)}`)
     if (refusal !== null) this.toast(`Could not stop the agent: ${clean(String(refusal), 100)}`)
-    else this.tellAgents(`stopped the agent "${this.agentName(id)}" (${id})`)
+    else {
+      this.tellAgents(`stopped the agent "${this.agentName(id)}" (${id})`)
+      // Background work in flight, as a handoff waiting for it counts it, ended here.
+      rt.noteTaskEnded(id, 'killed', 'your Stop', await rt.engineNow())
+    }
     await rt.refreshAgents()
   }
 

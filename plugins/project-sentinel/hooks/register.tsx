@@ -258,7 +258,11 @@ export const register: Register = on => {
     // (nothing is sent yet). The Run Budget asks once at a limit set to Ask. Either may keep the message.
     const held = (await rt.ops.coldGuard(e)) ?? (await rt.ops.budgetGuard(e))
     if (held !== null) return held
-    const extra = rt.onPromptSubmit(e.text, e.origin)
+    // The origin tells a background task's notification (and the turn it starts) from the person's prompt;
+    // its end is timed by the engine's clock, as the handoff's other steps are.
+    const origin: { kind: string } | undefined = e.origin
+    const now = origin?.kind === 'task-notification' ? await $.clock.now() : undefined
+    const extra = rt.onPromptSubmit(e.text, e.origin, e.turnId, now)
     return next(extra.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...extra] })
   }).catch(($, e, next) => next(e))
 

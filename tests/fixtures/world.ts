@@ -57,6 +57,8 @@ export function world(
     /** What Claude Code's agent list reports. */
     agents: [] as import('claude-code').AgentInfo[],
     isHandoffWritten: options.isHandoffWritten ?? true,
+    /** When the handoff notes were last written; null: a moment after each look (always just written). */
+    notesAt: null as number | null,
   }
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -114,7 +116,7 @@ export function world(
   on('fs.stat', ($, e) => {
     if (e.path.endsWith('NEXT_SESSION_PROMPT.md')) {
       return live.isHandoffWritten
-        ? { value: { kind: 'file' as const, size: 120, mtimeMs: clock.now() + 1, isLink: false } }
+        ? { value: { kind: 'file' as const, size: 120, mtimeMs: live.notesAt ?? clock.now() + 1, isLink: false } }
         : { deny: 'ENOENT' }
     }
     return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }

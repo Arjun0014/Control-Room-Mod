@@ -157,16 +157,26 @@ export function contextPage(kit: Kit, pane: PaneModel, hud: HudModel, chain: Cha
 
       {card(kit, {
         key: 'ap-how',
-        title: s.enabled ? 'Handoff' : 'How it works',
+        title: s.enabled ? (a.background.length > 0 ? 'Handoff · waiting for background work' : 'Handoff') : 'How it works',
         aside: s.enabled ? `at ${at}` : undefined,
         accent,
         rows: k => [
+          // A written handoff waiting for background work: each task Claude Code reports still running, and a way to end the wait.
+          ...a.background.map(t => {
+            const stop = buttons(k, [{ key: `ap-stop-${t.id}`, label: 'Stop', onPress: () => kit.actions.stopTask(t.id) }], `ap-stop-wrap-${t.id}`, true)
+            return row(k, {
+              key: `ap-bg-${t.id}`,
+              label: t.description,
+              subtitle: 'Running · the fresh context starts after it ends',
+              ...(stop === null ? {} : { control: { element: stop, width: 8 } }),
+            })
+          }),
           steps(k, 'ap-steps', ['Claude finishes the step it is on. No new large tasks.', `It writes handoff notes to ${s.handoffFile}.`, thirdStep], accent),
           buttons(
             k,
             [
               { key: 'ap-handoff', label: 'Hand off now', onPress: kit.actions.handoff, isHidden: s.enabled && !a.canHandoff, isPrimary: a.state === 'pending' },
-              { key: 'ap-fresh', label: 'Start fresh context', onPress: kit.actions.fresh, isPrimary: true, isHidden: a.state !== 'awaiting' },
+              { key: 'ap-fresh', label: 'Start fresh context', onPress: kit.actions.fresh, isPrimary: true, isHidden: !a.canFresh },
               { key: 'ap-snooze', label: 'Later', onPress: kit.actions.snooze, isHidden: !a.canSnooze },
             ],
             'ap-actions',

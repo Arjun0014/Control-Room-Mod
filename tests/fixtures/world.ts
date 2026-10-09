@@ -67,7 +67,13 @@ export function world(
   on('session.append', async ($, e, next) => {
     const text = e.message.content.map(b => (typeof b.text === 'string' ? b.text : '')).join('')
     kept.appended.push(text)
-    const stored = await next(e).catch(() => undefined)
+    // Before 2.1.293 nothing is beneath, and `next` throws at once (no rejected promise to catch).
+    let stored: Awaited<ReturnType<typeof next>> | undefined
+    try {
+      stored = await next(e)
+    } catch {
+      stored = undefined
+    }
     return stored ?? { message: e.message, uuid: `row-${kept.appended.length}` }
   })
   on('session.compact', () => ({ messages: [], tokensBefore: 900_000, tokensAfter: 40_000 }))
